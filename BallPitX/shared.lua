@@ -1,0 +1,121 @@
+-- A small helper that builds a Color with several lighter/darker variants
+-- indexed from -10 .. 10. ramp[0] is the base color, ramp[-2] is darker,
+-- ramp[5] is lighter, etc.
+ColorRamp = Object:extend()
+function ColorRamp:init(color, step)
+  self.color = color
+  self.step  = step or 0.025
+  for i = -10, 10 do
+    self[i] = self.color:clone():lighten(i*self.step)
+  end
+end
+
+
+-- Initializes color palette, fonts and canvases used across BallPitX.
+function shared_init()
+  local palette = {
+    white   = ColorRamp(Color(1, 1, 1, 1), 0.025),
+    black   = ColorRamp(Color(0, 0, 0, 1), 0.025),
+    bg      = ColorRamp(Color'#1a1a26', 0.025),
+    fg      = ColorRamp(Color'#dadada', 0.025),
+    fg_alt  = ColorRamp(Color'#b0a89f', 0.025),
+    yellow  = ColorRamp(Color'#facf00', 0.025),
+    orange  = ColorRamp(Color'#f07021', 0.025),
+    blue    = ColorRamp(Color'#019bd6', 0.025),
+    green   = ColorRamp(Color'#8bbf40', 0.025),
+    red     = ColorRamp(Color'#e91d39', 0.025),
+    purple  = ColorRamp(Color'#8e559e', 0.025),
+    blue2   = ColorRamp(Color'#4778ba', 0.025),
+    yellow2 = ColorRamp(Color'#f59f10', 0.025),
+  }
+  for name, color in pairs(palette) do
+    _G[name] = color
+    _G[name .. '_transparent']      = Color(color[0].r, color[0].g, color[0].b, 0.5)
+    _G[name .. '_transparent_weak'] = Color(color[0].r, color[0].g, color[0].b, 0.25)
+  end
+
+  graphics.set_background_color(bg[0])
+  graphics.set_color(fg[0])
+  slow_amount = 1
+
+  sfx = SoundTag()
+  sfx.volume = 0.5
+  music = SoundTag()
+  music.volume = 0.4
+
+  fat_font   = Font('FatPixelFont', 8)
+  pixul_font = Font('PixulBrush', 8)
+
+  background_canvas = Canvas(gw, gh)
+  main_canvas       = Canvas(gw, gh, {stencil = true})
+  shadow_canvas     = Canvas(gw, gh)
+  shadow_shader     = Shader(nil, 'shadow.frag')
+
+  -- Color lookup table — full hero roster. Used by BallHero:init to set ball
+  -- tint and by BallPit:count_same_color_heroes for shade variation.
+  character_colors = {
+    vagrant     = fg[0],     swordsman   = yellow[0],  wizard      = blue[0],
+    magician    = blue[0],   archer      = green[0],   scout       = red[0],
+    cleric      = green[0],  outlaw      = red[0],     blade       = yellow[0],
+    elementor   = blue[0],   saboteur    = orange[0],  bomber      = orange[0],
+    stormweaver = blue[0],   sage        = purple[0],  squire      = yellow[0],
+    cannoneer   = orange[0], dual_gunner = green[0],   hunter      = green[0],
+    sentry      = green[0],  chronomancer= blue[0],    spellblade  = blue[0],
+    psykeeper   = fg[0],     engineer    = orange[0],  plague_doctor = purple[0],
+    barbarian   = yellow[0], juggernaut  = yellow[0],  lich        = blue[0],
+    cryomancer  = blue[0],   pyromancer  = red[0],     corruptor   = orange[0],
+    beastmaster = red[0],    launcher    = yellow[0],  jester      = red[0],
+    assassin    = purple[0], host        = orange[0],  carver      = green[0],
+    bane        = purple[0], psykino     = fg[0],      barrager    = green[0],
+    highlander  = yellow[0], fairy       = green[0],   priest      = green[0],
+    infestor    = orange[0], flagellant  = fg[0],      arcanist    = blue2[0],
+    illusionist = blue2[0],  artificer   = blue2[0],   witch       = purple[0],
+    silencer    = blue2[0],  vulcanist   = red[0],     warden      = yellow[0],
+    psychic     = fg[0],     miner       = yellow2[0], merchant    = yellow2[0],
+    usurer      = purple[0], gambler     = yellow2[0], thief       = red[0],
+  }
+
+  -- Draft pool: every implemented hero, including all SNKRX archetypes.
+  hero_pool = {
+    'vagrant', 'swordsman', 'wizard', 'magician', 'archer', 'scout',
+    'cleric', 'outlaw', 'blade', 'elementor', 'saboteur', 'bomber',
+    'stormweaver', 'sage', 'squire', 'cannoneer', 'dual_gunner', 'hunter',
+    'sentry', 'chronomancer', 'spellblade', 'psykeeper', 'engineer',
+    'plague_doctor', 'barbarian', 'juggernaut', 'lich', 'cryomancer',
+    'pyromancer', 'corruptor', 'beastmaster', 'launcher', 'jester',
+    'assassin', 'host', 'carver', 'bane', 'psykino', 'barrager',
+    'highlander', 'fairy', 'priest', 'infestor', 'flagellant', 'arcanist',
+    'illusionist', 'artificer', 'witch', 'silencer', 'vulcanist', 'warden',
+    'psychic', 'miner', 'merchant', 'usurer', 'gambler', 'thief',
+  }
+end
+
+
+function shared_draw(draw_action)
+  background_canvas:draw_to(function()
+    graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, bg[0])
+    -- Tiled background grid.
+    for i = 0, 32 do
+      for j = 0, 18 do
+        if (i + j) % 2 == 0 then
+          graphics.rectangle2(i*15, j*15, 15, 15, nil, nil, bg[-1])
+        end
+      end
+    end
+  end)
+
+  main_canvas:draw_to(function()
+    draw_action()
+  end)
+
+  shadow_canvas:draw_to(function()
+    graphics.set_color(white[0])
+    shadow_shader:set()
+    main_canvas:draw2(0, 0, 0, 1, 1)
+    shadow_shader:unset()
+  end)
+
+  background_canvas:draw(0, 0, 0, sx, sy)
+  shadow_canvas:draw(1.5*sx, 1.5*sy, 0, sx, sy)
+  main_canvas:draw(0, 0, 0, sx, sy)
+end
