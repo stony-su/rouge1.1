@@ -152,8 +152,8 @@ function BallHero:init(args)
   -- so missing the paddle is increasingly painful. Mult resets when the ball
   -- gets stuck after a miss (or on initial launch).
   self.speed_mult       = 1.0
-  self.speed_mult_max   = 2.5
-  self.speed_mult_step  = 1.07
+  self.speed_mult_max   = 3.0     -- was 2.5
+  self.speed_mult_step  = 1.15    -- was 1.07 — bigger boost per bounce
 
   -- Charge-on-paddle: while stuck the ball fills a green ring up to
   -- charge_max_time, then blinks red at full. On launch the charge converts
