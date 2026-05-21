@@ -193,15 +193,46 @@ end
 
 function BallHero:maybe_spawn_trail()
   if self.stuck or self.returning then return end
-  if (self.speed_mult or 1) < 1.3 then return end
-  BallTrail{
-    group    = main.current.effects,
-    x        = self.x, y = self.y,
-    color    = self.color,
-    rs       = self.r_size*0.85,
-    alpha    = math.clamp(math.remap(self.speed_mult, 1.3, 2.5, 0.35, 0.7), 0.35, 0.7),
-    duration = 0.22,
-  }
+  local mult = self.speed_mult or 1
+  if mult < 1.3 then return end
+
+  local fx = main.current.effects
+
+  -- Tier 1 (always while mult >= 1.3): the regular colored aftershadow. Size,
+  -- alpha and lifespan all scale with speed so 4× balls smear more visibly
+  -- than 1.5× ones, but the hero's own colour stays readable.
+  local base_rs       = self.r_size  * math.clamp(math.remap(mult, 1.3, 4.0, 0.85, 1.25), 0.85, 1.25)
+  local base_alpha    = math.clamp(math.remap(mult, 1.3, 4.0, 0.35, 0.85), 0.35, 0.85)
+  local base_duration = math.clamp(math.remap(mult, 1.3, 4.0, 0.22, 0.4),  0.22, 0.4)
+  BallTrail{group = fx, x = self.x, y = self.y, color = self.color,
+            rs = base_rs, alpha = base_alpha, duration = base_duration}
+
+  -- Tier 2 (mult >= 2.5): NEON OVERDRIVE. A white-hot core particle sits on
+  -- top of the coloured trail so the ball looks like it's burning through
+  -- the arena. Core grows + brightens as the streak climbs toward the cap.
+  if mult >= 2.5 then
+    local neon = math.clamp(math.remap(mult, 2.5, 4.0, 0, 1), 0, 1)
+    BallTrail{group = fx, x = self.x, y = self.y, color = Color(1, 1, 1, 1),
+              rs = self.r_size*(0.45 + neon*0.45),
+              alpha = 0.55 + neon*0.4,
+              duration = 0.18 + neon*0.22}
+
+    -- Tier 3 (mult >= ~3.25): saturated outer glow. We boost the hero's
+    -- colour toward fully saturated to keep some identity instead of going
+    -- pure white. Lingers longer than the core so it reads as an aftershadow.
+    if neon > 0.5 then
+      local c = self.color
+      local glow = Color(
+        math.min(1, c.r*1.8 + 0.2),
+        math.min(1, c.g*1.8 + 0.2),
+        math.min(1, c.b*1.8 + 0.2),
+        1)
+      BallTrail{group = fx, x = self.x, y = self.y, color = glow,
+                rs = self.r_size*(1.0 + neon*0.6),
+                alpha = 0.45*neon,
+                duration = 0.32 + neon*0.3}
+    end
+  end
 end
 
 
