@@ -681,23 +681,94 @@ end
 
 function BallPit:hero_ability_blurb(c)
   local blurbs = {
-    vagrant = 'shoots nearest',
-    swordsman = 'splash on hit',
-    wizard = 'chain lightning',
-    magician = 'chain lightning',
-    archer = 'piercing shot',
-    scout = 'ricochet knife',
-    cleric = 'heal on hit',
-    outlaw = 'ricochet knife',
-    pyromancer = 'burn pool',
-    cryomancer = 'slow on hit',
-    sage = 'chain lightning',
-    cannoneer = 'big splash',
-    barbarian = 'big splash',
-    assassin = 'crit chance',
-    priest = 'heal on hit',
-    psychic = 'knockback',
-    magician = 'chain lightning',
+    -- Projectile shooters
+    vagrant      = 'arrow shot',
+    archer       = 'pierce arrow',
+    outlaw       = 'fast arrow',
+    sage         = 'slow arrow',
+    blade        = 'short arrow',
+    dual_gunner  = 'rapid arrow',
+    hunter       = 'long range',
+    lich         = 'chain ricochet',
+    corruptor    = 'pierce x3',
+    beastmaster  = 'crit shot',
+    arcanist     = 'heavy pierce',
+    merchant     = 'basic shot',
+
+    -- Knives
+    scout        = 'knife x3 bounce',
+    thief        = 'knife x5 bounce',
+    assassin     = 'fast pierce',
+
+    -- Special projectiles
+    spellblade   = 'random shot',
+    barrager     = '3-shot burst',
+
+    -- Melee splash
+    swordsman    = 'splash strike',
+    barbarian    = 'heavy splash',
+    juggernaut   = 'splash+push',
+    elementor    = 'wide splash',
+    highlander   = 'rapid splash',
+    miner        = 'dig splash',
+
+    -- Random-target splash
+    magician     = 'random splash',
+    psychic      = 'mind splash',
+
+    -- Healers
+    cleric       = '+1 hp / 8s',
+    priest       = '+2 hp / 12s',
+    psykeeper    = '+1 hp / 10s',
+
+    -- Curse / vulnerability
+    launcher     = 'curse x4',
+    jester       = 'curse x6',
+    usurer       = 'curse + dot',
+    silencer     = 'strong curse',
+    bane         = 'big curse',
+
+    -- DoT clouds
+    plague_doctor = 'poison cloud',
+    witch        = 'toxic cloud',
+
+    -- Bomb drops
+    saboteur     = 'drops 2 mines',
+    bomber       = 'drops bomb',
+    vulcanist    = 'volcano',
+
+    -- Turret drops
+    engineer     = 'drops turret',
+    sentry       = 'fast turret',
+    carver       = 'long turret',
+    artificer    = 'rapid turrets',
+
+    -- Force area
+    psykino      = 'knockback',
+
+    -- Ally damage buffs
+    stormweaver  = '+50% ally dmg',
+    warden       = '+30% ally dmg',
+
+    -- Ally attack-speed buffs
+    fairy        = '2x ally aspd',
+    squire       = '1.5x ally aspd',
+
+    -- Pet summons
+    host         = 'pet / 4s',
+    infestor     = '3 pets / 10s',
+    illusionist  = '2 pets / 8s',
+
+    -- Misc
+    gambler      = 'lucky strikes',
+    chronomancer = 'slow swarms',
+
+    -- On-bounce specials
+    wizard       = 'chain on hit',
+    cryomancer   = 'freeze on hit',
+    pyromancer   = 'burn on hit',
+    cannoneer    = 'boom on hit',
+    flagellant   = 'pulse on hit',
   }
   return blurbs[c] or 'ball-hero'
 end
