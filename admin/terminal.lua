@@ -179,6 +179,9 @@ function Terminal:register_commands()
     t:log("  god                     toggle invulnerability")
     t:log("  xp <n>                  gain n xp")
     t:log("  level                   open level-up picker")
+    t:log("  powerups                list powerup kinds")
+    t:log("  powerup <kind>          apply a powerup effect directly")
+    t:log("  dropp <kind>            spawn a powerup orb above paddle")
     t:log("  cls                     clear log")
   end
 
@@ -270,6 +273,41 @@ function Terminal:register_commands()
   C.level = function(t, args)
     t.arena:level_up()
     t:log("level-up picker opened")
+  end
+
+  C.powerups = function(t, args)
+    local row1, row2 = 'T1:', 'T2:'
+    for kind, def in pairs(Powerup.KINDS) do
+      if def.tier == 1 then row1 = row1 .. ' ' .. kind
+      else                  row2 = row2 .. ' ' .. kind end
+    end
+    t:log(row1); t:log(row2)
+  end
+
+  -- Apply a powerup directly, skipping the orb / catch UX. Useful for fast
+  -- effect-tuning iterations.
+  C.powerup = function(t, args)
+    local kind = args[1]
+    if not kind then t:log("usage: powerup <kind>  (try 'powerups')"); return end
+    if not (Powerup.KINDS[kind]) then t:log("unknown powerup: " .. kind); return end
+    t.arena:apply_powerup(kind, t.arena.paddle.x, t.arena.paddle.y - 20)
+    t:log("applied " .. kind)
+  end
+
+  -- Spawn an orb above the paddle so the catch / deflect UX can be rehearsed.
+  C.dropp = function(t, args)
+    local kind = args[1]
+    if not kind then t:log("usage: dropp <kind>"); return end
+    if not (Powerup.KINDS[kind]) then t:log("unknown powerup: " .. kind); return end
+    local arena = t.arena
+    local x = arena.paddle.x + random:float(-20, 20)
+    local y = arena.y1 + 24
+    arena.t:after(0, function()
+      if arena.main and arena.main.world then
+        Powerup{group = arena.main, x = x, y = y, kind = kind}
+      end
+    end)
+    t:log("dropped " .. kind .. " (tier " .. Powerup.KINDS[kind].tier .. ")")
   end
 
   C.cls = function(t, args) t.lines = {} end

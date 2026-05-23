@@ -313,6 +313,24 @@ function Brick:die()
       XpOrb{group = arena.main, x = x, y = y, value = value}
     end
   end)
+
+  -- Powerup roll. Heavier bricks (higher xp_value) bias the roll: a 4%
+  -- baseline for tier 1, 1% baseline for tier 2, both scaled up to ~2x for
+  -- the heaviest variants. Deferred to the next frame for the same Box2D
+  -- locking reason as the XP orb spawn.
+  local weight     = math.min(2.5, 1 + (self.xp_value - 1)*0.35)
+  local roll_t1    = random:float(0, 100) < 4*weight
+  local roll_t2    = (not roll_t1) and random:float(0, 100) < 1*weight
+  if roll_t1 or roll_t2 then
+    local kinds = roll_t2 and Powerup.tier_2_kinds() or Powerup.tier_1_kinds()
+    local kind  = kinds[random:int(1, #kinds)]
+    arena.t:after(0, function()
+      if arena.main and arena.main.world then
+        Powerup{group = arena.main, x = x, y = y, kind = kind}
+      end
+    end)
+  end
+
   self.dead = true
 end
 

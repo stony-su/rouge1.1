@@ -8,6 +8,7 @@ require 'swarm'
 require 'enemies'
 require 'projectile'
 require 'xp_orb'
+require 'powerup'
 require 'effects'
 require 'terminal'
 

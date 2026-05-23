@@ -244,6 +244,122 @@ function BallTrail:draw()
 end
 
 
+-- WaterWave: a sweeping horizontal wavefront that crawls from `y_start` up
+-- to `y_end` over `duration` seconds. Below the front, a translucent blue
+-- "body of water" fills the arena. The front itself is a fast-undulating
+-- sine line with a brighter foam crest. As the front passes each live
+-- swarm, it pushes the swarm upward and adds it to `swarm_pushed` so the
+-- pushback only fires once per swarm. Used by the Water Wave powerup.
+WaterWave = Object:extend()
+WaterWave:implement(GameObject)
+function WaterWave:init(args)
+  self:init_game_object(args)
+  self.x1       = self.x1 or 0
+  self.x2       = self.x2 or gw
+  self.y_start  = self.y_start or gh
+  self.y_end    = self.y_end or 0
+  self.duration = self.duration or 0.75
+  self.color    = self.color or blue2[0]
+  self.t_elapsed     = 0
+  self.swarm_pushed  = {}
+  self.last_droplet  = 0
+  self.t:after(self.duration + 0.25, function() self.dead = true end)
+end
+
+function WaterWave:wave_y()
+  local p = math.clamp(self.t_elapsed/self.duration, 0, 1)
+  -- cubic_out ease so the wave starts fast and settles at the top.
+  local eased = 1 - (1 - p)*(1 - p)*(1 - p)
+  return self.y_start + (self.y_end - self.y_start)*eased, p
+end
+
+function WaterWave:update(dt)
+  self:update_game_object(dt)
+  self.t_elapsed = self.t_elapsed + dt
+  local wave_y, p = self:wave_y()
+
+  -- Spawn droplet particles along the wavefront. Throttled so we don't drown
+  -- the effect group.
+  self.last_droplet = self.last_droplet + dt
+  if self.last_droplet > 0.02 and p < 1 then
+    self.last_droplet = 0
+    for _ = 1, 3 do
+      local dx = random:float(self.x1 + 4, self.x2 - 4)
+      HitParticle{
+        group = main.current.effects,
+        x = dx, y = wave_y + random:float(-2, 2),
+        color = (random:bool(40) and fg[5]) or self.color,
+        v = random:float(70, 140),
+        r = -math.pi/2 + random:float(-0.6, 0.6),
+        w = random:float(1, 2.2),
+        duration = random:float(0.25, 0.55),
+      }
+    end
+  end
+
+  -- Progressive swarm pushback. As the wavefront crosses each swarm's
+  -- lowest live brick, push the whole swarm up and add a knockback impulse
+  -- so the formation visibly recoils.
+  local arena = main.current
+  if not arena then return end
+  for _, sw in ipairs(arena.swarms.objects) do
+    if sw and not sw.dead and not self.swarm_pushed[sw.id] then
+      local lowest = sw.y_top
+      for _, cell in ipairs(sw.cells or {}) do
+        local by = sw.y_top + cell.dy
+        if by > lowest then lowest = by end
+      end
+      if wave_y <= lowest + 4 then
+        sw.y_top = math.max(arena.y1 + 8, sw.y_top - 30)
+        if sw.apply_knockback then sw:apply_knockback(80, -math.pi/2) end
+        self.swarm_pushed[sw.id] = true
+        -- Splash at the swarm's centre when the wave hits it.
+        spawn_burst(arena.effects, sw.x_center, lowest, self.color, 6, 80, 140)
+      end
+    end
+  end
+end
+
+function WaterWave:draw()
+  local wave_y, p = self:wave_y()
+  local w        = self.x2 - self.x1
+  local cx       = (self.x1 + self.x2)/2
+
+  -- Body of water below the front. Fades out as the wave dissipates.
+  local body_h = self.y_start - wave_y
+  if body_h > 1 then
+    local body_alpha = 0.32*(1 - p*0.6)
+    graphics.rectangle(cx, wave_y + body_h/2, w, body_h, nil, nil,
+      Color(self.color.r, self.color.g, self.color.b, body_alpha))
+    -- A second, deeper-blue band near the base so it reads as depth.
+    if body_h > 12 then
+      local deep_h = math.min(body_h, 24)
+      graphics.rectangle(cx, self.y_start - deep_h/2, w, deep_h, nil, nil,
+        Color(self.color.r*0.6, self.color.g*0.6, self.color.b*0.9, body_alpha*1.1))
+    end
+  end
+
+  -- Wavefront. Two stacked sine lines (foam highlight above the body
+  -- highlight) so the crest reads against the bg without being garish.
+  local segs    = 36
+  local amp     = 3 + 2*math.sin(self.t_elapsed*22)
+  local omega   = 0.55
+  local phase   = self.t_elapsed*18
+  local prev_xb, prev_yb = self.x1, wave_y
+  local prev_xc, prev_yc = self.x1, wave_y - 2
+  for i = 1, segs do
+    local t = i/segs
+    local x = self.x1 + t*w
+    local y_body  = wave_y + math.sin(t*math.pi*5 + phase)*amp
+    local y_crest = y_body - 2.5 - 0.5*math.sin(t*math.pi*7 - phase*omega)
+    graphics.line(prev_xb, prev_yb, x, y_body,  Color(self.color.r*0.7, self.color.g*0.7, self.color.b, 0.85), 2)
+    graphics.line(prev_xc, prev_yc, x, y_crest, Color(1, 1, 1, 0.7), 1)
+    prev_xb, prev_yb = x, y_body
+    prev_xc, prev_yc = x, y_crest
+  end
+end
+
+
 -- A brick-bounce "spark" — three tiny particles at the impact point, plus a
 -- short scale-flash on the bouncing object.
 function spawn_bounce_sparks(group, x, y, normal_angle, color)
