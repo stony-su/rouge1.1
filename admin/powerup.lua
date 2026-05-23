@@ -174,28 +174,55 @@ end
 
 function Powerup:draw()
   self.spring:pull(0)
-  local s = self.spring.x
+  local s     = self.spring.x
+  local now   = time or 0
+  local pulse = 1 + 0.10*math.sin(now*7)
+  -- Tier-1 rotates slowly, tier-2 spins faster + flips direction when armed
+  -- so the deflected orb reads as a different state from the falling orb.
+  local rot_speed = self.tier == 2 and 1.7 or 0.9
+  local rot       = now*rot_speed*(self.armed and -1 or 1)
 
-  -- Outer halo: pulses brighter when armed (tier-2 mid-flight) so the
-  -- player can read that this is the catch attempt that counts.
-  local halo_alpha = 0.4
-  if self.armed then
-    halo_alpha = 0.5 + 0.4*math.abs(math.sin((time or 0)*8))
-  end
-  local halo = Color(self.color.r, self.color.g, self.color.b, halo_alpha)
-  graphics.circle(self.x, self.y, self.r_size + 2, halo)
+  local inner_sz = self.r_size * 1.9 * s * pulse
+  local outer_sz = self.r_size * 2.7 * pulse
 
-  -- Body.
-  graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
-  graphics.circle(self.x, self.y, self.r_size*s, self.color)
-  graphics.circle(self.x - self.r_size*0.3, self.y - self.r_size*0.3, math.max(0.5, self.r_size*0.3), fg[5])
+  -- Outer halo glow. Pulses brighter when armed (tier-2 mid-flight) so the
+  -- catch-attempt-that-counts is unmistakable.
+  local halo_a = self.armed and (0.55 + 0.35*math.abs(math.sin(now*10))) or 0.32
+  local halo_c = Color(self.color.r, self.color.g, self.color.b, halo_a)
+  graphics.push(self.x, self.y, rot + math.pi/4)
+    graphics.rectangle(self.x, self.y, outer_sz*1.05, outer_sz*1.05, 1, 1, halo_c)
+  graphics.pop()
 
-  -- Tier-2 outline ring so the player can tell at a glance which ones are
-  -- the "earn it" pickups (regardless of whether they've been armed yet).
+  -- Body. Drawn as a rotated square (= diamond) so the orb is clearly NOT
+  -- a ball or an XP orb. Dark backing for contrast against the bg grid,
+  -- then the coloured face, then a small highlight quad for depth.
+  graphics.push(self.x, self.y, rot + math.pi/4)
+    graphics.rectangle(self.x, self.y, inner_sz + 1.5, inner_sz + 1.5, 1, 1, bg[-2])
+    graphics.rectangle(self.x, self.y, inner_sz, inner_sz, 1, 1, self.color)
+    -- Inner darker square for facet depth.
+    graphics.rectangle(self.x, self.y, inner_sz*0.65, inner_sz*0.65, 1, 1,
+      Color(self.color.r*0.65, self.color.g*0.65, self.color.b*0.85, 1))
+  graphics.pop()
+
+  -- Tier-2 counter-rotating outline diamond. Pure yellow so it reads as a
+  -- "this is the rare one" marker even before the player learns the colours.
   if self.tier == 2 then
-    graphics.circle(self.x, self.y, self.r_size + 1, yellow_transparent, 1)
+    graphics.push(self.x, self.y, -rot)
+      graphics.rectangle(self.x, self.y, outer_sz, outer_sz, 1, 1, yellow[0], 1)
+    graphics.pop()
   end
 
-  -- Single-glyph label so the player can read which powerup is incoming.
+  -- Center glyph: NOT inside the rotated push, so the letter stays upright
+  -- and readable while the diamond spins behind it.
   graphics.print_centered(self.glyph, pixul_font, self.x, self.y - 4, 0, 1, 1, 0, 0, fg[0])
+
+  -- Sparkle: a few tiny offsets that orbit the diamond, sold as "this is
+  -- not background scenery, grab me". Cheaper than spawning HitParticles
+  -- every frame; just a 2-dot rotating pattern.
+  local spark_r = self.r_size + 4
+  for i = 0, 2 do
+    local a = rot*2 + i*(math.pi*2/3)
+    local sx, sy = self.x + math.cos(a)*spark_r, self.y + math.sin(a)*spark_r
+    graphics.rectangle(sx, sy, 1.4, 1.4, nil, nil, fg[5])
+  end
 end

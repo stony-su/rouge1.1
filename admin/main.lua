@@ -70,12 +70,32 @@ function init()
   ui_switch1  = Sound('Switch.ogg', s)
   bounce1     = Sound('Player Takes Damage 2.ogg', s)
 
+  -- Music: auto-discover whatever's in assets/music/. Drop any .ogg / .mp3 /
+  -- .wav file in there and it'll be picked up next launch. Empty folder =
+  -- the game runs silent on the music channel (sfx still plays). The
+  -- original Kubbi - Ember soundtrack was moved to assets/music_archive/
+  -- and is preserved but not auto-loaded.
+  --
+  -- Long tracks stream from disk ('stream' mode) instead of decoding into
+  -- RAM up-front, so big files don't bloat the process.
   local m = {tags = {music}, loop = true}
-  song1 = Sound('Kubbi - Ember - 01 Pathfinder.ogg', m)
-  song2 = Sound('Kubbi - Ember - 02 Ember.ogg', m)
-  song3 = Sound('Kubbi - Ember - 03 Firelight.ogg', m)
-  song4 = Sound('Kubbi - Ember - 04 Cascade.ogg', m)
-  song5 = Sound('Kubbi - Ember - 05 Compass.ogg', m)
+  songs = {}
+  if love.filesystem.getInfo('assets/music') then
+    for _, name in ipairs(love.filesystem.getDirectoryItems('assets/music')) do
+      local ext = name:lower():match('%.(%w+)$')
+      if ext == 'ogg' or ext == 'mp3' or ext == 'wav' then
+        local ok, snd = pcall(function()
+          return ripple.newSound(love.audio.newSource('assets/music/' .. name, 'stream'), m)
+        end)
+        if ok and snd then
+          table.insert(songs, snd)
+        else
+          print("[music] failed to load: " .. name)
+        end
+      end
+    end
+  end
+  print(string.format("[music] loaded %d track(s) from assets/music/", #songs))
 
   main = Main()
   main:add(BallPit'ballpit')

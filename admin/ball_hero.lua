@@ -755,6 +755,24 @@ function BallHero:draw()
   graphics.circle(self.x, self.y, self.r_size*s, self.color)
   graphics.circle(self.x - self.r_size*0.3, self.y - self.r_size*0.3, math.max(1, self.r_size*0.35), fg[5])
 
+  -- Level pips: small yellow dots in an arc above the ball, one for every
+  -- level past 1. Level 1 = no pips (clean default), Level 2 = 1 pip,
+  -- Level 3 = 2 pips. Fixed yellow so the rank reads even on yellow / fg
+  -- coloured balls (a light outline ring keeps them visible on the
+  -- yellow ones too). Hidden while the ball is stuck so the charge ring
+  -- doesn't get crowded.
+  local extra = math.max(0, (self.level or 1) - 1)
+  if extra > 0 and not self.stuck then
+    local pip_y = self.y - self.r_size - 3
+    local spacing = 3
+    local x0 = self.x - (extra - 1)*spacing/2
+    for i = 1, extra do
+      local px = x0 + (i - 1)*spacing
+      graphics.circle(px, pip_y, 1.5, bg[-2])         -- dark backing so the pip stays visible on light bg tiles
+      graphics.circle(px, pip_y, 1,   yellow[0])      -- bright pip
+    end
+  end
+
   if main.current.show_hero_labels then
     graphics.print_centered(self.character:sub(1, 3), pixul_font, self.x, self.y - self.r_size - 6, 0, 1, 1, 0, 0, fg[0])
   end

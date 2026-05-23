@@ -244,118 +244,196 @@ function BallTrail:draw()
 end
 
 
--- WaterWave: a sweeping horizontal wavefront that crawls from `y_start` up
--- to `y_end` over `duration` seconds. Below the front, a translucent blue
--- "body of water" fills the arena. The front itself is a fast-undulating
--- sine line with a brighter foam crest. As the front passes each live
--- swarm, it pushes the swarm upward and adds it to `swarm_pushed` so the
--- pushback only fires once per swarm. Used by the Water Wave powerup.
+-- WaterWave: a sweeping wall of water that surges from `y_start` (bottom of
+-- the arena) up to `y_end` (top), shoving every swarm it touches upward as
+-- it goes, then disperses with a foam-spray burst instead of blinking out.
+--
+-- Two phases:
+--   surge    — the wavefront crawls up the arena (cubic-out ease), continuously
+--              shoving every swarm whose lowest live brick is below the
+--              front. Each swarm gets a one-time knockback + splash burst
+--              the first time it's touched, plus per-frame pushback while
+--              the wave is overlapping it.
+--   disperse — the wave has peaked at the top. The body fades and breaks
+--              into spray; foam particles fly upward and outward; a final
+--              high splash crowns the wave. The whole effect lives ~1.2 s
+--              total instead of disappearing in a single frame.
 WaterWave = Object:extend()
 WaterWave:implement(GameObject)
 function WaterWave:init(args)
   self:init_game_object(args)
-  self.x1       = self.x1 or 0
-  self.x2       = self.x2 or gw
-  self.y_start  = self.y_start or gh
-  self.y_end    = self.y_end or 0
-  self.duration = self.duration or 0.75
-  self.color    = self.color or blue2[0]
-  self.t_elapsed     = 0
-  self.swarm_pushed  = {}
+  self.x1            = self.x1 or 0
+  self.x2            = self.x2 or gw
+  self.y_start       = self.y_start or gh   -- wave originates here (bottom)
+  self.y_end         = self.y_end or 0      -- wave settles here at peak (top)
+  self.surge_dur     = self.surge_dur or 0.65
+  self.disperse_dur  = self.disperse_dur or 0.55
+  self.color         = self.color or blue2[0]
+  self.phase         = 'surge'
+  self.elapsed       = 0
+  self.wave_y        = self.y_start
+  self.body_alpha    = 1
   self.last_droplet  = 0
-  self.t:after(self.duration + 0.25, function() self.dead = true end)
+  self.swarm_touched = {}                   -- swarm.id -> true (one-time impulse already applied)
 end
 
-function WaterWave:wave_y()
-  local p = math.clamp(self.t_elapsed/self.duration, 0, 1)
-  -- cubic_out ease so the wave starts fast and settles at the top.
-  local eased = 1 - (1 - p)*(1 - p)*(1 - p)
-  return self.y_start + (self.y_end - self.y_start)*eased, p
-end
 
 function WaterWave:update(dt)
   self:update_game_object(dt)
-  self.t_elapsed = self.t_elapsed + dt
-  local wave_y, p = self:wave_y()
+  self.elapsed = self.elapsed + dt
 
-  -- Spawn droplet particles along the wavefront. Throttled so we don't drown
-  -- the effect group.
-  self.last_droplet = self.last_droplet + dt
-  if self.last_droplet > 0.02 and p < 1 then
-    self.last_droplet = 0
-    for _ = 1, 3 do
-      local dx = random:float(self.x1 + 4, self.x2 - 4)
-      HitParticle{
-        group = main.current.effects,
-        x = dx, y = wave_y + random:float(-2, 2),
-        color = (random:bool(40) and fg[5]) or self.color,
-        v = random:float(70, 140),
-        r = -math.pi/2 + random:float(-0.6, 0.6),
-        w = random:float(1, 2.2),
-        duration = random:float(0.25, 0.55),
-      }
+  if self.phase == 'surge' then
+    local p     = math.clamp(self.elapsed/self.surge_dur, 0, 1)
+    -- Cubic-out: surges fast off the paddle, decelerates as it nears the top.
+    local eased = 1 - (1 - p)*(1 - p)*(1 - p)
+    self.wave_y = self.y_start + (self.y_end - self.y_start)*eased
+
+    self:push_swarms()
+    self:spawn_droplets(false)
+
+    if p >= 1 then
+      self.phase   = 'disperse'
+      self.elapsed = 0
+      self:disperse_burst()
     end
-  end
 
-  -- Progressive swarm pushback. As the wavefront crosses each swarm's
-  -- lowest live brick, push the whole swarm up and add a knockback impulse
-  -- so the formation visibly recoils.
+  elseif self.phase == 'disperse' then
+    local p          = math.clamp(self.elapsed/self.disperse_dur, 0, 1)
+    self.body_alpha  = 1 - p
+    -- Lets the body settle slightly downward as it dissolves — sells "the
+    -- water is collapsing" instead of "it just teleported away".
+    self.wave_y      = self.y_end + p*6
+    -- Sparse droplets keep raining for a bit so the screen doesn't go
+    -- empty all at once.
+    if random:bool(35) then self:spawn_droplets(true) end
+    if p >= 1 then self.dead = true end
+  end
+end
+
+
+-- Continuous-pushback model. While the wavefront is at or above each
+-- swarm's lowest live brick (on screen — y is smaller for "higher"), the
+-- swarm's y_top is pulled up by the overlap amount, so the bricks are
+-- always lifted just above the wave. First touch also fires a knockback
+-- impulse for the spring oscillation, plus a chunky splash burst so the
+-- player sees the impact.
+function WaterWave:push_swarms()
   local arena = main.current
   if not arena then return end
   for _, sw in ipairs(arena.swarms.objects) do
-    if sw and not sw.dead and not self.swarm_pushed[sw.id] then
-      local lowest = sw.y_top
+    if sw and not sw.dead then
+      local lowest, has_live = -1e9, false
       for _, cell in ipairs(sw.cells or {}) do
-        local by = sw.y_top + cell.dy
-        if by > lowest then lowest = by end
+        if cell.brick and not cell.brick.dead then
+          local by = sw.y_top + cell.dy
+          if by > lowest then lowest = by end
+          has_live = true
+        end
       end
-      if wave_y <= lowest + 4 then
-        sw.y_top = math.max(arena.y1 + 8, sw.y_top - 30)
-        if sw.apply_knockback then sw:apply_knockback(80, -math.pi/2) end
-        self.swarm_pushed[sw.id] = true
-        -- Splash at the swarm's centre when the wave hits it.
-        spawn_burst(arena.effects, sw.x_center, lowest, self.color, 6, 80, 140)
+      if has_live and self.wave_y < lowest + 6 then
+        -- Wave has reached or passed under this swarm's lowest brick.
+        -- Lift the swarm so the lowest brick sits just above the front.
+        local overlap = (lowest + 6) - self.wave_y
+        sw.y_top = math.max(arena.y1 + 8, sw.y_top - overlap)
+        if not self.swarm_touched[sw.id] then
+          self.swarm_touched[sw.id] = true
+          if sw.apply_knockback then sw:apply_knockback(140, -math.pi/2) end
+          spawn_burst(arena.effects, sw.x_center, lowest, self.color, 10, 100, 180)
+          spawn_burst(arena.effects, sw.x_center, lowest, fg[5], 4, 60, 140)
+          if pop1 then pop1:play{volume = 0.25, pitch = random:float(0.7, 0.9)} end
+        end
       end
     end
   end
 end
 
-function WaterWave:draw()
-  local wave_y, p = self:wave_y()
-  local w        = self.x2 - self.x1
-  local cx       = (self.x1 + self.x2)/2
 
-  -- Body of water below the front. Fades out as the wave dissipates.
-  local body_h = self.y_start - wave_y
+function WaterWave:spawn_droplets(sparse)
+  local count = sparse and 1 or 4
+  for _ = 1, count do
+    local dx     = random:float(self.x1 + 4, self.x2 - 4)
+    local color  = (random:bool(40) and fg[5]) or self.color
+    HitParticle{
+      group     = main.current.effects,
+      x         = dx, y = self.wave_y + random:float(-3, 3),
+      color     = color,
+      v         = random:float(80, 160),
+      r         = -math.pi/2 + random:float(-0.7, 0.7),
+      w         = random:float(1, 2.5),
+      duration  = random:float(0.3, 0.65),
+    }
+  end
+end
+
+
+-- Big spray when the wave hits the top of the arena. Foam shoots up and
+-- outward; the centre gets a chunky burst; a fading ring telegraphs the
+-- dispersal moment so the player reads "this is winding down" rather than
+-- "the effect ended".
+function WaterWave:disperse_burst()
+  local arena = main.current
+  if not arena then return end
+  for _ = 1, 36 do
+    local dx     = random:float(self.x1 + 4, self.x2 - 4)
+    local color  = (random:bool(50) and fg[5]) or self.color
+    HitParticle{
+      group     = arena.effects,
+      x         = dx, y = self.wave_y,
+      color     = color,
+      v         = random:float(80, 200),
+      r         = -math.pi/2 + random:float(-1.0, 1.0),     -- fan upward
+      w         = random:float(1.5, 3),
+      duration  = random:float(0.45, 0.9),
+    }
+  end
+  spawn_burst(arena.effects, (self.x1 + self.x2)/2, self.wave_y, fg[5], 12, 60, 160)
+  TelegraphRing{group = arena.effects, x = (self.x1 + self.x2)/2, y = self.wave_y,
+                radius = (self.x2 - self.x1)*0.55, color = self.color, duration = 0.45}
+end
+
+
+function WaterWave:draw()
+  local w  = self.x2 - self.x1
+  local cx = (self.x1 + self.x2)/2
+
+  -- Body of water below the wavefront. Translucent fill plus a deeper-blue
+  -- band at the floor so it reads as having mass / depth. Alpha tracks the
+  -- disperse phase so the body fades out smoothly.
+  local body_h = self.y_start - self.wave_y
   if body_h > 1 then
-    local body_alpha = 0.32*(1 - p*0.6)
-    graphics.rectangle(cx, wave_y + body_h/2, w, body_h, nil, nil,
-      Color(self.color.r, self.color.g, self.color.b, body_alpha))
-    -- A second, deeper-blue band near the base so it reads as depth.
+    local base_a = (self.phase == 'disperse') and (0.34*self.body_alpha) or 0.34
+    graphics.rectangle(cx, self.wave_y + body_h/2, w, body_h, nil, nil,
+      Color(self.color.r, self.color.g, self.color.b, base_a))
     if body_h > 12 then
-      local deep_h = math.min(body_h, 24)
+      local deep_h = math.min(body_h, 26)
       graphics.rectangle(cx, self.y_start - deep_h/2, w, deep_h, nil, nil,
-        Color(self.color.r*0.6, self.color.g*0.6, self.color.b*0.9, body_alpha*1.1))
+        Color(self.color.r*0.5, self.color.g*0.5, self.color.b*0.95, base_a*1.15))
     end
   end
 
-  -- Wavefront. Two stacked sine lines (foam highlight above the body
-  -- highlight) so the crest reads against the bg without being garish.
-  local segs    = 36
-  local amp     = 3 + 2*math.sin(self.t_elapsed*22)
-  local omega   = 0.55
-  local phase   = self.t_elapsed*18
-  local prev_xb, prev_yb = self.x1, wave_y
-  local prev_xc, prev_yc = self.x1, wave_y - 2
-  for i = 1, segs do
-    local t = i/segs
-    local x = self.x1 + t*w
-    local y_body  = wave_y + math.sin(t*math.pi*5 + phase)*amp
-    local y_crest = y_body - 2.5 - 0.5*math.sin(t*math.pi*7 - phase*omega)
-    graphics.line(prev_xb, prev_yb, x, y_body,  Color(self.color.r*0.7, self.color.g*0.7, self.color.b, 0.85), 2)
-    graphics.line(prev_xc, prev_yc, x, y_crest, Color(1, 1, 1, 0.7), 1)
-    prev_xb, prev_yb = x, y_body
-    prev_xc, prev_yc = x, y_crest
+  -- Wavefront crest: two stacked sine lines (dark body + bright foam) with
+  -- fast phase scroll so it looks like churning water, not a static line.
+  local front_a
+  if self.phase == 'surge' then front_a = 0.9
+  else                          front_a = math.max(0, self.body_alpha*0.75) end
+  if front_a > 0.05 then
+    local segs  = 40
+    local amp   = 4 + 3*math.sin(self.elapsed*22)
+    local phase = self.elapsed*20
+    local body_c  = Color(self.color.r*0.7, self.color.g*0.7, self.color.b, front_a)
+    local crest_c = Color(1, 1, 1, front_a*0.85)
+    local prev_xb, prev_yb = self.x1, self.wave_y
+    local prev_xc, prev_yc = self.x1, self.wave_y - 2
+    for i = 1, segs do
+      local t      = i/segs
+      local x      = self.x1 + t*w
+      local y_body = self.wave_y + math.sin(t*math.pi*5 + phase)*amp
+      local y_crest = y_body - 2.5 - 0.5*math.sin(t*math.pi*7 - phase*0.55)
+      graphics.line(prev_xb, prev_yb, x, y_body,  body_c,  2)
+      graphics.line(prev_xc, prev_yc, x, y_crest, crest_c, 1)
+      prev_xb, prev_yb = x, y_body
+      prev_xc, prev_yc = x, y_crest
+    end
   end
 end
 

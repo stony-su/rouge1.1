@@ -77,11 +77,18 @@ end
 
 function BallPit:on_enter()
   self:reset_run()
-  -- Play a random Kubbi - Ember track on loop. Stop any previous instance so
-  -- restarts don't stack tracks on top of each other.
+  -- Pick a random music track on loop. The list is auto-discovered from
+  -- assets/music/ at boot (see main.lua). If the folder is empty, songs
+  -- will be empty and the music channel stays silent — gameplay is
+  -- unaffected. Stop any previous instance so restarts don't stack
+  -- tracks on top of each other.
   if self.song_instance then self.song_instance:stop() end
-  local pick = random:table{song1, song2, song3, song4, song5}
-  self.song_instance = pick:play{volume = 0.45, loop = true}
+  if songs and #songs > 0 then
+    local pick = songs[random:int(1, #songs)]
+    self.song_instance = pick:play{volume = 0.45, loop = true}
+  else
+    self.song_instance = nil
+  end
 end
 
 
@@ -802,6 +809,7 @@ function BallPit:confirm_upgrade()
       if h.character == choice.character and h.level < 3 then
         h.level = h.level + 1
         h.dmg = h.dmg * 1.4
+        self:flash_hero_level_up(h)
         break
       end
     end
@@ -811,6 +819,26 @@ function BallPit:confirm_upgrade()
   confirm1:play{volume = 0.4}
   self.upgrade_pending = false
   self.upgrade_choices = nil
+end
+
+
+-- A brief visual confirmation that a specific hero just gained a level.
+-- Used by the draft picker (BallPit:confirm_upgrade) and the "level random
+-- balls" powerup (BallPit:apply_level_random). Pulses the ball, expands a
+-- yellow telegraph ring out of it, drops a "+LVL" floating label, and
+-- spawns a small burst of sparks.
+function BallPit:flash_hero_level_up(hero)
+  if not (hero and not hero.dead) then return end
+  hero.spring:pull(0.35)
+  TelegraphRing{
+    group    = self.effects, x = hero.x, y = hero.y,
+    radius   = hero.r_size*3.5, color = yellow[0], duration = 0.35,
+  }
+  spawn_burst(self.effects, hero.x, hero.y, yellow[0], 6, 70, 130)
+  FloatingText{
+    group = self.effects, x = hero.x, y = hero.y - hero.r_size - 4,
+    text  = '+LVL ' .. (hero.level or 1), color = yellow[0],
+  }
 end
 
 
@@ -1369,24 +1397,29 @@ end
 
 
 function BallPit:apply_water_wave()
-  -- Visual: a real wavefront crawls from below the paddle up to the spawn
-  -- line, body-of-water fill trailing behind, foam-crested sine line up
-  -- top. The WaterWave effect (in effects.lua) handles the progressive
-  -- swarm pushback as the front crosses each swarm — the swarms visibly
-  -- recoil one at a time instead of all snapping up at once.
+  -- Visual: a phased WaterWave (see effects.lua) — a body of water surges
+  -- from the paddle row up to the spawn line over `surge_dur`, *continuously*
+  -- pulling every swarm it overlaps upward (so swarms ride the front instead
+  -- of getting a one-time 30 px nudge). Then a `disperse_dur` phase fades
+  -- the body, rains foam droplets, and crowns the wave with a final spray
+  -- burst + ring so the effect doesn't vanish in a single frame.
+  local surge_dur    = 0.65
+  local disperse_dur = 0.55
   WaterWave{
-    group   = self.effects,
-    x = (self.x1 + self.x2)/2, y = self.y2,  -- centre point (used by GameObject)
-    x1 = self.x1, x2 = self.x2,
-    y_start = self.y2 - 4,
-    y_end   = self.y1 + 8,
-    duration = 0.8,
-    color    = blue2[0],
+    group        = self.effects,
+    x = (self.x1 + self.x2)/2, y = self.y2,   -- centre point (used by GameObject)
+    x1           = self.x1, x2 = self.x2,
+    y_start      = self.y2 - 4,
+    y_end        = self.y1 + 8,
+    surge_dur    = surge_dur,
+    disperse_dur = disperse_dur,
+    color        = blue2[0],
   }
 
-  -- Impact feedback: a brief blue-tint flash on the whole arena, a thick
-  -- expanding ring rising off the paddle row, and a meaty camera shake so
-  -- the wave actually "hits home" instead of just sliding by.
+  -- Impact feedback at the moment of casting: a brief blue-tint flash on
+  -- the whole arena, two stacked telegraph rings rising off the paddle row,
+  -- and a meaty camera shake so the cast feels weighty before the wave
+  -- even starts climbing.
   Flash{
     group = self.effects, x = gw/2, y = gh/2,
     color = Color(blue2[0].r, blue2[0].g, blue2[0].b, 0.32),
@@ -1400,15 +1433,22 @@ function BallPit:apply_water_wave()
     group = self.effects, x = gw/2, y = self.y2 - 6,
     radius = math.max(gw, gh)*0.4, color = blue2[0], duration = 0.55,
   }
-  -- Tail rumble: a couple of secondary ripples that fire as the front
-  -- climbs the arena, so the impact reads as sustained rather than instant.
-  self.t:after(0.18, function()
+  -- Two secondary ripples that chase the wavefront. Re-timed to fire at
+  -- ~1/3 and ~2/3 of the surge phase so each ring appears alongside the
+  -- crest as it climbs, not after it's already dispersed.
+  self.t:after(surge_dur*0.35, function()
     TelegraphRing{group = self.effects, x = gw/2, y = (self.y1 + self.y2)/2,
-                  radius = math.max(gw, gh)*0.45, color = blue2[0], duration = 0.45}
+                  radius = math.max(gw, gh)*0.45, color = blue2[0], duration = 0.4}
   end)
-  self.t:after(0.36, function()
+  self.t:after(surge_dur*0.7, function()
     TelegraphRing{group = self.effects, x = gw/2, y = self.y1 + 24,
                   radius = math.max(gw, gh)*0.35, color = blue[0], duration = 0.4}
+  end)
+  -- One final shake on the disperse beat so the burst at the top of the
+  -- arena gets its own jolt (the initial shake has already decayed by
+  -- then).
+  self.t:after(surge_dur, function()
+    camera:shake(3, 0.25, 70)
   end)
 
   camera:shake(5, 0.35, 80)
@@ -1515,7 +1555,7 @@ function BallPit:apply_level_random()
     local h = pool[i]
     h.level = (h.level or 1) + 1
     h.dmg   = h.dmg * 1.4
-    FloatingText{group = self.effects, x = h.x, y = h.y - 10, text = '+LVL', color = yellow[0]}
+    self:flash_hero_level_up(h)
   end
   level_up1:play{volume = 0.4}
 end
