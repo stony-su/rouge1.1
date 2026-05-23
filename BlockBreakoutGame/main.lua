@@ -88,9 +88,9 @@ function love.run()
   return engine_run({
     game_name     = 'BallPitX',
     game_width    = 480,
-    game_height   = 270,
+    game_height   = 656,
     window_width  = 960,
-    window_height = 540,
+    window_height = 1312,
     vsync         = 1,
   })
 end

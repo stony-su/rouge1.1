@@ -56,7 +56,10 @@ local function wave_config(wave)
     width_fraction_min = min_w,
     width_fraction_max = max_w,
     swarm_density      = 0.88,
-    drift_speed        = (5 + 0.25*wave)*0.65,
+    -- Drift is scaled by the live arena height (relative to the original
+    -- 228px playfield) so a taller map doesn't silently make swarms slower
+    -- to reach the paddle. Keeps wave pressure consistent across resolutions.
+    drift_speed        = (5 + 0.25*wave)*0.65*((gh - 42)/228),
     -- Vertical breathing room required between a new swarm and any existing
     -- swarm. Starts at 30px (about 2 brick-rows of clear space) and shrinks
     -- to 0 by wave 15, so late-game swarms can stack with no clearance.

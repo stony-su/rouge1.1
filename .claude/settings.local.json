@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd /c dir \"C:\\\\Users\\\\darre\\\\Downloads\\\\rouge1.1\\\\BallPitX\\\\engine\")"
+    ]
+  }
+}
