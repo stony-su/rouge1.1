@@ -190,6 +190,25 @@ function BallPit:reset_run()
   self.floor_wall         = nil
   self.pierce_active      = false
 
+  -- Powerup pity timer. Powerups no longer drop from individual bricks; they
+  -- spawn on a periodic random roll instead, with a ramping pity multiplier
+  -- so a long dry streak is impossible. Tuning:
+  --   * Every `check_interval` seconds we roll for a spawn.
+  --   * Base spawn chance is `base_chance`; each failed roll adds
+  --     `pity_step` to the next check, capped at 100%.
+  --   * On a successful spawn the streak counter resets to 0.
+  -- With the values below the expected gap between powerups is ~14s and the
+  -- maximum possible gap is ~30s (check_interval * 5). The wave-end tier-2
+  -- in advance_wave is a separate guaranteed drop.
+  self.powerup_pity = {
+    timer          = 0,
+    check_interval = 6,
+    streak         = 0,
+    base_chance    = 0.25,
+    pity_step      = 0.20,
+    tier2_chance   = 0.20,   -- on a spawn, this fraction roll the rare tier
+  }
+
   self:start_wave()
 end
 
@@ -312,6 +331,14 @@ function BallPit:advance_wave()
     self.floor_wall.dead = true
     self.floor_wall      = nil
     self.no_speed_reset  = false
+  end
+
+  -- The wave-end tier-2 drop above counts as the start-of-wave powerup; reset
+  -- the pity counter so the very next pity roll doesn't immediately spawn a
+  -- second powerup on top of it.
+  if self.powerup_pity then
+    self.powerup_pity.timer  = 0
+    self.powerup_pity.streak = 0
   end
 
   self.wave = self.wave + 1
@@ -551,6 +578,9 @@ function BallPit:update(dt)
     -- speed cheats and freeze cheats stay consistent across the rest of
     -- gameplay (game-speed × → buff timers also ×).
     self:tick_buffs(sdt)
+
+    -- Powerup pity timer (random spawns replacing the old per-brick drop).
+    self:tick_powerup_pity(sdt)
 
     -- Wave end → wave advance (purely time-based; leftover bricks roll into the next wave).
     if self.wave_time >= self.wave_cfg.duration then
@@ -1196,6 +1226,62 @@ end
 --      buff while it's active extends the timer instead of stacking the
 --      multiplier (so Wide Paddle twice = 15s + extension, not 2.56× width).
 --   3. Wave-bounded (floor): cleared in advance_wave / reset_run, no timer.
+
+
+-- Pity-timer driven powerup spawner. Called every sub-step from update;
+-- accumulates real time and rolls for a spawn at fixed intervals. Each failed
+-- roll bumps the chance for the next check (the "pity" ramp) so dry streaks
+-- can't drag on forever — see the configuration in reset_run.
+function BallPit:tick_powerup_pity(dt)
+  if not Powerup then return end
+  if self.upgrade_pending or self.game_over then return end
+  local p = self.powerup_pity
+  if not p then return end
+
+  p.timer = p.timer + dt
+  if p.timer < p.check_interval then return end
+  p.timer = p.timer - p.check_interval
+
+  local chance = math.min(1.0, p.base_chance + p.streak*p.pity_step)
+  if random:float(0, 1) < chance then
+    self:spawn_random_powerup()
+    p.streak = 0
+  else
+    p.streak = p.streak + 1
+  end
+end
+
+
+-- Pick a random tier (weighted toward tier-1) and a random kind within it,
+-- then drop a Powerup near the top of the arena so it has time to fall to
+-- the paddle. Used by the pity timer and exposed for admin / debugging use.
+function BallPit:spawn_random_powerup()
+  if not (Powerup and self.main and self.main.world) then return end
+
+  local p = self.powerup_pity or {tier2_chance = 0.20}
+  local kinds
+  if random:float(0, 1) < (p.tier2_chance or 0.20) then
+    kinds = Powerup.tier_2_kinds()
+  else
+    kinds = Powerup.tier_1_kinds()
+  end
+  if not kinds or #kinds == 0 then return end
+  local kind = kinds[random:int(1, #kinds)]
+
+  -- Spawn near the top of the arena, biased toward the centre so the orb is
+  -- never wedged against a side wall on spawn. Random x within roughly the
+  -- middle two-thirds of the arena.
+  local arena_w = self.x2 - self.x1
+  local x = self:arena_center_x() + random:float(-arena_w/3, arena_w/3)
+  local y = self.y1 + 16
+
+  self.t:after(0, function()
+    if self.main and self.main.world then
+      Powerup{group = self.main, x = x, y = y, kind = kind}
+    end
+  end)
+end
+
 
 function BallPit:apply_powerup(kind, x, y, color)
   local def = Powerup and Powerup.KINDS and Powerup.KINDS[kind]

@@ -314,22 +314,11 @@ function Brick:die()
     end
   end)
 
-  -- Powerup roll. Heavier bricks (higher xp_value) bias the roll: a 4%
-  -- baseline for tier 1, 1% baseline for tier 2, both scaled up to ~2x for
-  -- the heaviest variants. Deferred to the next frame for the same Box2D
-  -- locking reason as the XP orb spawn.
-  local weight     = math.min(2.5, 1 + (self.xp_value - 1)*0.35)
-  local roll_t1    = random:float(0, 100) < 4*weight
-  local roll_t2    = (not roll_t1) and random:float(0, 100) < 1*weight
-  if roll_t1 or roll_t2 then
-    local kinds = roll_t2 and Powerup.tier_2_kinds() or Powerup.tier_1_kinds()
-    local kind  = kinds[random:int(1, #kinds)]
-    arena.t:after(0, function()
-      if arena.main and arena.main.world then
-        Powerup{group = arena.main, x = x, y = y, kind = kind}
-      end
-    end)
-  end
+  -- NOTE: Powerups used to roll on brick death (a 4% / 1% weighted chance per
+  -- kill). They now spawn from the arena-side pity timer in
+  -- BallPit:tick_powerup_pity instead, so the drop rate is independent of
+  -- which bricks the player happens to be killing. The wave-end tier-2
+  -- guarantee in BallPit:advance_wave still fires.
 
   self.dead = true
 end
