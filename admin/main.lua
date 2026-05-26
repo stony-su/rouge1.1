@@ -120,8 +120,8 @@ function love.run()
     game_name     = 'BallPitX-Admin',
     game_width    = 480,
     game_height   = 656,
-    window_width  = 960,
-    window_height = 1312,
+    window_width  = 720,
+    window_height = 984,
     vsync         = 1,
   })
 end

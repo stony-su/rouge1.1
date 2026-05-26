@@ -72,6 +72,99 @@ end
 function BallPit:init(name)
   self:init_state(name)
   self:init_game_object()
+
+  -- Window-size options for the ESC settings menu. Each entry is a uniform
+  -- scale applied to the fixed game canvas (gw x gh = 480 x 656), so the
+  -- pixel dimensions are scale*480 x scale*656.
+  self.scale_options = {
+    {scale = 0.75, label = '0.75x  360 x 492'},
+    {scale = 1.0,  label = '1x     480 x 656'},
+    {scale = 1.25, label = '1.25x  600 x 820'},
+    {scale = 1.5,  label = '1.5x   720 x 984'},
+    {scale = 1.75, label = '1.75x  840 x 1148'},
+    {scale = 2.0,  label = '2x     960 x 1312'},
+  }
+  self.settings_open = false
+  self.settings_selected = 1
+  for i, opt in ipairs(self.scale_options) do
+    if math.abs(opt.scale - sx) < 0.01 then self.settings_selected = i; break end
+  end
+end
+
+
+function BallPit:apply_scale_option(idx)
+  local opt = self.scale_options[idx]
+  if not opt then return end
+  if math.abs(sx - opt.scale) < 0.01 then return end
+  sx, sy = opt.scale, opt.scale
+  ww, wh = sx*gw, sy*gh
+  if state then state.sx, state.sy = sx, sy end
+  love.window.setMode(ww, wh, {vsync = 1, msaa = msaa or 0})
+  confirm1:play{volume = 0.4}
+end
+
+
+function BallPit:settings_option_under_mouse()
+  local opt_w, opt_h = 200, 16
+  local n = #self.scale_options
+  local start_y = gh/2 - (n*opt_h)/2 + opt_h/2
+  for i = 1, n do
+    local oy = start_y + (i-1)*opt_h
+    if mouse.x >= gw/2 - opt_w/2 and mouse.x <= gw/2 + opt_w/2
+    and mouse.y >= oy - opt_h/2  and mouse.y <= oy + opt_h/2 then
+      return i
+    end
+  end
+  return nil
+end
+
+
+function BallPit:update_settings(dt)
+  local hovered = self:settings_option_under_mouse()
+  if hovered then
+    if hovered ~= self.settings_selected then
+      self.settings_selected = hovered
+      ui_switch1:play{volume = 0.25}
+    end
+    if input.click.pressed then self:apply_scale_option(self.settings_selected) end
+  end
+
+  if input.aim_left.pressed or input.move_left.pressed then
+    self.settings_selected = math.max(1, self.settings_selected - 1)
+    ui_switch1:play{volume = 0.3}
+  end
+  if input.aim_right.pressed or input.move_right.pressed then
+    self.settings_selected = math.min(#self.scale_options, self.settings_selected + 1)
+    ui_switch1:play{volume = 0.3}
+  end
+  if input.confirm.pressed then self:apply_scale_option(self.settings_selected) end
+end
+
+
+function BallPit:draw_settings()
+  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, Color(0, 0, 0, 0.7))
+  graphics.print_centered('SETTINGS', fat_font, gw/2, gh/2 - 90, 0, 1.4, 1.4, 0, 0, yellow[0])
+  graphics.print_centered('window size', pixul_font, gw/2, gh/2 - 68, 0, 1, 1, 0, 0, fg[0])
+
+  local opt_w, opt_h = 200, 16
+  local n = #self.scale_options
+  local start_y = gh/2 - (n*opt_h)/2 + opt_h/2
+  for i, opt in ipairs(self.scale_options) do
+    local oy = start_y + (i-1)*opt_h
+    local selected = (i == self.settings_selected)
+    local active   = math.abs(opt.scale - sx) < 0.01
+    if selected then
+      graphics.rectangle(gw/2, oy, opt_w, opt_h - 2, 2, 2, bg[-1])
+      graphics.rectangle(gw/2, oy, opt_w, opt_h - 2, 2, 2, yellow[0], 1)
+    end
+    local label = opt.label .. (active and '   (current)' or '')
+    local color = active and yellow[0] or fg[0]
+    graphics.print_centered(label, pixul_font, gw/2, oy - 4, 0, 1, 1, 0, 0, color)
+  end
+
+  graphics.print_centered('arrows or mouse to choose, enter or click to apply',
+    pixul_font, gw/2, gh/2 + 72, 0, 1, 1, 0, 0, fg_alt[0])
+  graphics.print_centered('press ESC to close', pixul_font, gw/2, gh/2 + 86, 0, 1, 1, 0, 0, fg_alt[0])
 end
 
 
@@ -399,6 +492,19 @@ end
 
 function BallPit:update(dt)
   self.t:update(dt)
+
+  -- ESC toggles the settings overlay at any time (including from game-over
+  -- and the level-up upgrade screen). While open, all other game updates
+  -- are frozen.
+  if input.escape.pressed then
+    self.settings_open = not self.settings_open
+    ui_switch1:play{volume = 0.3}
+  end
+  if self.settings_open then
+    self:update_settings(dt)
+    return
+  end
+
   if self.game_over then
     self.ui:update(dt)
     if input.restart.pressed then self:reset_run() end
@@ -458,6 +564,7 @@ function BallPit:draw()
 
   if self.upgrade_pending then self:draw_upgrade() end
   if self.game_over then self:draw_game_over() end
+  if self.settings_open then self:draw_settings() end
 end
 
 

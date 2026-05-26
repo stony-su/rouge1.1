@@ -89,10 +89,16 @@ EnemyProjectile:implement(Physics)
 
 function EnemyProjectile:init(args)
   self:init_game_object(args)
-  self.r_size = 2.5
+  -- Bumped from 2.5 → 3.5 so the projectile reads as a real threat, not a
+  -- pickup. Hero balls can also intercept it more easily at this size.
+  self.r_size = 3.5
   self.color  = self.color or fg[0]
   self.speed  = self.speed or 60
   self.dmg    = self.dmg or 1
+  self.spin_t      = random:float(0, math.pi*2)
+  self.spin_speed  = random:float(4, 7) * (random:bool(50) and 1 or -1)
+  self.trail       = {}
+  self.trail_acc   = 0
 
   self:set_as_circle(self.r_size, 'dynamic', 'brick')
   self.body:setBullet(true)
@@ -118,13 +124,48 @@ function EnemyProjectile:update(dt)
     if arena.player_hp <= 0 then arena:trigger_game_over() end
     self.dead = true
   end
+
+  -- Visual state: spin + sampled trail. The trail is what most reliably
+  -- separates this from an XP orb at a glance — orbs sit still and pickups
+  -- drift; a streaking line below the cursor reads as "incoming."
+  self.spin_t = self.spin_t + self.spin_speed*dt
+  self.trail_acc = self.trail_acc + dt
+  if self.trail_acc > 0.03 then
+    self.trail_acc = 0
+    table.insert(self.trail, 1, {x = self.x, y = self.y})
+    if #self.trail > 8 then table.remove(self.trail) end
+  end
 end
 
 function EnemyProjectile:draw()
-  local s = self.hfx.hit.x
-  local col = self.hfx.hit.f and fg[0] or self.color
-  graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
-  graphics.circle(self.x, self.y, self.r_size*s, col)
+  -- Fading red trail behind the projectile. Drawn back-to-front so newer
+  -- samples sit on top of older, dimmer ones.
+  for i = #self.trail, 1, -1 do
+    local p = self.trail[i]
+    local k = i/(#self.trail + 1)
+    local a = (1 - k)*0.55
+    local rs = self.r_size*(1 - k*0.7)
+    if rs > 0.4 then
+      graphics.circle(p.x, p.y, rs, Color(red[0].r, red[0].g, red[0].b, a))
+    end
+  end
+
+  -- Pulsing red halo. Constant "danger" telegraph — XP orbs don't pulse, so
+  -- this is the cheapest visual cue that this thing wants to hurt the player.
+  local pulse = 1 + math.sin((time or 0)*9)*0.18
+  graphics.circle(self.x, self.y, (self.r_size + 2)*pulse, red_transparent_weak)
+
+  -- Body: a rotating 4-pointed spike. Always red (not the firing brick's
+  -- color) so it can never be confused for a blue/green/yellow XP gem.
+  local s   = self.hfx.hit.x or 1
+  local col = self.hfx.hit.f and fg[0] or red[0]
+  graphics.push(self.x, self.y, self.spin_t)
+    graphics.rectangle(self.x, self.y, self.r_size*2.6*s, self.r_size*0.9*s, 0.6, 0.6, col)
+    graphics.rectangle(self.x, self.y, self.r_size*0.9*s, self.r_size*2.6*s, 0.6, 0.6, col)
+  graphics.pop()
+  -- Bright inner core dot — keeps the projectile readable when the spike
+  -- happens to align horizontally and looks like a thin bar.
+  graphics.circle(self.x, self.y, self.r_size*0.5*s, fg[5])
 end
 
 function EnemyProjectile:take_damage(amount, color)
