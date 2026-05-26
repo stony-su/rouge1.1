@@ -257,3 +257,164 @@ function spawn_bounce_sparks(group, x, y, normal_angle, color)
     }
   end
 end
+
+
+-- WaterWave: a sweeping wall of water that surges from `y_start` (bottom of
+-- the arena) up to `y_end` (top), shoving every swarm it touches upward as
+-- it goes, then disperses with a foam-spray burst instead of blinking out.
+WaterWave = Object:extend()
+WaterWave:implement(GameObject)
+function WaterWave:init(args)
+  self:init_game_object(args)
+  self.x1            = self.x1 or 0
+  self.x2            = self.x2 or gw
+  self.y_start       = self.y_start or gh
+  self.y_end         = self.y_end or 0
+  self.surge_dur     = self.surge_dur or 0.65
+  self.disperse_dur  = self.disperse_dur or 0.55
+  self.color         = self.color or blue2[0]
+  self.phase         = 'surge'
+  self.elapsed       = 0
+  self.wave_y        = self.y_start
+  self.body_alpha    = 1
+  self.last_droplet  = 0
+  self.swarm_touched = {}
+end
+
+
+function WaterWave:update(dt)
+  self:update_game_object(dt)
+  self.elapsed = self.elapsed + dt
+
+  if self.phase == 'surge' then
+    local p     = math.clamp(self.elapsed/self.surge_dur, 0, 1)
+    local eased = 1 - (1 - p)*(1 - p)*(1 - p)
+    self.wave_y = self.y_start + (self.y_end - self.y_start)*eased
+
+    self:push_swarms()
+    self:spawn_droplets(false)
+
+    if p >= 1 then
+      self.phase   = 'disperse'
+      self.elapsed = 0
+      self:disperse_burst()
+    end
+
+  elseif self.phase == 'disperse' then
+    local p          = math.clamp(self.elapsed/self.disperse_dur, 0, 1)
+    self.body_alpha  = 1 - p
+    self.wave_y      = self.y_end + p*6
+    if random:bool(35) then self:spawn_droplets(true) end
+    if p >= 1 then self.dead = true end
+  end
+end
+
+
+function WaterWave:push_swarms()
+  local arena = main.current
+  if not arena then return end
+  for _, sw in ipairs(arena.swarms.objects) do
+    if sw and not sw.dead then
+      local lowest, has_live = -1e9, false
+      for _, cell in ipairs(sw.cells or {}) do
+        if cell.brick and not cell.brick.dead then
+          local by = sw.y_top + cell.dy
+          if by > lowest then lowest = by end
+          has_live = true
+        end
+      end
+      if has_live and self.wave_y < lowest + 6 then
+        local overlap = (lowest + 6) - self.wave_y
+        sw.y_top = math.max(arena.y1 + 8, sw.y_top - overlap)
+        if not self.swarm_touched[sw.id] then
+          self.swarm_touched[sw.id] = true
+          if sw.apply_knockback then sw:apply_knockback(140, -math.pi/2) end
+          spawn_burst(arena.effects, sw.x_center, lowest, self.color, 10, 100, 180)
+          spawn_burst(arena.effects, sw.x_center, lowest, fg[5], 4, 60, 140)
+          if pop1 then pop1:play{volume = 0.25, pitch = random:float(0.7, 0.9)} end
+        end
+      end
+    end
+  end
+end
+
+
+function WaterWave:spawn_droplets(sparse)
+  local count = sparse and 1 or 4
+  for _ = 1, count do
+    local dx     = random:float(self.x1 + 4, self.x2 - 4)
+    local color  = (random:bool(40) and fg[5]) or self.color
+    HitParticle{
+      group     = main.current.effects,
+      x         = dx, y = self.wave_y + random:float(-3, 3),
+      color     = color,
+      v         = random:float(80, 160),
+      r         = -math.pi/2 + random:float(-0.7, 0.7),
+      w         = random:float(1, 2.5),
+      duration  = random:float(0.3, 0.65),
+    }
+  end
+end
+
+
+function WaterWave:disperse_burst()
+  local arena = main.current
+  if not arena then return end
+  for _ = 1, 36 do
+    local dx     = random:float(self.x1 + 4, self.x2 - 4)
+    local color  = (random:bool(50) and fg[5]) or self.color
+    HitParticle{
+      group     = arena.effects,
+      x         = dx, y = self.wave_y,
+      color     = color,
+      v         = random:float(80, 200),
+      r         = -math.pi/2 + random:float(-1.0, 1.0),
+      w         = random:float(1.5, 3),
+      duration  = random:float(0.45, 0.9),
+    }
+  end
+  spawn_burst(arena.effects, (self.x1 + self.x2)/2, self.wave_y, fg[5], 12, 60, 160)
+  TelegraphRing{group = arena.effects, x = (self.x1 + self.x2)/2, y = self.wave_y,
+                radius = (self.x2 - self.x1)*0.55, color = self.color, duration = 0.45}
+end
+
+
+function WaterWave:draw()
+  local w  = self.x2 - self.x1
+  local cx = (self.x1 + self.x2)/2
+
+  local body_h = self.y_start - self.wave_y
+  if body_h > 1 then
+    local base_a = (self.phase == 'disperse') and (0.34*self.body_alpha) or 0.34
+    graphics.rectangle(cx, self.wave_y + body_h/2, w, body_h, nil, nil,
+      Color(self.color.r, self.color.g, self.color.b, base_a))
+    if body_h > 12 then
+      local deep_h = math.min(body_h, 26)
+      graphics.rectangle(cx, self.y_start - deep_h/2, w, deep_h, nil, nil,
+        Color(self.color.r*0.5, self.color.g*0.5, self.color.b*0.95, base_a*1.15))
+    end
+  end
+
+  local front_a
+  if self.phase == 'surge' then front_a = 0.9
+  else                          front_a = math.max(0, self.body_alpha*0.75) end
+  if front_a > 0.05 then
+    local segs  = 40
+    local amp   = 4 + 3*math.sin(self.elapsed*22)
+    local phase = self.elapsed*20
+    local body_c  = Color(self.color.r*0.7, self.color.g*0.7, self.color.b, front_a)
+    local crest_c = Color(1, 1, 1, front_a*0.85)
+    local prev_xb, prev_yb = self.x1, self.wave_y
+    local prev_xc, prev_yc = self.x1, self.wave_y - 2
+    for i = 1, segs do
+      local t      = i/segs
+      local x      = self.x1 + t*w
+      local y_body = self.wave_y + math.sin(t*math.pi*5 + phase)*amp
+      local y_crest = y_body - 2.5 - 0.5*math.sin(t*math.pi*7 - phase*0.55)
+      graphics.line(prev_xb, prev_yb, x, y_body,  body_c,  2)
+      graphics.line(prev_xc, prev_yc, x, y_crest, crest_c, 1)
+      prev_xb, prev_yb = x, y_body
+      prev_xc, prev_yc = x, y_crest
+    end
+  end
+end

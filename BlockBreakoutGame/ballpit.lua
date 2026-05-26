@@ -183,7 +183,7 @@ function BallPit:reset_run()
   if self.effects then self.effects:destroy() end
   if self.ui then self.ui:destroy() end
 
-  self.main    = Group():set_as_physics_world(32, 0, 0, {'paddle', 'ball', 'brick', 'wall', 'xp', 'projectile'})
+  self.main    = Group():set_as_physics_world(32, 0, 0, {'paddle', 'ball', 'brick', 'wall', 'xp', 'projectile', 'powerup'})
   self.swarms  = Group():no_camera()  -- controllers, no physics, no camera transform needed
   self.effects = Group()
   self.ui      = Group():no_camera()
@@ -204,6 +204,15 @@ function BallPit:reset_run()
   self.main:disable_collision_between('brick', 'brick')  -- adjacent bricks in a row touch
   self.main:disable_collision_between('brick', 'wall')   -- kinematic bricks don't react anyway
   self.main:disable_collision_between('paddle', 'wall')
+  -- Powerup orbs bounce off the side/top walls so they stay in play (the
+  -- bottom is open). Paddle catches and tier-2 deflects are driven by the
+  -- proximity check inside Powerup:update, not Box2D contacts.
+  self.main:disable_collision_between('powerup', 'paddle')
+  self.main:disable_collision_between('powerup', 'ball')
+  self.main:disable_collision_between('powerup', 'brick')
+  self.main:disable_collision_between('powerup', 'projectile')
+  self.main:disable_collision_between('powerup', 'xp')
+  self.main:disable_collision_between('powerup', 'powerup')
 
   -- Arena bounds.
   self.x1, self.y1 = 24, 18
@@ -248,12 +257,39 @@ function BallPit:reset_run()
   self.aim_angle   = -math.pi/2
   self.aim_speed   = math.pi*1.1   -- rad/s while holding left or right
 
+  -- Powerup state. `buffs` is keyed by powerup kind holding {remaining,
+  -- restore} pairs for active timed effects. `fire_trail_until` /
+  -- `no_speed_reset` are simple flags read from BallHero. `floor_wall` is
+  -- a reference to the temporary bottom-wall spawned by the floor powerup
+  -- so we can despawn it at wave end / on reset.
+  self.buffs            = {}
+  self.fire_trail_until = 0
+  self.no_speed_reset   = false
+  self.floor_wall       = nil
+  self.pierce_active    = false
+
+  -- Powerup pity timer. Powerups spawn on a periodic random roll with a
+  -- ramping pity multiplier so dry streaks can't drag on forever.
+  --   * Every `check_interval` seconds we roll for a spawn.
+  --   * Base spawn chance is `base_chance`; each failed roll adds
+  --     `pity_step` to the next check, capped at 100%.
+  --   * On a successful spawn the streak counter resets to 0.
+  -- The wave-end tier-2 in advance_wave is a separate guaranteed drop.
+  self.powerup_pity = {
+    timer          = 0,
+    check_interval = 6,
+    streak         = 0,
+    base_chance    = 0.25,
+    pity_step      = 0.20,
+    tier2_chance   = 0.20,
+  }
+
   self:start_wave()
 end
 
 
 function BallPit:spawn_wall(x, y, w, h)
-  Wall{group = self.main, x = x, y = y, w = w, h = h}
+  return Wall{group = self.main, x = x, y = y, w = w, h = h}
 end
 
 
@@ -308,6 +344,15 @@ function BallPit:add_hero(character)
       local vx, vy = h:get_velocity()
       local impact_angle = math.atan2(-vy, -vx)
       spawn_bounce_sparks(self.effects, h.x, h.y, impact_angle, h.color)
+      -- Pierce powerup: undo Box2D's bounce by restoring the velocity the
+      -- ball had just before this collision. Deferred to next frame since
+      -- the Box2D world is locked during the callback.
+      if self.pierce_active and h._last_vx then
+        local lvx, lvy = h._last_vx, h._last_vy
+        self.t:after(0, function()
+          if h.body and not h.dead then h:set_velocity(lvx, lvy) end
+        end)
+      end
     elseif other.tag == 'paddle' then
       other:on_ball_bounce(h)
     elseif other.tag == 'wall' then
@@ -337,6 +382,39 @@ end
 
 
 function BallPit:advance_wave()
+  -- Guaranteed end-of-wave Tier-2 powerup drop. Spawned just inside the top
+  -- of the arena so it's visible / catchable as the next wave starts.
+  if Powerup then
+    local t2 = Powerup.tier_2_kinds()
+    if #t2 > 0 then
+      local kind = t2[random:int(1, #t2)]
+      local x    = self:arena_center_x() + random:float(-40, 40)
+      local y    = self.y1 + 20
+      self.t:after(0, function()
+        if self.main and self.main.world then
+          Powerup{group = self.main, x = x, y = y, kind = kind}
+        end
+      end)
+    end
+  end
+
+  -- The floor powerup lasts until the next wave starts. Tear down the
+  -- temporary bottom wall and clear the flag here so the player has to
+  -- re-earn the floor each wave.
+  if self.floor_wall then
+    self.floor_wall.dead = true
+    self.floor_wall      = nil
+    self.no_speed_reset  = false
+  end
+
+  -- The wave-end tier-2 drop above counts as the start-of-wave powerup; reset
+  -- the pity counter so the very next pity roll doesn't immediately spawn a
+  -- second powerup on top of it.
+  if self.powerup_pity then
+    self.powerup_pity.timer  = 0
+    self.powerup_pity.streak = 0
+  end
+
   self.wave = self.wave + 1
   self.t:cancel('spawn_swarm')
   self:start_wave()
@@ -543,6 +621,10 @@ function BallPit:update(dt)
   self.effects:update(dt)
   self.ui:update(dt)
 
+  -- Powerup buffs (timed effects) + pity-timer driven random spawns.
+  self:tick_buffs(dt)
+  self:tick_powerup_pity(dt)
+
   -- Wave end → wave advance (purely time-based; leftover bricks roll into the next wave).
   if self.wave_time >= self.wave_cfg.duration then
     self:advance_wave()
@@ -561,6 +643,7 @@ function BallPit:draw()
   if self.stuck_count > 0 or input.launch.down then self:draw_aim_line() end
   self.ui:draw()
   self:draw_hud()
+  self:draw_buff_strip()
 
   if self.upgrade_pending then self:draw_upgrade() end
   if self.game_over then self:draw_game_over() end
@@ -1103,5 +1186,407 @@ function BallPit:heal_player(amount)
     if self.player_hp ~= prev then
       FloatingText{group = self.effects, x = self.paddle.x, y = self.paddle.y - 20, text = '+1 HP', color = green[0]}
     end
+  end
+end
+
+
+-- ----- Powerups -----
+--
+-- Apply a powerup by name. Effects come in three flavours:
+--   1. Instant (heal, freeze_wave, water_wave, level_random): no buff slot.
+--   2. Timed buff (wide_paddle, big_ball, fire_trail, pierce, multi_ball):
+--      stashed in self.buffs[kind] with a `remaining` + `restore` pair;
+--      tick_buffs counts down and calls restore on expiry. Stacking the same
+--      buff while it's active extends the timer instead of stacking the
+--      multiplier.
+--   3. Wave-bounded (floor): cleared in advance_wave / reset_run, no timer.
+
+
+-- A brief visual confirmation that a specific hero just gained a level.
+-- Used by the "level random balls" powerup.
+function BallPit:flash_hero_level_up(hero)
+  if not (hero and not hero.dead) then return end
+  hero.spring:pull(0.35)
+  TelegraphRing{
+    group    = self.effects, x = hero.x, y = hero.y,
+    radius   = hero.r_size*3.5, color = yellow[0], duration = 0.35,
+  }
+  spawn_burst(self.effects, hero.x, hero.y, yellow[0], 6, 70, 130)
+  FloatingText{
+    group = self.effects, x = hero.x, y = hero.y - hero.r_size - 4,
+    text  = '+LVL ' .. (hero.level or 1), color = yellow[0],
+  }
+end
+
+
+-- Pity-timer driven powerup spawner. Accumulates real time and rolls for a
+-- spawn at fixed intervals; each failed roll bumps the chance for the next
+-- check so dry streaks can't drag on forever.
+function BallPit:tick_powerup_pity(dt)
+  if not Powerup then return end
+  if self.upgrade_pending or self.game_over then return end
+  local p = self.powerup_pity
+  if not p then return end
+
+  p.timer = p.timer + dt
+  if p.timer < p.check_interval then return end
+  p.timer = p.timer - p.check_interval
+
+  local chance = math.min(1.0, p.base_chance + p.streak*p.pity_step)
+  if random:float(0, 1) < chance then
+    self:spawn_random_powerup()
+    p.streak = 0
+  else
+    p.streak = p.streak + 1
+  end
+end
+
+
+-- Pick a random tier (weighted toward tier-1) and a random kind within it,
+-- then drop a Powerup near the top of the arena so it has time to fall to
+-- the paddle.
+function BallPit:spawn_random_powerup()
+  if not (Powerup and self.main and self.main.world) then return end
+
+  local p = self.powerup_pity or {tier2_chance = 0.20}
+  local kinds
+  if random:float(0, 1) < (p.tier2_chance or 0.20) then
+    kinds = Powerup.tier_2_kinds()
+  else
+    kinds = Powerup.tier_1_kinds()
+  end
+  if not kinds or #kinds == 0 then return end
+  local kind = kinds[random:int(1, #kinds)]
+
+  local arena_w = self.x2 - self.x1
+  local x = self:arena_center_x() + random:float(-arena_w/3, arena_w/3)
+  local y = self.y1 + 16
+
+  self.t:after(0, function()
+    if self.main and self.main.world then
+      Powerup{group = self.main, x = x, y = y, kind = kind}
+    end
+  end)
+end
+
+
+function BallPit:apply_powerup(kind, x, y, color)
+  local def = Powerup and Powerup.KINDS and Powerup.KINDS[kind]
+  if not def then return end
+
+  -- Floating label so the player can read what they just caught.
+  local px = (self.paddle and self.paddle.x) or gw/2
+  local py = (self.paddle and self.paddle.y - 26) or gh/2
+  FloatingText{group = self.effects, x = px, y = py, text = def.label:upper(), color = color or _G[def.color or 'fg'][0]}
+  buff1:play{volume = 0.3, pitch = random:float(1.0, 1.1)}
+  Flash{group = self.effects, x = gw/2, y = gh/2, color = Color((color or fg[0]).r, (color or fg[0]).g, (color or fg[0]).b, 0.25), duration = 0.08}
+
+  if     kind == 'heal'         then self:heal_player(1)
+  elseif kind == 'wide_paddle'  then self:apply_paddle_width_buff()
+  elseif kind == 'big_ball'     then self:apply_big_ball_buff()
+  elseif kind == 'fire_trail'   then self:apply_fire_trail_buff()
+  elseif kind == 'freeze_wave'  then self:apply_freeze_wave()
+  elseif kind == 'water_wave'   then self:apply_water_wave()
+  elseif kind == 'multi_ball'   then self:apply_multi_ball()
+  elseif kind == 'pierce'       then self:apply_pierce_buff()
+  elseif kind == 'floor'        then self:apply_floor()
+  elseif kind == 'level_random' then self:apply_level_random()
+  end
+end
+
+
+-- Tick every active buff. Called from BallPit:update.
+function BallPit:tick_buffs(dt)
+  for kind, b in pairs(self.buffs) do
+    b.remaining = b.remaining - dt
+    if b.remaining <= 0 then
+      if b.restore then b.restore() end
+      self.buffs[kind] = nil
+    end
+  end
+end
+
+
+-- Add or extend a timed buff. If a buff with this kind already exists, the
+-- existing restore() is preserved (so we don't double-apply) and the timer
+-- is bumped to whichever is longer.
+function BallPit:add_or_extend_buff(kind, duration, on_apply, on_restore)
+  local existing = self.buffs[kind]
+  if existing then
+    existing.remaining = math.max(existing.remaining, duration)
+    return
+  end
+  if on_apply then on_apply() end
+  self.buffs[kind] = {remaining = duration, restore = on_restore}
+end
+
+
+-- ----- Individual powerup effects -----
+
+-- Helper: destroy the existing Box2D body+fixture and rebuild as a rectangle
+-- at the same position. Used by paddle and any other body whose dimensions
+-- need to change at runtime (Box2D doesn't allow live fixture resize).
+local function rebuild_rect_body(obj, w, h, body_type, tag)
+  local px, py = obj.x, obj.y
+  if obj.destroy then obj:destroy() end
+  obj.x, obj.y = px, py
+  obj:set_as_rectangle(w, h, body_type, tag)
+end
+
+
+local function rebuild_circle_body(obj, r, body_type, tag)
+  local px, py = obj.x, obj.y
+  if obj.destroy then obj:destroy() end
+  obj.x, obj.y = px, py
+  obj:set_as_circle(r, body_type, tag)
+end
+
+
+function BallPit:apply_paddle_width_buff()
+  local p = self.paddle
+  if not p then return end
+  self:add_or_extend_buff('wide_paddle', 15,
+    function()
+      p._orig_w = p._orig_w or p.w
+      p.w = p._orig_w * 1.6
+      rebuild_rect_body(p, p.w, p.h, 'kinematic', 'paddle')
+      p:set_restitution(1)
+      p.t:after(0, function() if p.body then p.body:setFixedRotation(true) end end)
+    end,
+    function()
+      if p._orig_w then
+        p.w = p._orig_w
+        rebuild_rect_body(p, p.w, p.h, 'kinematic', 'paddle')
+        p:set_restitution(1)
+        p.t:after(0, function() if p.body then p.body:setFixedRotation(true) end end)
+      end
+    end)
+end
+
+
+local function resize_hero(h, new_r)
+  if not (h.body and h.set_as_circle) then return end
+  local vx, vy   = h:get_velocity()
+  local was_active = h.body:isActive()
+
+  local arena = main.current
+  if arena then
+    h.x = math.clamp(h.x, arena.x1 + new_r + 1, arena.x2 - new_r - 1)
+    h.y = math.clamp(h.y, arena.y1 + new_r + 1, arena.y2 + 40)
+  end
+
+  h.r_size = new_r
+  rebuild_circle_body(h, new_r, 'dynamic', 'ball')
+  h.body:setBullet(true)
+  h:set_fixed_rotation(true)
+  h:set_restitution(1)
+  h:set_friction(0)
+  h:set_damping(0)
+  h:set_angular_damping(0)
+  h:set_mass(0.5)
+  if vx and vy then h:set_velocity(vx, vy) end
+  if not was_active then h.body:setActive(false) end
+end
+
+
+function BallPit:apply_big_ball_buff()
+  self:add_or_extend_buff('big_ball', 12,
+    function()
+      for _, h in ipairs(self.heroes) do
+        if h and not h.dead then
+          h._orig_r_size = h._orig_r_size or h.r_size
+          resize_hero(h, h._orig_r_size * 1.6)
+        end
+      end
+    end,
+    function()
+      for _, h in ipairs(self.heroes) do
+        if h and not h.dead and h._orig_r_size then
+          resize_hero(h, h._orig_r_size)
+        end
+      end
+    end)
+end
+
+
+function BallPit:apply_fire_trail_buff()
+  self:add_or_extend_buff('fire_trail', 10,
+    function() self.fire_trail_until = (self.run_time or 0) + 1e9 end,
+    function() self.fire_trail_until = 0 end)
+end
+
+
+function BallPit:apply_freeze_wave()
+  TelegraphRing{group = self.effects, x = gw/2, y = gh/2, radius = math.max(gw, gh)*0.6, color = blue[0], duration = 0.4}
+  Flash{group = self.effects, x = gw/2, y = gh/2, color = Color(blue[0].r, blue[0].g, blue[0].b, 0.25), duration = 0.18}
+  for _, sw in ipairs(self.swarms.objects) do
+    if sw and not sw.dead then
+      sw._frozen_orig_drift = sw._frozen_orig_drift or sw.drift_speed
+      sw.drift_speed        = 0
+    end
+  end
+  self.t:after(5, function()
+    for _, sw in ipairs(self.swarms.objects) do
+      if sw and not sw.dead and sw._frozen_orig_drift then
+        sw.drift_speed       = sw._frozen_orig_drift
+        sw._frozen_orig_drift = nil
+      end
+    end
+  end)
+end
+
+
+function BallPit:apply_water_wave()
+  local surge_dur    = 0.65
+  local disperse_dur = 0.55
+  WaterWave{
+    group        = self.effects,
+    x = (self.x1 + self.x2)/2, y = self.y2,
+    x1           = self.x1, x2 = self.x2,
+    y_start      = self.y2 - 4,
+    y_end        = self.y1 + 8,
+    surge_dur    = surge_dur,
+    disperse_dur = disperse_dur,
+    color        = blue2[0],
+  }
+
+  Flash{
+    group = self.effects, x = gw/2, y = gh/2,
+    color = Color(blue2[0].r, blue2[0].g, blue2[0].b, 0.32),
+    duration = 0.18,
+  }
+  TelegraphRing{
+    group = self.effects, x = gw/2, y = self.y2 - 6,
+    radius = math.max(gw, gh)*0.55, color = fg[0], duration = 0.4,
+  }
+  TelegraphRing{
+    group = self.effects, x = gw/2, y = self.y2 - 6,
+    radius = math.max(gw, gh)*0.4, color = blue2[0], duration = 0.55,
+  }
+  self.t:after(surge_dur*0.35, function()
+    TelegraphRing{group = self.effects, x = gw/2, y = (self.y1 + self.y2)/2,
+                  radius = math.max(gw, gh)*0.45, color = blue2[0], duration = 0.4}
+  end)
+  self.t:after(surge_dur*0.7, function()
+    TelegraphRing{group = self.effects, x = gw/2, y = self.y1 + 24,
+                  radius = math.max(gw, gh)*0.35, color = blue[0], duration = 0.4}
+  end)
+  self.t:after(surge_dur, function()
+    camera:shake(3, 0.25, 70)
+  end)
+
+  camera:shake(5, 0.35, 80)
+  if frost1 then frost1:play{volume = 0.45, pitch = random:float(0.7, 0.85)} end
+  if force1 then force1:play{volume = 0.35, pitch = random:float(0.85, 0.95)} end
+
+  -- Slow buff on every live swarm, restored after 10s.
+  for _, sw in ipairs(self.swarms.objects) do
+    if sw and not sw.dead then
+      sw._water_orig_drift = sw._water_orig_drift or sw.drift_speed
+      sw.drift_speed       = sw._water_orig_drift * 0.4
+    end
+  end
+  self.t:after(10, function()
+    for _, sw in ipairs(self.swarms.objects) do
+      if sw and not sw.dead and sw._water_orig_drift then
+        sw.drift_speed       = sw._water_orig_drift
+        sw._water_orig_drift = nil
+      end
+    end
+  end)
+end
+
+
+function BallPit:apply_multi_ball()
+  local snapshot = {}
+  for _, h in ipairs(self.heroes) do
+    if h and not h.dead and not h.is_clone then table.insert(snapshot, h) end
+  end
+  local clone_cap = 16 - #snapshot
+  if clone_cap <= 0 then return end
+
+  local clones = {}
+  for i = 1, math.min(clone_cap, #snapshot) do
+    local src   = snapshot[i]
+    local hero  = self:add_hero(src.character)
+    hero.is_clone = true
+    hero.level  = src.level
+    hero.dmg    = src.dmg
+    table.insert(clones, hero)
+  end
+  self.t:after(12, function()
+    for _, h in ipairs(clones) do
+      if h and not h.dead then
+        if h.body then h.body:setActive(false) end
+        h.dead = true
+      end
+    end
+    for i = #self.heroes, 1, -1 do
+      if self.heroes[i] and self.heroes[i].dead then
+        table.remove(self.heroes, i)
+      end
+    end
+  end)
+end
+
+
+function BallPit:apply_pierce_buff()
+  -- Box2D collisions stay ENABLED so the on_collision_enter callback still
+  -- fires for damage. The "pass through" effect is achieved in the callback
+  -- by restoring the pre-bounce velocity right after the contact resolves.
+  self:add_or_extend_buff('pierce', 8,
+    function() self.pierce_active = true  end,
+    function() self.pierce_active = false end)
+end
+
+
+function BallPit:apply_floor()
+  if self.floor_wall then return end
+  local thick = 6
+  local cx    = (self.x1 + self.x2)/2
+  local cy    = self.y2 + thick/2 + 2
+  local w     = self.x2 - self.x1 + thick
+  self.floor_wall      = self:spawn_wall(cx, cy, w, thick)
+  self.no_speed_reset  = true
+  TelegraphRing{group = self.effects, x = cx, y = cy, radius = w*0.6, color = yellow2[0], duration = 0.45}
+end
+
+
+function BallPit:apply_level_random()
+  local pool = {}
+  for _, h in ipairs(self.heroes) do
+    if h and not h.dead and (h.level or 1) < 3 then table.insert(pool, h) end
+  end
+  if #pool == 0 then return end
+  local n = math.min(#pool, random:int(1, 5))
+  for i = 1, n do
+    local j = random:int(i, #pool)
+    pool[i], pool[j] = pool[j], pool[i]
+    local h = pool[i]
+    h.level = (h.level or 1) + 1
+    h.dmg   = h.dmg * 1.4
+    self:flash_hero_level_up(h)
+  end
+  level_up1:play{volume = 0.4}
+end
+
+
+-- ----- Buff HUD strip -----
+--
+-- Tucked above the HP/XP row. Each active buff renders as a coloured pill
+-- with its remaining seconds.
+function BallPit:draw_buff_strip()
+  if not self.buffs then return end
+  local x = self.x1 + 2
+  local y = math.max(0, self.y1 - 18)
+  local pad = 2
+  for kind, b in pairs(self.buffs) do
+    local def    = Powerup and Powerup.KINDS and Powerup.KINDS[kind]
+    local color  = def and _G[def.color][0] or fg[0]
+    local label  = (def and def.label or kind):upper() .. ' ' .. string.format('%.1f', math.max(0, b.remaining))
+    local glyph_w = #label * 4 + 4
+    graphics.rectangle(x + glyph_w/2, y + 3, glyph_w, 6, 1, 1, Color(color.r*0.4, color.g*0.4, color.b*0.4, 0.85))
+    graphics.print(label, pixul_font, x + 2, y, 0, 1, 1, 0, 0, color)
+    x = x + glyph_w + pad
   end
 end

@@ -633,6 +633,13 @@ function BallHero:update(dt)
 
   self:normalize_speed()
 
+  -- Cache the post-normalize velocity each frame so the pierce powerup can
+  -- restore it inside the next collision callback (Box2D's reflection has
+  -- already mangled the velocity by the time on_collision_enter fires).
+  if self.body then
+    self._last_vx, self._last_vy = self:get_velocity()
+  end
+
   -- Ball fell into the pit (no bottom wall) — magnetic recall back to paddle.
   if self.y > arena.y2 + 12 then
     self:start_return()
@@ -666,7 +673,7 @@ function BallHero:update_return(dt)
     -- wait for the player to aim + launch manually.
     if input.launch.down then
       if self.body then self.body:setActive(true) end
-      self.speed_mult = 1.0
+      if not arena.no_speed_reset then self.speed_mult = 1.0 end
       local angle = arena.aim_angle or -math.pi/2
       self:set_velocity(math.cos(angle)*self.base_speed, math.sin(angle)*self.base_speed)
       self.spring:pull(0.3)
@@ -688,7 +695,12 @@ end
 function BallHero:start_stuck()
   self.stuck            = true
   self.stuck_offset_x   = random:float(-8, 8)
-  self.speed_mult       = 1.0   -- missing the paddle wipes the speed streak
+  -- The floor powerup sets arena.no_speed_reset so the streak survives any
+  -- miss — even if a ball somehow slips past the temporary bottom wall, the
+  -- accumulated speed_mult is preserved.
+  if not (main.current and main.current.no_speed_reset) then
+    self.speed_mult     = 1.0   -- missing the paddle wipes the speed streak
+  end
   self.charge_time      = 0     -- fresh charge bar each time
   self.charge_dmg_mult  = 1.0   -- previous charge bonus is consumed
   if self.body then self.body:setActive(false) end
@@ -812,6 +824,22 @@ function BallHero:on_brick_hit(brick)
     brick:on_ball_contact(self)
   else
     brick:take_damage(self.dmg, self.color)
+  end
+
+  -- Fire-trail powerup: while active, every ball-on-brick contact also calls
+  -- apply_burn on the target. EnemyCritter / EnemyProjectile are also tagged
+  -- 'brick' for collision routing and expose a no-op apply_burn, so this is
+  -- safe; only real Brick instances actually tick burn damage.
+  if arena and arena.buffs and arena.buffs.fire_trail and brick.apply_burn then
+    brick:apply_burn(self:current_dmg()*0.4, 2.0)
+    if random:bool(25) then
+      HitParticle{
+        group = arena.effects,
+        x = self.x + random:float(-3, 3),
+        y = self.y - self.r_size,
+        color = orange[0], v = 30, r = -math.pi/2, w = 2, duration = 0.3,
+      }
+    end
   end
 
   local trigger = self.stats.on_bounce
