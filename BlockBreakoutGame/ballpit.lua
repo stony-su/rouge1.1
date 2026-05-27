@@ -1573,18 +1573,20 @@ end
 
 -- ----- Buff HUD strip -----
 --
--- Tucked above the HP/XP row. Each active buff renders as a coloured pill
--- with its remaining seconds.
+-- Tucked below the playfield, beneath the Lv/Wave/Time row. The header above
+-- the playfield is too cramped to share with the HP/XP bar without the text
+-- bleeding into the hearts. Each active buff renders as a coloured pill with
+-- its remaining seconds.
 function BallPit:draw_buff_strip()
   if not self.buffs then return end
   local x = self.x1 + 2
-  local y = math.max(0, self.y1 - 18)
-  local pad = 2
+  local y = self.y2 + 14
+  local pad = 10
   for kind, b in pairs(self.buffs) do
     local def    = Powerup and Powerup.KINDS and Powerup.KINDS[kind]
     local color  = def and _G[def.color][0] or fg[0]
     local label  = (def and def.label or kind):upper() .. ' ' .. string.format('%.1f', math.max(0, b.remaining))
-    local glyph_w = #label * 4 + 4
+    local glyph_w = pixul_font:get_text_width(label) + 4
     graphics.rectangle(x + glyph_w/2, y + 3, glyph_w, 6, 1, 1, Color(color.r*0.4, color.g*0.4, color.b*0.4, 0.85))
     graphics.print(label, pixul_font, x + 2, y, 0, 1, 1, 0, 0, color)
     x = x + glyph_w + pad
