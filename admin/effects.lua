@@ -325,7 +325,9 @@ function WaterWave:push_swarms()
       local lowest, has_live = -1e9, false
       for _, cell in ipairs(sw.cells or {}) do
         if cell.brick and not cell.brick.dead then
-          local by = sw.y_top + cell.dy
+          -- bottom_y accounts for multi-cell shapes; the brick body sits at
+          -- the shape centroid, so a 3-tall brick extends well past its dy.
+          local by = cell.brick:bottom_y()
           if by > lowest then lowest = by end
           has_live = true
         end

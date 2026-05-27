@@ -475,23 +475,51 @@ end
 -- bails if any of them shares a cell with the planned layout. The vertical
 -- threshold is widened by `min_gap` so that early waves enforce a few rows
 -- of empty space between successive swarms.
+-- Per-cell overlap check: walks every live brick in every live swarm and
+-- bails if any of them shares a grid cell with the planned layout. Each
+-- entry may be a multi-cell brick now (2x2, L, T, etc.), so we expand both
+-- sides to their full {x, y} per-cell footprint and compare cells to cells
+-- — the brick centroid alone is no longer enough.
+local function expand_to_cells(item, x_anchor, y_anchor)
+  local cells_def = item.shape_cells or {{0,0}}
+  local n = #cells_def
+  local sum_cx, sum_cy = 0, 0
+  for _, c in ipairs(cells_def) do sum_cx = sum_cx + c[1]; sum_cy = sum_cy + c[2] end
+  local cx_c, cy_c = sum_cx/n, sum_cy/n
+  local out = {}
+  for _, c in ipairs(cells_def) do
+    table.insert(out, {
+      x = x_anchor + item.dx + (c[1] - cx_c) * CELL_W,
+      y = y_anchor + item.dy + (c[2] - cy_c) * CELL_H,
+    })
+  end
+  return out
+end
+
 function BallPit:can_place_layout(x_center, y_top, cells_layout, min_gap)
   min_gap = min_gap or 0
   local v_threshold = CELL_H - 1 + min_gap
-  for _, c in ipairs(cells_layout) do
-    local tx = x_center + c.dx
-    local ty = y_top + c.dy
-    for _, swarm in ipairs(self.swarms.objects) do
-      if swarm and not swarm.dead then
-        for _, ec in ipairs(swarm.cells or {}) do
-          local b = ec.brick
-          if b and not b.dead then
-            -- Use the swarm's logical centre (no knockback offset) so a
-            -- transient spring oscillation doesn't unblock a cell.
-            local ex = swarm.x_center + ec.dx
-            local ey = swarm.y_top + ec.dy
-            if math.abs(tx - ex) < CELL_W - 1 and math.abs(ty - ey) < v_threshold then
-              return false
+
+  -- Build the new layout's full cell footprint once.
+  local new_cells = {}
+  for _, item in ipairs(cells_layout) do
+    for _, p in ipairs(expand_to_cells(item, x_center, y_top)) do
+      table.insert(new_cells, p)
+    end
+  end
+
+  for _, swarm in ipairs(self.swarms.objects) do
+    if swarm and not swarm.dead then
+      for _, ec in ipairs(swarm.cells or {}) do
+        local b = ec.brick
+        if b and not b.dead then
+          -- Use the swarm's logical centre (no knockback offset) so a
+          -- transient spring oscillation doesn't unblock a cell.
+          for _, ep in ipairs(expand_to_cells(ec, swarm.x_center, swarm.y_top)) do
+            for _, np in ipairs(new_cells) do
+              if math.abs(np.x - ep.x) < CELL_W - 1 and math.abs(np.y - ep.y) < v_threshold then
+                return false
+              end
             end
           end
         end

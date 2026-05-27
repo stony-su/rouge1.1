@@ -16,6 +16,11 @@ Brick:implement(Physics)
 
 
 local BRICK_W, BRICK_H = 18, 10
+-- Grid spacing must match BallPit's CELL_W/CELL_H so multi-cell bricks line
+-- up with the swarm planner's grid and adjacent cells of the same brick
+-- inherit the 4px gap that lives between separate 1×1 bricks.
+local CELL_W, CELL_H = 22, 14
+local DEFAULT_SHAPE = {{0, 0}}
 
 
 -- All variants share size so they slot cleanly into a row. Behaviors are
@@ -41,29 +46,99 @@ function Brick:init(args)
   self:init_game_object(args)
   self.variant_name = self.variant or 'seeker'
   local v = VARIANTS[self.variant_name]
-  self.w           = BRICK_W
-  self.h           = BRICK_H
-  self.max_hp      = v.hp * (1 + 0.2*(main.current.wave or 1))
-  self.hp          = self.max_hp
-  self.xp_value    = v.xp
-  self.color       = _G[v.color][0]
-  self.player_dmg  = v.dmg
-  self.behavior    = v.behavior
+
+  -- Shape: list of {cx, cy} cell offsets in grid units. Single-cell bricks
+  -- default to {{0,0}}; multi-cell shapes (rect 2x2, L, T, etc.) come from
+  -- the swarm generator. self.x/self.y end up at the centroid of the shape
+  -- so the brick balances on its visual centre rather than the top-left
+  -- cell.
+  self.shape_cells = self.shape_cells or DEFAULT_SHAPE
+  local sum_cx, sum_cy = 0, 0
+  local min_cx, max_cx = 1/0, -1/0
+  local min_cy, max_cy = 1/0, -1/0
+  for _, c in ipairs(self.shape_cells) do
+    sum_cx = sum_cx + c[1]; sum_cy = sum_cy + c[2]
+    if c[1] < min_cx then min_cx = c[1] end
+    if c[1] > max_cx then max_cx = c[1] end
+    if c[2] < min_cy then min_cy = c[2] end
+    if c[2] > max_cy then max_cy = c[2] end
+  end
+  local n_cells = #self.shape_cells
+  self.shape_cx, self.shape_cy   = sum_cx/n_cells, sum_cy/n_cells
+  self.cell_min_cx, self.cell_max_cx = min_cx, max_cx
+  self.cell_min_cy, self.cell_max_cy = min_cy, max_cy
+  self.cols, self.rows = max_cx - min_cx + 1, max_cy - min_cy + 1
+
+  -- Bounding-box extent in pixels. One cell is BRICK_W/H wide; each extra
+  -- cell along an axis adds CELL_W/H (cell-to-cell spacing, which preserves
+  -- the 4px between-cell visual gap).
+  self.w = BRICK_W + (self.cols - 1) * CELL_W
+  self.h = BRICK_H + (self.rows - 1) * CELL_H
+
+  -- HP and XP scale linearly with cell count — bigger bricks are tougher and
+  -- more rewarding in proportion to the area they cover.
+  self.cell_count = n_cells
+  self.max_hp     = v.hp * (1 + 0.2*(main.current.wave or 1)) * n_cells
+  self.hp         = self.max_hp
+  self.xp_value   = v.xp * n_cells
+  self.color      = _G[v.color][0]
+  self.player_dmg = v.dmg
+  self.behavior   = v.behavior
 
   self.slow_factor = 1
   self.slow_timer  = 0
   self.burn_timer  = 0
   self.burn_dps    = 0
 
-  -- Kinematic body: row controls position via set_position each frame.
-  -- Dynamic ball still bounces off normally.
-  self:set_as_rectangle(self.w, self.h, 'kinematic', 'brick')
+  -- One kinematic body, one BRICK_W×BRICK_H fixture per cell. The fixture
+  -- userdata all point at the same brick id, so collision callbacks route to
+  -- a single on_ball_contact regardless of which cell the ball touched.
+  -- Tetris-shape bricks have accurate concave collision this way instead of
+  -- a fake bounding-box hit on empty interior cells.
+  self:setup_multi_cell_body('kinematic', 'brick')
   self:set_fixed_rotation(true)
   self:set_restitution(1)
   self:set_friction(0)
   self.hfx:add('hit', 1)
 
   self:setup_behavior()
+end
+
+
+function Brick:setup_multi_cell_body(body_type, tag)
+  if not self.group then error('Brick must have a group for the Physics mixin to function') end
+  self.tag  = tag
+  self.body = love.physics.newBody(self.group.world, self.x, self.y, body_type)
+
+  local fixtures = {}
+  for _, c in ipairs(self.shape_cells) do
+    local lx = (c[1] - self.shape_cx) * CELL_W
+    local ly = (c[2] - self.shape_cy) * CELL_H
+    local box = love.physics.newRectangleShape(lx, ly, BRICK_W, BRICK_H)
+    local fixture = love.physics.newFixture(self.body, box)
+    fixture:setUserData(self.id)
+    fixture:setCategory(self.group.collision_tags[tag].category)
+    fixture:setMask(unpack(self.group.collision_tags[tag].masks))
+    table.insert(fixtures, fixture)
+  end
+
+  -- Physics:destroy iterates self.fixtures THEN destroys self.fixture, so we
+  -- keep them disjoint: singular = first cell, plural = the rest. Otherwise
+  -- the first fixture would be destroyed twice and crash.
+  self.fixture = fixtures[1]
+  if #fixtures > 1 then
+    self.fixtures = {}
+    for i = 2, #fixtures do table.insert(self.fixtures, fixtures[i]) end
+  end
+  return self
+end
+
+
+-- World-space y of the bottom edge of this brick's lowest cell. Used by the
+-- swarm breach check, which has to know how far the brick *actually* extends
+-- — not just its body center, which is the shape centroid.
+function Brick:bottom_y()
+  return self.y + (self.cell_max_cy - self.shape_cy) * CELL_H + BRICK_H/2
 end
 
 
@@ -213,18 +288,70 @@ function Brick:draw()
   local hp_pct = math.clamp(self.hp/self.max_hp, 0, 1)
   local body_color = self.color
   if self.hfx.hit.f then body_color = fg[0] end
+  local dark_color = Color(body_color.r*0.7, body_color.g*0.7, body_color.b*0.7, 1)
 
+  -- O(1) "same-brick neighbour?" lookup for the connector pass.
+  local has = {}
+  for _, c in ipairs(self.shape_cells) do
+    has[c[1]] = has[c[1]] or {}
+    has[c[1]][c[2]] = true
+  end
+  local function has_cell(cx, cy) return has[cx] and has[cx][cy] end
+
+  -- Scale the whole brick uniformly around its body centre so the hit-flash
+  -- treats a multi-cell brick as one unit, instead of each cell wobbling
+  -- around its own centre and visually tearing the shape apart.
   graphics.push(self.x, self.y, 0, s, 1/s)
-    graphics.rectangle(self.x, self.y, self.w, self.h, 1, 1, body_color)
-    graphics.rectangle(self.x, self.y, self.w - 2, self.h - 2, nil, nil,
-      Color(body_color.r*0.7, body_color.g*0.7, body_color.b*0.7, 1))
+    -- Cell bodies. Same look as a 1×1 brick: BRICK_W×BRICK_H body with a
+    -- 1-pixel inset dark interior.
+    for _, c in ipairs(self.shape_cells) do
+      local cx = self.x + (c[1] - self.shape_cx) * CELL_W
+      local cy = self.y + (c[2] - self.shape_cy) * CELL_H
+      graphics.rectangle(cx, cy, BRICK_W, BRICK_H, 1, 1, body_color)
+      graphics.rectangle(cx, cy, BRICK_W - 2, BRICK_H - 2, nil, nil, dark_color)
+    end
+
+    -- Connectors fill the 4-pixel between-cell gaps WITHIN this brick so the
+    -- shape reads as one solid piece instead of N separate 1×1s. The body
+    -- and dark rectangles are extended 1px into each neighbouring cell so
+    -- the joint paints over the cell's rounded corners + inner-border seam
+    -- — no visible line at the connection point.
+    local gap_w = CELL_W - BRICK_W   -- 4
+    local gap_h = CELL_H - BRICK_H   -- 4
+    for _, c in ipairs(self.shape_cells) do
+      if has_cell(c[1] + 1, c[2]) then
+        -- Horizontal connector between (cx, cy) and (cx+1, cy).
+        local mx = self.x + (c[1] + 0.5 - self.shape_cx) * CELL_W
+        local my = self.y + (c[2]       - self.shape_cy) * CELL_H
+        graphics.rectangle(mx, my, gap_w + 2, BRICK_H,     nil, nil, body_color)
+        graphics.rectangle(mx, my, gap_w + 2, BRICK_H - 2, nil, nil, dark_color)
+      end
+      if has_cell(c[1], c[2] + 1) then
+        -- Vertical connector between (cx, cy) and (cx, cy+1).
+        local mx = self.x + (c[1]       - self.shape_cx) * CELL_W
+        local my = self.y + (c[2] + 0.5 - self.shape_cy) * CELL_H
+        graphics.rectangle(mx, my, BRICK_W,     gap_h + 2, nil, nil, body_color)
+        graphics.rectangle(mx, my, BRICK_W - 2, gap_h + 2, nil, nil, dark_color)
+      end
+      -- Corner filler where four cells meet (2×2, 3×3, etc.). The four
+      -- diagonal cells leave a tiny 4×4 hole in the middle that the
+      -- orthogonal connectors don't cover.
+      if has_cell(c[1] + 1, c[2]) and has_cell(c[1], c[2] + 1) and has_cell(c[1] + 1, c[2] + 1) then
+        local mx = self.x + (c[1] + 0.5 - self.shape_cx) * CELL_W
+        local my = self.y + (c[2] + 0.5 - self.shape_cy) * CELL_H
+        graphics.rectangle(mx, my, gap_w + 2, gap_h + 2, nil, nil, body_color)
+        graphics.rectangle(mx, my, gap_w + 2, gap_h + 2, nil, nil, dark_color)
+      end
+    end
   graphics.pop()
 
-  -- HP bar.
+  -- HP bar: spans the full bounding-box width, sits above the topmost row.
   if hp_pct < 1 then
-    local bw = self.w
-    graphics.rectangle(self.x, self.y - self.h/2 - 2, bw, 1.5, nil, nil, bg[-2])
-    graphics.rectangle(self.x - bw/2 + bw*hp_pct/2, self.y - self.h/2 - 2, bw*hp_pct, 1.5, nil, nil, red[0])
+    local bar_cx = self.x + ((self.cell_min_cx + self.cell_max_cx)/2 - self.shape_cx) * CELL_W
+    local bar_y  = self.y + (self.cell_min_cy - self.shape_cy) * CELL_H - BRICK_H/2 - 2
+    local bar_w  = BRICK_W + (self.cell_max_cx - self.cell_min_cx) * CELL_W
+    graphics.rectangle(bar_cx, bar_y, bar_w, 1.5, nil, nil, bg[-2])
+    graphics.rectangle(bar_cx - bar_w/2 + bar_w*hp_pct/2, bar_y, bar_w*hp_pct, 1.5, nil, nil, red[0])
   end
 
   if self.slow_factor < 1 then
