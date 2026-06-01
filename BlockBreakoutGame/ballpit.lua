@@ -165,6 +165,81 @@ function BallPit:draw_settings()
   graphics.print_centered('arrows or mouse to choose, enter or click to apply',
     pixul_font, gw/2, gh/2 + 72, 0, 1, 1, 0, 0, fg_alt[0])
   graphics.print_centered('press ESC to close', pixul_font, gw/2, gh/2 + 86, 0, 1, 1, 0, 0, fg_alt[0])
+
+  -- Hero roster lives below the close-hint, in the otherwise-empty bottom
+  -- half of the settings overlay. Hovering a ball pops a name/level/ability
+  -- tooltip so the player can audit what they've collected mid-run.
+  self:draw_settings_heroes()
+end
+
+
+-- 8-per-row grid position helper. Each row is centered on its own contents,
+-- so 1 hero is centered, 8 heroes span the full row width, and a partial
+-- second row stays visually balanced under the first row.
+function BallPit:hero_grid_pos(i)
+  local n = #self.heroes
+  local cell_w, cell_h = 22, 24
+  local cols_per_row   = 8
+  local row = math.floor((i-1)/cols_per_row)
+  local col = (i-1) - row*cols_per_row
+  local row_start_i = row*cols_per_row + 1
+  local row_end_i   = math.min(n, (row+1)*cols_per_row)
+  local row_items   = row_end_i - row_start_i + 1
+  local start_x = gw/2 - (row_items*cell_w)/2 + cell_w/2
+  local hx = start_x + col*cell_w
+  local hy = gh/2 + 140 + row*cell_h
+  return hx, hy
+end
+
+
+function BallPit:hero_under_mouse_in_settings()
+  if not self.heroes then return nil end
+  for i = 1, #self.heroes do
+    local hx, hy = self:hero_grid_pos(i)
+    if math.distance(mouse.x, mouse.y, hx, hy) <= 10 then return i end
+  end
+  return nil
+end
+
+
+function BallPit:draw_settings_heroes()
+  if not self.heroes or #self.heroes == 0 then return end
+
+  graphics.print_centered('HEROES', pixul_font, gw/2, gh/2 + 110, 0, 1, 1, 0, 0, fg[0])
+  graphics.print_centered('hover a ball for level + ability', pixul_font, gw/2, gh/2 + 122, 0, 0.85, 0.85, 0, 0, fg_alt[0])
+
+  local hovered_idx = self:hero_under_mouse_in_settings()
+
+  for i, hero in ipairs(self.heroes) do
+    local hx, hy = self:hero_grid_pos(i)
+    local is_hover = (i == hovered_idx)
+
+    -- Hovered icon gets a faint outer ring so the cursor focus is unmistakable.
+    if is_hover then
+      graphics.circle(hx, hy, 10, Color(hero.color.r, hero.color.g, hero.color.b, 0.35))
+    end
+    graphics.circle(hx, hy, 8, hero.color)
+    graphics.circle(hx - 2, hy - 2, 2, fg[5])      -- highlight pip, matches upgrade-card style
+
+    -- Level pips below the icon: 1-3 small dots.
+    local lvl = hero.level or 1
+    local dot_span = (lvl - 1) * 3
+    for j = 1, lvl do
+      local dx = hx - dot_span/2 + (j-1)*3
+      graphics.circle(dx, hy + 11, 1, fg[0])
+    end
+  end
+
+  -- Tooltip pinned under the grid. Anchored to the last row so it doesn't
+  -- jump when the player levels up and a second row appears mid-session.
+  if hovered_idx then
+    local h = self.heroes[hovered_idx]
+    local rows = math.ceil(#self.heroes/8)
+    local tip_y = gh/2 + 140 + rows*24 + 4
+    local tip = string.upper(h.character) .. '  lv ' .. (h.level or 1)
+                .. '  -  ' .. self:hero_ability_blurb(h.character)
+    graphics.print_centered(tip, pixul_font, gw/2, tip_y, 0, 1, 1, 0, 0, h.color)
+  end
 end
 
 
