@@ -37,6 +37,13 @@ local VARIANTS = {
   swarmer       = {hp = 90,  xp = 5, color = 'purple',  dmg = 2, behavior = 'swarmer'},
   forcer        = {hp = 80,  xp = 4, color = 'yellow2', dmg = 2, behavior = 'forcer'},
   randomizer    = {hp = 70,  xp = 4, color = 'blue2',   dmg = 2, behavior = 'randomizer'},
+  -- Ranged variants. These lean into the bullet-hell fantasy: aimed shots,
+  -- spread fans, rotating spirals, quick bursts and arcing homing lobs.
+  sniper        = {hp = 50,  xp = 3, color = 'red',     dmg = 2, behavior = 'sniper'},
+  spreader      = {hp = 55,  xp = 3, color = 'blue2',   dmg = 1, behavior = 'spreader'},
+  spiraler      = {hp = 70,  xp = 4, color = 'purple',  dmg = 1, behavior = 'spiraler'},
+  burster       = {hp = 50,  xp = 3, color = 'orange',  dmg = 1, behavior = 'burster'},
+  arc_lobber    = {hp = 65,  xp = 4, color = 'yellow',  dmg = 2, behavior = 'arc_lobber'},
 }
 
 function Brick.variants() return VARIANTS end
@@ -162,13 +169,32 @@ function Brick:setup_behavior()
   elseif b == 'forcer' then
     self.t:every({5, 8}, function() self:cast_force_push() end, 0, nil, 'behavior')
 
+  elseif b == 'sniper' then
+    self.t:every({3.5, 5}, function() self:cast_sniper() end, 0, nil, 'behavior')
+
+  elseif b == 'spreader' then
+    self.t:every({4.5, 6.5}, function() self:cast_spread() end, 0, nil, 'behavior')
+
+  elseif b == 'spiraler' then
+    self.t:every({5, 7}, function() self:cast_spiral() end, 0, nil, 'behavior')
+
+  elseif b == 'burster' then
+    self.t:every({5, 7}, function() self:cast_burst() end, 0, nil, 'behavior')
+
+  elseif b == 'arc_lobber' then
+    self.t:every({4, 6}, function() self:cast_arc_lob() end, 0, nil, 'behavior')
+
   elseif b == 'randomizer' then
     self.t:every({4, 6}, function()
-      local pick = random:table{'speed_boost', 'shoot', 'spawn', 'force'}
+      local pick = random:table{'speed_boost', 'shoot', 'spawn', 'force', 'sniper', 'spread', 'spiral', 'burst'}
       if     pick == 'speed_boost' then self:cast_speed_boost()
       elseif pick == 'shoot'       then self:cast_shoot()
       elseif pick == 'spawn'       then self:cast_spawn_critter()
-      elseif pick == 'force'       then self:cast_force_push() end
+      elseif pick == 'force'       then self:cast_force_push()
+      elseif pick == 'sniper'      then self:cast_sniper()
+      elseif pick == 'spread'      then self:cast_spread()
+      elseif pick == 'spiral'      then self:cast_spiral()
+      elseif pick == 'burst'       then self:cast_burst() end
     end, 0, nil, 'behavior')
   end
   -- exploder and swarmer trigger on death, not on timer.
@@ -211,6 +237,117 @@ function Brick:cast_shoot()
   arena.t:after(0, function()
     if arena.main and arena.main.world then
       EnemyProjectile{group = arena.main, x = x, y = y, color = self.color, speed = 70}
+    end
+  end)
+end
+
+
+-- Aimed shot: telegraphs longer than a plain shooter, then fires one fast
+-- projectile straight at the paddle's current position.
+function Brick:cast_sniper()
+  if self.dead then return end
+  local arena = main.current
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 8,
+                color = red[0], duration = 0.35}
+  -- Telegraph at the paddle too, so the player sees they're being targeted.
+  TelegraphRing{group = arena.effects, x = arena.paddle.x, y = arena.paddle.y - 4,
+                radius = 10, color = red[0], duration = 0.35}
+  local sx, sy = self.x, self.y + 6
+  arena.t:after(0.3, function()
+    if arena.main and arena.main.world and not self.dead then
+      shoot1:play{volume = 0.22, pitch = random:float(0.85, 0.95)}
+      local angle = math.atan2(arena.paddle.y - sy, arena.paddle.x - sx)
+      EnemyProjectile{group = arena.main, x = sx, y = sy, color = red[0],
+                      kind = 'dart', angle = angle, speed = 130, dmg = 2}
+    end
+  end)
+end
+
+
+-- Three-shot spread fan aimed straight down.
+function Brick:cast_spread()
+  if self.dead then return end
+  local arena = main.current
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 7,
+                color = self.color, duration = 0.18}
+  shoot1:play{volume = 0.2, pitch = random:float(1.0, 1.1)}
+  local sx, sy = self.x, self.y + 6
+  local base   = math.pi/2
+  arena.t:after(0, function()
+    if arena.main and arena.main.world then
+      for _, off in ipairs({-0.35, 0, 0.35}) do
+        EnemyProjectile{group = arena.main, x = sx, y = sy, color = self.color,
+                        kind = 'triangle', angle = base + off, speed = 80}
+      end
+    end
+  end)
+end
+
+
+-- Spiral barrage: 8 projectiles around the full circle, with the start angle
+-- rotating between casts so successive bursts paint a turning spiral pattern.
+function Brick:cast_spiral()
+  if self.dead then return end
+  local arena = main.current
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 10,
+                color = self.color, duration = 0.2}
+  shoot1:play{volume = 0.22, pitch = random:float(0.9, 1.0)}
+  self._spiral_phase = (self._spiral_phase or 0) + 0.4
+  local phase = self._spiral_phase
+  local sx, sy = self.x, self.y
+  arena.t:after(0, function()
+    if arena.main and arena.main.world then
+      for i = 0, 7 do
+        local a = i*math.pi/4 + phase
+        EnemyProjectile{group = arena.main, x = sx, y = sy, color = self.color,
+                        kind = 'orb', angle = a, speed = 55, r_size = 3, life = 3.5}
+      end
+    end
+  end)
+end
+
+
+-- Three-shot burst: three quick straight-down shots in rapid succession,
+-- then a longer cooldown before the next burst.
+function Brick:cast_burst()
+  if self.dead then return end
+  local arena = main.current
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 6,
+                color = self.color, duration = 0.15}
+  local sx = self.x
+  for i = 0, 2 do
+    arena.t:after(i*0.12, function()
+      if arena.main and arena.main.world and not self.dead then
+        shoot1:play{volume = 0.16, pitch = random:float(1.05, 1.2)}
+        EnemyProjectile{group = arena.main, x = sx, y = self.y + 6,
+                        color = self.color, kind = 'bolt', speed = 95}
+      end
+    end)
+  end
+end
+
+
+-- Arcing homing lob: paints a danger zone near the paddle, then sends a
+-- slow projectile that drifts toward that area. The paddle can still escape
+-- by moving — homing turn rate is capped.
+function Brick:cast_arc_lob()
+  if self.dead then return end
+  local arena = main.current
+  local lx    = arena.paddle.x + random:float(-30, 30)
+  local ly    = arena.paddle.y - 4
+  -- Danger zone telegraph at the projected landing spot.
+  TelegraphRing{group = arena.effects, x = lx, y = ly, radius = 20,
+                color = yellow[0], duration = 0.7}
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 8,
+                color = yellow[0], duration = 0.2}
+  shoot1:play{volume = 0.2, pitch = random:float(0.7, 0.8)}
+  local sx, sy = self.x, self.y + 6
+  arena.t:after(0, function()
+    if arena.main and arena.main.world then
+      local angle = math.atan2(ly - sy, lx - sx)
+      EnemyProjectile{group = arena.main, x = sx, y = sy, color = yellow[0],
+                      kind = 'bomb', angle = angle, speed = 70, dmg = 2,
+                      homing = true, homing_turn = 1.2, life = 5}
     end
   end)
 end

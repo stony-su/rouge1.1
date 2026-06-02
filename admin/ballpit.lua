@@ -27,17 +27,46 @@ BallPit:implement(GameObject)
 -- Variants come from SNKRX-master/enemies.lua (Seeker flags and boss subtypes).
 -- Mix entries are {variant, weight} pairs that don't need to sum to 100.
 local function wave_config(wave)
+  -- Wave 10 is the boss wave. Returns a minimal config that disables the
+  -- normal swarm spawner entirely; BallPit:start_wave detects `boss = true`
+  -- and spawns the boss instead.
+  if wave == 10 then
+    return {
+      boss               = true,
+      swarm_interval     = 999,    -- effectively disables periodic spawns
+      duration           = 999,    -- advance_wave is triggered by boss death
+      swarm_rows_min     = 0, swarm_rows_max = 0,
+      width_fraction_min = 0, width_fraction_max = 0,
+      swarm_density      = 0,
+      drift_speed        = 0,
+      min_swarm_gap      = 0,
+      mix                = {},
+    }
+  end
+
   local mix
   if wave <= 2 then
     mix = {{'seeker', 80}, {'speed_booster', 20}}
   elseif wave <= 4 then
-    mix = {{'seeker', 50}, {'speed_booster', 15}, {'exploder', 20}, {'tank', 15}}
+    mix = {{'seeker', 50}, {'speed_booster', 15}, {'exploder', 15}, {'tank', 10}, {'sniper', 10}}
   elseif wave <= 6 then
-    mix = {{'seeker', 30}, {'speed_booster', 15}, {'exploder', 15}, {'tank', 15}, {'headbutter', 15}, {'shooter', 10}}
+    mix = {{'seeker', 25}, {'speed_booster', 10}, {'exploder', 12}, {'tank', 12}, {'headbutter', 12},
+           {'shooter', 8}, {'sniper', 8}, {'spreader', 8}, {'burster', 5}}
   elseif wave <= 8 then
-    mix = {{'seeker', 20}, {'exploder', 15}, {'tank', 15}, {'headbutter', 15}, {'shooter', 10}, {'spawner', 10}, {'swarmer', 15}}
+    mix = {{'seeker', 15}, {'exploder', 12}, {'tank', 12}, {'headbutter', 10}, {'shooter', 8},
+           {'spawner', 8}, {'swarmer', 10}, {'sniper', 8}, {'spreader', 8}, {'burster', 5},
+           {'arc_lobber', 4}}
+  elseif wave == 9 then
+    -- Pre-boss "warning" wave: every ranged variant is active, including the
+    -- spiraler, so the player gets to taste what the boss will throw at them.
+    mix = {{'seeker', 10}, {'tank', 10}, {'shooter', 8}, {'sniper', 10}, {'spreader', 10},
+           {'spiraler', 8}, {'burster', 8}, {'arc_lobber', 8}, {'swarmer', 10}, {'forcer', 8},
+           {'randomizer', 10}}
   else
-    mix = {{'seeker', 15}, {'tank', 15}, {'headbutter', 10}, {'shooter', 10}, {'spawner', 10}, {'swarmer', 15}, {'forcer', 15}, {'randomizer', 10}}
+    -- wave 11+ post-boss tier: hardest mix including all new ranged variants.
+    mix = {{'seeker', 8}, {'tank', 12}, {'headbutter', 8}, {'shooter', 6}, {'spawner', 10},
+           {'swarmer', 12}, {'forcer', 10}, {'randomizer', 8}, {'sniper', 10}, {'spreader', 10},
+           {'spiraler', 10}, {'burster', 8}, {'arc_lobber', 8}}
   end
   -- All of these slide with wave number so the run gets progressively
   -- harder: more rows, wider swarms, shorter gap between spawns, and a
@@ -326,6 +355,8 @@ function BallPit:reset_run()
   self.xp_to_next    = 5
   self.wave          = 1
   self.wave_time     = 0
+  self.boss          = nil
+  self.boss_defeated = false
   self.score         = 0
   self.run_time      = 0
   self.paused        = false
@@ -463,6 +494,15 @@ end
 function BallPit:start_wave()
   self.wave_cfg  = wave_config(self.wave)
   self.wave_time = 0
+
+  -- Boss wave: skip the periodic swarm spawner entirely and spawn the boss
+  -- directly. advance_wave for this wave is gated on boss_defeated being set
+  -- by Boss:die (see BallPit:update).
+  if self.wave_cfg.boss then
+    self:spawn_boss()
+    return
+  end
+
   self.t:every(self.wave_cfg.swarm_interval, function()
     if self.paused or self.game_over or self.upgrade_pending then return end
     self:spawn_swarm()
@@ -471,6 +511,22 @@ function BallPit:start_wave()
   if self.wave == 1 and #self.swarms.objects == 0 then
     self:spawn_swarm(true)  -- force-spawn the first swarm so the screen isn't empty
   end
+end
+
+
+function BallPit:spawn_boss()
+  local arena = self
+  arena.t:after(0, function()
+    if arena.main and arena.main.world then
+      arena.boss = Boss{
+        group = arena.main,
+        x     = arena:arena_center_x(),
+        y     = arena.y1 + 60,
+      }
+      Flash{group = arena.effects, x = gw/2, y = gh/2,
+            color = red_transparent_weak, duration = 0.4}
+    end
+  end)
 end
 
 
@@ -788,6 +844,14 @@ function BallPit:update(dt)
 
     -- Powerup pity timer (random spawns replacing the old per-brick drop).
     self:tick_powerup_pity(sdt)
+
+    -- Boss wave: short-circuit the duration check. advance_wave fires the
+    -- moment the boss flips boss_defeated in its die().
+    if self.wave_cfg.boss and self.boss_defeated then
+      self.boss_defeated = false
+      self.boss          = nil
+      self:advance_wave()
+    end
 
     -- Wave end → wave advance (purely time-based; leftover bricks roll into the next wave).
     if self.wave_time >= self.wave_cfg.duration then

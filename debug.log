@@ -1,0 +1,46 @@
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.33
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.45
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.49
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.45
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.40
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.37
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.57
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.25
+[draw] shape=Object -> branch=spike (default)
+[draw] shape=Object -> branch=spike (default)
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.28
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.57
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.32
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.45
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.24
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.41
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.41
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.53
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.29
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.37
+[draw] shape=Object -> branch=spike (default)
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.31
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.57
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.22
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.23
+[draw] shape=Object -> branch=spike (default)
+[init] shape=dart color=(0.91,0.11,0.22) angle=1.44
+[draw] shape=Object -> branch=spike (default)
