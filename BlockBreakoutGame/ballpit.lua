@@ -358,7 +358,9 @@ function BallPit:reset_run()
   local thick = 8
   self:spawn_wall(self.x1 - thick/2, (self.y1 + self.y2)/2, thick, self.y2 - self.y1 + thick)  -- left
   self:spawn_wall(self.x2 + thick/2, (self.y1 + self.y2)/2, thick, self.y2 - self.y1 + thick)  -- right
-  self:spawn_wall((self.x1 + self.x2)/2, self.y1 - thick/2, self.x2 - self.x1 + thick, thick)  -- top
+  -- Top wall is captured so the ball collision callback can recognise it and
+  -- expire a ball's pierce state when it bonks the ceiling.
+  self.top_wall = self:spawn_wall((self.x1 + self.x2)/2, self.y1 - thick/2, self.x2 - self.x1 + thick, thick)
 
   -- Paddle.
   self.paddle = Paddle{group = self.main, x = gw/2, y = self.y2 - 14}
@@ -491,10 +493,11 @@ function BallPit:add_hero(character)
       local vx, vy = h:get_velocity()
       local impact_angle = math.atan2(-vy, -vx)
       spawn_bounce_sparks(self.effects, h.x, h.y, impact_angle, h.color)
-      -- Pierce powerup: undo Box2D's bounce by restoring the velocity the
-      -- ball had just before this collision. Deferred to next frame since
-      -- the Box2D world is locked during the callback.
-      if self.pierce_active and h._last_vx then
+      -- Pierce: this specific ball is in its pierce flight. Undo Box2D's
+      -- bounce off the brick by restoring the pre-collision velocity so the
+      -- ball glides through. on_brick_hit already early-returned for this
+      -- ball, so no damage / no combo / no on-bounce abilities fired.
+      if h.piercing and h._last_vx then
         local lvx, lvy = h._last_vx, h._last_vy
         self.t:after(0, function()
           if h.body and not h.dead then h:set_velocity(lvx, lvy) end
@@ -507,6 +510,15 @@ function BallPit:add_hero(character)
       local vx, vy = h:get_velocity()
       spawn_bounce_sparks(self.effects, h.x, h.y, math.atan2(-vy, -vx), h.color)
       if random:bool(40) then bounce1:play{volume = 0.12, pitch = random:float(1.0, 1.1)} end
+      -- Top-wall hit ends pierce for this ball. The ball was passing through
+      -- bricks while moving up; bouncing off the ceiling is the natural
+      -- "now play normal — go ricochet through the bricks at the top".
+      if other == self.top_wall and h.piercing then
+        h:set_piercing(false)
+        spawn_burst(self.effects, h.x, h.y, purple[0], 10, 80, 160)
+        TelegraphRing{group = self.effects, x = h.x, y = h.y,
+                      radius = 14, color = purple[0], duration = 0.25}
+      end
     end
   end
   table.insert(self.heroes, hero)
@@ -1751,6 +1763,9 @@ local function resize_hero(h, new_r)
   h:set_mass(0.5)
   if vx and vy then h:set_velocity(vx, vy) end
   if not was_active then h.body:setActive(false) end
+  -- The fixture was destroyed and recreated, so any per-fixture filter
+  -- state (e.g. the pierce ghost-mode mask) needs to be re-applied.
+  if h.set_piercing then h:set_piercing(h.piercing) end
 end
 
 

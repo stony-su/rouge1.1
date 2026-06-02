@@ -164,6 +164,17 @@ function BallHero:init(args)
   -- damage through arena:bounce_dmg_mult in Brick:on_ball_contact.
   self.bounces          = 0
 
+  -- Per-ball pierce state. Toggle via :set_piercing(on); never write to
+  -- self.piercing directly because the setter also flips the Box2D mask on
+  -- this ball's fixture so it physically ignores bricks (true ghost-through,
+  -- not a velocity-restore hack). While piercing:
+  --   * Ball passes cleanly through bricks — beginContact never fires for
+  --     ball-vs-brick so there is no bounce, no stuck-against-brick edge case
+  --   * on_brick_hit (and therefore damage / combo / chain_lightning /
+  --     big_splash / fire trail) doesn't run because no contact event fires
+  -- Cleared when the ball hits the top wall (see BallPit collision callback).
+  self.piercing         = false
+
   -- Charge-on-paddle: while stuck the ball fills a green ring up to
   -- charge_max_time, then blinks red at full. On launch the charge converts
   -- into a temporary speed bonus (up to +100%) and damage bonus (up to +50%)
@@ -197,6 +208,30 @@ function BallHero:init(args)
 
   -- Auto-launch on next frame.
   self.t:after(0, function() self:launch_from_paddle() end)
+end
+
+
+-- Toggle the ghost-through-bricks pierce mode on this specific ball. The
+-- mask filter is read from the group's collision_tags at every call so it
+-- stays correct even after the fixture is rebuilt by the big_ball powerup.
+-- Idempotent: safe to call repeatedly with the same value.
+function BallHero:set_piercing(on)
+  on = on and true or false
+  self.piercing = on
+  if not (self.fixture and self.group) then return end
+  local ball_tag  = self.group.collision_tags and self.group.collision_tags['ball']
+  local brick_tag = self.group.collision_tags and self.group.collision_tags['brick']
+  if not (ball_tag and brick_tag) then return end
+  local normal = ball_tag.masks or {}
+  if on then
+    -- Add brick's category to this fixture's mask so Box2D filters out the
+    -- ball-vs-brick contact entirely. The ball still collides with walls and
+    -- the paddle normally because their categories aren't in the mask.
+    self.fixture:setMask(brick_tag.category, unpack(normal))
+  else
+    -- Restore the default ball-tag mask (which still excludes ball-vs-ball).
+    self.fixture:setMask(unpack(normal))
+  end
 end
 
 
@@ -253,6 +288,8 @@ function BallHero:launch_from_paddle()
   self:set_position(px, py)
   self.speed_mult = 1.0
   self.bounces    = 0
+  -- Inherit pierce from the active buff for this fresh launch.
+  self:set_piercing(arena.pierce_active == true)
   local angle = -math.pi/2 + random:float(-0.25, 0.25)
   self:set_velocity(math.cos(angle)*self.base_speed, math.sin(angle)*self.base_speed)
   self.spring:pull(0.25)
@@ -661,7 +698,8 @@ function BallHero:start_return()
   -- chain counter too so the next launch starts fresh.
   local arena = main.current
   if arena and arena.on_ball_missed then arena:on_ball_missed(self) end
-  self.bounces = 0
+  self.bounces  = 0
+  self:set_piercing(false)
 end
 
 
@@ -748,6 +786,8 @@ function BallHero:launch_from_stuck(angle)
   local charge_pct      = math.clamp(self.charge_time/self.charge_max_time, 0, 1)
   self.speed_mult       = 1.0 + charge_pct           -- 1x .. 2x
   self.charge_dmg_mult  = 1.0 + charge_pct*0.5       -- 1x .. 1.5x
+  -- Inherit pierce from the active buff each time we relaunch off the paddle.
+  self:set_piercing(main.current and main.current.pierce_active == true)
 
   local launch_speed = self.base_speed*self.speed_mult
   self:set_velocity(math.cos(angle)*launch_speed, math.sin(angle)*launch_speed)
@@ -830,6 +870,12 @@ end
 -- happens; the four exception heroes also fire their on-bounce ability.
 function BallHero:on_brick_hit(brick)
   local arena = main.current
+  -- Pierce: ball is in its punch-through pass. No damage, no combo points,
+  -- no on-bounce abilities (chain_lightning, big_splash, fire trail, etc.),
+  -- no bounce-count increment. The ball glides through; the velocity restore
+  -- in the BallPit collision callback handles the visual pass-through.
+  -- Pierce ends when the ball bonks the top wall (see that callback).
+  if self.piercing then return end
   -- Bump the chain counter BEFORE damage so Brick:on_ball_contact reads the
   -- post-increment value (a clean hit counts as the 1st bounce, not the 0th).
   self.bounces = (self.bounces or 0) + 1

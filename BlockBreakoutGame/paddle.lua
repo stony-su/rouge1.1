@@ -72,6 +72,16 @@ end
 function Paddle:on_ball_bounce(ball)
   self.hfx:use('hit', 0.18, 200, 10)
 
+  -- Pierce buff: every paddle bounce that happens while the buff is active
+  -- re-arms this specific ball's pierce. The ball punches up through bricks
+  -- (no damage), bonks the ceiling, becomes a normal ball, ricochets among
+  -- the top bricks until it comes back here, and gets re-armed for the next
+  -- upward pass while the buff is still up.
+  local arena = main.current
+  if arena and arena.pierce_active and ball.set_piercing then
+    ball:set_piercing(true)
+  end
+
   -- Ramp the ball's speed multiplier. Capped so chains plateau instead of
   -- spiraling into uncontrollable speed.
   ball.speed_mult = math.min(ball.speed_mult_max, (ball.speed_mult or 1)*(ball.speed_mult_step or 1.07))
