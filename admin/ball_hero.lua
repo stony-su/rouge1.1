@@ -159,6 +159,11 @@ function BallHero:init(args)
   self.speed_mult_max   = 4.0     -- was 3.0 (orig 2.5)
   self.speed_mult_step  = 1.25    -- was 1.15 (orig 1.07) — +25% per bounce
 
+  -- ULTRAKILL-style chain counter. Increments on every brick bounce; resets
+  -- when the ball is caught by the paddle or falls into the pit. Multiplies
+  -- damage through arena:bounce_dmg_mult in Brick:on_ball_contact.
+  self.bounces          = 0
+
   -- Charge-on-paddle: while stuck the ball fills a green ring up to
   -- charge_max_time, then blinks red at full. On launch the charge converts
   -- into a temporary speed bonus (up to +100%) and damage bonus (up to +50%)
@@ -247,6 +252,7 @@ function BallHero:launch_from_paddle()
   local py = arena.paddle.y - arena.paddle.h/2 - self.r_size - 1
   self:set_position(px, py)
   self.speed_mult = 1.0
+  self.bounces    = 0
   local angle = -math.pi/2 + random:float(-0.25, 0.25)
   self:set_velocity(math.cos(angle)*self.base_speed, math.sin(angle)*self.base_speed)
   self.spring:pull(0.25)
@@ -651,6 +657,11 @@ end
 function BallHero:start_return()
   self.returning = true
   if self.body then self.body:setActive(false) end
+  -- ULTRAKILL: missing the paddle dings the combo meter. Wipe the per-ball
+  -- chain counter too so the next launch starts fresh.
+  local arena = main.current
+  if arena and arena.on_ball_missed then arena:on_ball_missed(self) end
+  self.bounces = 0
 end
 
 
@@ -703,6 +714,7 @@ function BallHero:start_stuck()
   end
   self.charge_time      = 0     -- fresh charge bar each time
   self.charge_dmg_mult  = 1.0   -- previous charge bonus is consumed
+  self.bounces          = 0     -- chain starts over from the paddle
   if self.body then self.body:setActive(false) end
   local arena = main.current
   arena.stuck_count = (arena.stuck_count or 0) + 1
@@ -836,6 +848,9 @@ end
 -- happens; the four exception heroes also fire their on-bounce ability.
 function BallHero:on_brick_hit(brick)
   local arena = main.current
+  -- Bump the chain counter BEFORE damage so Brick:on_ball_contact reads the
+  -- post-increment value (a clean hit counts as the 1st bounce, not the 0th).
+  self.bounces = (self.bounces or 0) + 1
   -- Bricks route damage through on_ball_contact so their Row can react to the
   -- knockback. Mobile enemies (critters, projectiles) just take damage.
   if brick.on_ball_contact then

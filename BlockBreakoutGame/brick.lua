@@ -530,8 +530,15 @@ end
 -- Called by BallHero on collision: damage + propagate small knockback to row.
 function Brick:on_ball_contact(ball)
   if self.hp <= 0 then return end
-  -- Apply the ball's active charge bonus (1.0 .. 1.5) to contact damage.
+  -- Apply the ball's active charge bonus (1.0 .. 1.5) to contact damage,
+  -- then layer on the per-ball bounce multiplier and the arena-wide combo
+  -- multiplier. With both at max this gives ~8.8x — big payoff for keeping
+  -- a single ball alive through a chain at high rank.
   local dmg = ball.dmg*(ball.charge_dmg_mult or 1)
+  local arena = main.current
+  if arena and arena.combo then
+    dmg = dmg * arena:bounce_dmg_mult(ball.bounces or 0) * arena:combo_mult()
+  end
   self:take_damage(dmg, ball.color)
   if self.swarm and not self.dead then
     local vx, vy = ball:get_velocity()
@@ -540,6 +547,12 @@ function Brick:on_ball_contact(ball)
       -- Push the row a tiny bit in the ball's incoming direction.
       self.swarm:apply_knockback(8, math.atan2(vy, vx))
     end
+  end
+  -- Notify the arena so the combo meter can add points + spawn feedback.
+  -- Deferred to next frame would lose timing context; this runs inside the
+  -- collision callback but doesn't touch the Box2D world.
+  if arena and arena.on_brick_bounce then
+    arena:on_brick_bounce(ball, self)
   end
 end
 

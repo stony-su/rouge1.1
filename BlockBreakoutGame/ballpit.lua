@@ -98,6 +98,36 @@ local function wave_config(wave)
 end
 
 
+-- ULTRAKILL-style combo system. Points come from chaining brick bounces;
+-- balls falling into the pit take a heavy penalty. Damage paid out by every
+-- brick hit is multiplied by the current rank's multiplier plus a per-ball
+-- bounce-count bonus, so the longer you keep a ball alive without dropping
+-- it, the harder it hits.
+--
+-- Rank entries are ordered low → high. `combo_rank_index` walks them from
+-- the top so the highest threshold the current points crosses wins.
+local COMBO_RANKS = {
+  {label = 'D',         threshold =    0, mult = 1.0, color_key = 'fg_alt'},
+  {label = 'C',         threshold =   50, mult = 1.2, color_key = 'fg'    },
+  {label = 'B',         threshold =  150, mult = 1.5, color_key = 'yellow'},
+  {label = 'A',         threshold =  300, mult = 1.9, color_key = 'orange'},
+  {label = 'S',         threshold =  500, mult = 2.4, color_key = 'red'   },
+  {label = 'SS',        threshold =  750, mult = 3.0, color_key = 'red'   },
+  {label = 'SSS',       threshold = 1100, mult = 3.5, color_key = 'red'   },
+  {label = 'FRENZY', threshold = 1500, mult = 4.0, color_key = 'purple'},
+}
+
+-- Tunables. All point values are absolute (not percentages of current).
+local COMBO_PENALTY_MISS     = 150   -- subtract when a ball falls into the pit
+local COMBO_BASE_POINTS      = 10    -- baseline per brick bounce
+local COMBO_VARIETY_BONUS    = 5     -- + this if hitting a different variant than last
+local COMBO_STREAK_BONUS_CAP = 10    -- + min(streak, cap) per bounce
+local COMBO_IDLE_GRACE       = 2     -- seconds with no bounces before decay starts
+local COMBO_IDLE_DECAY       = 20    -- points/sec subtracted after grace expires
+local COMBO_BOUNCE_DMG_STEP  = 0.08  -- +8% damage per bounce on the same ball
+local COMBO_BOUNCE_CAP       = 15    -- max bounces counted for damage scaling
+
+
 function BallPit:init(name)
   self:init_state(name)
   self:init_game_object()
@@ -349,6 +379,17 @@ function BallPit:reset_run()
   self.boss          = nil
   self.boss_defeated = false
   self.score         = 0
+  -- Combo state. Persists across paddle bounces — only a ball falling into
+  -- the pit (or extended idle time) reduces points. `streak` counts
+  -- consecutive brick bounces across all balls; `last_variant` drives the
+  -- variety bonus.
+  self.combo = {
+    points        = 0,
+    streak        = 0,
+    idle_t        = 0,
+    last_variant  = nil,
+    bounces_total = 0,
+  }
   self.run_time      = 0
   self.paused        = false
   self.game_over     = false
@@ -781,6 +822,7 @@ function BallPit:update(dt)
   -- Powerup buffs (timed effects) + pity-timer driven random spawns.
   self:tick_buffs(dt)
   self:tick_powerup_pity(dt)
+  self:tick_combo(dt)
 
   -- Boss wave: short-circuit the duration check. advance_wave fires the
   -- moment the boss flips boss_defeated in its die().
@@ -838,14 +880,17 @@ function BallPit:draw_hud()
     graphics.rectangle(self.x1 + 6 + (i-1)*10, self.y1 - 8, 6, 6, 1, 1, color)
   end
 
-  -- XP bar.
-  local bw = self.x2 - self.x1 - 70
+  -- XP bar. Width shrunk to leave a ~70px strip on the right for the
+  -- combo meter (see draw_combo_meter).
+  local bw = self.x2 - self.x1 - 140
   local bx = self.x1 + 60
   graphics.rectangle(bx + bw/2, self.y1 - 8, bw, 4, nil, nil, bg[-2])
   local pct = math.clamp(self.xp/self.xp_to_next, 0, 1)
   if pct > 0 then
     graphics.rectangle(bx + bw*pct/2, self.y1 - 8, bw*pct, 4, nil, nil, blue[0])
   end
+
+  self:draw_combo_meter()
 
   -- Level + wave + score.
   graphics.print('Lv ' .. self.level, pixul_font, self.x1 + 4, self.y2 + 4, 0, 1, 1, 0, 0, fg[0])
@@ -867,6 +912,161 @@ end
 
 function BallPit:on_brick_killed(brick)
   self.score = self.score + brick.xp_value*10
+end
+
+
+-- ----- Combo meter -----
+
+function BallPit:combo_rank_index()
+  local idx = 1
+  for i = #COMBO_RANKS, 1, -1 do
+    if self.combo.points >= COMBO_RANKS[i].threshold then
+      idx = i
+      break
+    end
+  end
+  return idx
+end
+
+
+function BallPit:combo_mult()
+  return COMBO_RANKS[self:combo_rank_index()].mult
+end
+
+
+-- Per-ball bounce damage scaling. Capped so a single perfectly-chained ball
+-- can't trivialise a wave on its own. Combines multiplicatively with the
+-- combo multiplier in Brick:on_ball_contact.
+function BallPit:bounce_dmg_mult(bounces)
+  local n = math.min(bounces or 0, COMBO_BOUNCE_CAP)
+  return 1 + n*COMBO_BOUNCE_DMG_STEP
+end
+
+
+-- Called from Brick:on_ball_contact after damage is applied. Awards points
+-- with a small variety + streak bonus, spawns a floating "+N" at the brick,
+-- and triggers the rank-up presentation if a threshold was crossed.
+function BallPit:on_brick_bounce(ball, brick)
+  local c = self.combo
+  if not c then return end
+  c.idle_t = 0
+  local prev_idx = self:combo_rank_index()
+
+  c.streak = (c.streak or 0) + 1
+  local streak_bonus  = math.min(c.streak, COMBO_STREAK_BONUS_CAP)
+  local variety_bonus = 0
+  if brick.variant_name and c.last_variant and brick.variant_name ~= c.last_variant then
+    variety_bonus = COMBO_VARIETY_BONUS
+  end
+  c.last_variant  = brick.variant_name or c.last_variant
+  c.bounces_total = c.bounces_total + 1
+  local gained = COMBO_BASE_POINTS + streak_bonus + variety_bonus
+  c.points = c.points + gained
+
+  -- Small per-bounce feedback. Colour scales with how chunky the bonus is.
+  local col = (variety_bonus > 0) and yellow[0] or fg[0]
+  FloatingText{group = self.effects, x = brick.x, y = brick.y - 6,
+               text = '+' .. gained, color = col, duration = 0.45}
+
+  local new_idx = self:combo_rank_index()
+  if new_idx > prev_idx then self:on_combo_rank_up(new_idx) end
+end
+
+
+-- Big visual on rank advancement: centre-screen flash, big floating rank
+-- letter, level-up SFX, and a shake at higher ranks for that ULTRAKILL
+-- "you're cooking" feeling.
+function BallPit:on_combo_rank_up(new_idx)
+  local rank = COMBO_RANKS[new_idx]
+  local col  = _G[rank.color_key][0]
+  Flash{group = self.effects, x = gw/2, y = gh/2,
+        color = Color(col.r, col.g, col.b, 0.28), duration = 0.18}
+  FloatingText{group = self.effects, x = gw/2, y = gh/2 - 30,
+               text = rank.label, color = col, duration = 1.3}
+  if level_up1 then
+    level_up1:play{volume = 0.35, pitch = 0.85 + new_idx*0.06}
+  end
+  if new_idx >= 5 then camera:shake(2 + new_idx*0.4, 0.2, 80) end
+end
+
+
+-- Called from BallHero:start_return — a ball just fell into the pit. Wipes
+-- the streak and subtracts a flat penalty. If the penalty drops the rank,
+-- adds a small shake so the demotion isn't silent.
+function BallPit:on_ball_missed(ball)
+  local c = self.combo
+  if not c or c.points <= 0 then return end
+  local prev_idx = self:combo_rank_index()
+  c.points       = math.max(0, c.points - COMBO_PENALTY_MISS)
+  c.streak       = 0
+  c.last_variant = nil
+
+  local fx = (ball and ball.x) or (self.paddle and self.paddle.x) or gw/2
+  local fy = (self.paddle and self.paddle.y - 12) or gh/2
+  FloatingText{group = self.effects, x = fx, y = fy,
+               text = '-' .. COMBO_PENALTY_MISS, color = red[0], duration = 0.7}
+  Flash{group = self.effects, x = gw/2, y = gh/2,
+        color = red_transparent_weak, duration = 0.1}
+
+  if self:combo_rank_index() < prev_idx then
+    camera:shake(2, 0.15, 80)
+  end
+end
+
+
+function BallPit:tick_combo(dt)
+  local c = self.combo
+  if not c then return end
+  c.idle_t = c.idle_t + dt
+  if c.idle_t > COMBO_IDLE_GRACE and c.points > 0 then
+    c.points = math.max(0, c.points - COMBO_IDLE_DECAY*dt)
+    if c.points <= 0 then
+      c.streak       = 0
+      c.last_variant = nil
+    end
+  end
+end
+
+
+-- Compact HUD at the top-right of the canvas, sharing the strip with the
+-- HP hearts (left) and XP bar (middle). Rendered by draw_hud.
+function BallPit:draw_combo_meter()
+  local c    = self.combo
+  if not c then return end
+  local idx  = self:combo_rank_index()
+  local rank = COMBO_RANKS[idx]
+  local col  = _G[rank.color_key][0]
+
+  -- Anchor the meter just inside the right edge of the canvas. Width is
+  -- reserved by shrinking the XP bar in draw_hud.
+  local cx = self.x2 - 32
+  local cy = self.y1 - 10
+
+  -- Rank letter pulses subtly on S+ to give the meter some "life" at the
+  -- top of the ladder.
+  local scale = (idx >= 5) and (1 + 0.08*math.sin(love.timer.getTime()*8)) or 1
+  graphics.print_centered(rank.label, fat_font, cx, cy, 0, scale, scale, 0, 0, col)
+
+  -- Multiplier label sits to the right of the rank letter.
+  graphics.print_centered(string.format('x%.1f', rank.mult), pixul_font,
+                          cx + 22, cy, 0, 1, 1, 0, 0, col)
+
+  -- Progress bar to the next rank (full at ULTRAKILL).
+  local bar_w = 56
+  local bar_y = cy + 6
+  graphics.rectangle(cx + 4, bar_y, bar_w, 2, nil, nil, bg[-2])
+  local pct
+  if idx == #COMBO_RANKS then
+    pct = 1
+  else
+    local next_t = COMBO_RANKS[idx + 1].threshold
+    local prev_t = rank.threshold
+    pct = math.clamp((c.points - prev_t) / (next_t - prev_t), 0, 1)
+  end
+  if pct > 0 then
+    graphics.rectangle(cx + 4 - bar_w/2 + bar_w*pct/2, bar_y,
+                       bar_w*pct, 2, nil, nil, col)
+  end
 end
 
 
