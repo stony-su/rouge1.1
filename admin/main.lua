@@ -25,6 +25,8 @@ function init()
   -- Input bindings.
   input:bind('move_left',  {'a', 'dpleft'})
   input:bind('move_right', {'d', 'dpright'})
+  input:bind('move_up',    {'w', 'dpup'})
+  input:bind('move_down',  {'s', 'dpdown'})
   input:bind('aim_left',   {'left'})
   input:bind('aim_right',  {'right'})
   input:bind('launch',     {'space', 'fdown'})

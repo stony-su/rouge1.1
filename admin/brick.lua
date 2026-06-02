@@ -257,8 +257,9 @@ function Brick:cast_sniper()
     if arena.main and arena.main.world and not self.dead then
       shoot1:play{volume = 0.22, pitch = random:float(0.85, 0.95)}
       local angle = math.atan2(arena.paddle.y - sy, arena.paddle.x - sx)
+      -- Sniper: very fast, snap-shot aimed dart. Top of the speed tier.
       EnemyProjectile{group = arena.main, x = sx, y = sy, color = red[0],
-                      kind = 'dart', angle = angle, speed = 130, dmg = 2}
+                      kind = 'dart', angle = angle, speed = 160, dmg = 2}
     end
   end)
 end
@@ -276,8 +277,10 @@ function Brick:cast_spread()
   arena.t:after(0, function()
     if arena.main and arena.main.world then
       for _, off in ipairs({-0.35, 0, 0.35}) do
+        -- Spreader: medium-fast triangle fan. A touch quicker than shooter
+        -- so the fan still feels threatening even when offset shots miss.
         EnemyProjectile{group = arena.main, x = sx, y = sy, color = self.color,
-                        kind = 'triangle', angle = base + off, speed = 80}
+                        kind = 'triangle', angle = base + off, speed = 90}
       end
     end
   end)
@@ -299,8 +302,10 @@ function Brick:cast_spiral()
     if arena.main and arena.main.world then
       for i = 0, 7 do
         local a = i*math.pi/4 + phase
+        -- Spiraler: slowest of all so the rotating wall hangs in the air
+        -- long enough for the player to read the spiral pattern.
         EnemyProjectile{group = arena.main, x = sx, y = sy, color = self.color,
-                        kind = 'orb', angle = a, speed = 55, r_size = 3, life = 3.5}
+                        kind = 'orb', angle = a, speed = 45, r_size = 3, life = 3.5}
       end
     end
   end)
@@ -319,8 +324,10 @@ function Brick:cast_burst()
     arena.t:after(i*0.12, function()
       if arena.main and arena.main.world and not self.dead then
         shoot1:play{volume = 0.16, pitch = random:float(1.05, 1.2)}
+        -- Burster: very fast triple bolt. Quick enough that the second and
+        -- third shots can punish a player who only dodged the first.
         EnemyProjectile{group = arena.main, x = sx, y = self.y + 6,
-                        color = self.color, kind = 'bolt', speed = 95}
+                        color = self.color, kind = 'bolt', speed = 115}
       end
     end)
   end
@@ -345,8 +352,10 @@ function Brick:cast_arc_lob()
   arena.t:after(0, function()
     if arena.main and arena.main.world then
       local angle = math.atan2(ly - sy, lx - sx)
+      -- Arc lobber: slow heavy homing lob. Slow enough that the homing curve
+      -- reads visually as a tracking threat rather than an instant hit.
       EnemyProjectile{group = arena.main, x = sx, y = sy, color = yellow[0],
-                      kind = 'bomb', angle = angle, speed = 70, dmg = 2,
+                      kind = 'bomb', angle = angle, speed = 55, dmg = 2,
                       homing = true, homing_turn = 1.2, life = 5}
     end
   end)

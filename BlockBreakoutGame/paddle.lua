@@ -1,14 +1,26 @@
 -- The player-controlled paddle that ball-heroes bounce off of.
--- Sits near the bottom of the arena and moves horizontally with input.
+-- Bullet-hell style: small hitbox, free movement in a dodge band at the
+-- bottom of the arena. A/D pan horizontally, W/S move vertically within
+-- the band so the player can dodge incoming projectiles between bounces.
 
 Paddle = Object:extend()
 Paddle:implement(GameObject)
 Paddle:implement(Physics)
+
+-- Vertical dodge band: how far above the spawn y the paddle can climb.
+-- ~80px gives enough room to weave between bullets without reaching into
+-- the brick-fall zone in the upper arena.
+local DODGE_BAND_UP   = 80
+local DODGE_BAND_DOWN = 2
+
 function Paddle:init(args)
   self:init_game_object(args)
-  self.w     = self.w or 56
-  self.h     = self.h or 6
+  self.w     = self.w or 36           -- was 56 — shrunk for bullet-hell pressure
+  self.h     = self.h or 4            -- was 6
   self.speed = self.speed or 220
+  -- Remember the spawn y so the dodge band is centred wherever the arena
+  -- placed us, no matter the resolution / playfield height.
+  self.y_anchor = self.y
   self.color = fg[0]
   self:set_as_rectangle(self.w, self.h, 'kinematic', 'paddle')
   self:set_restitution(1)
@@ -23,17 +35,26 @@ function Paddle:update(dt)
 
   local arena = main.current
 
-  -- A/D move the paddle. Aim (arrow keys) and movement are now separate
-  -- bindings, so the paddle keeps moving freely even when a ball is stuck.
+  -- A/D move horizontally; W/S move vertically inside the dodge band. Aim
+  -- (arrow keys) and movement are separate bindings, so the paddle keeps
+  -- moving freely even when a ball is stuck.
   local left  = input.move_left.down  and 1 or 0
   local right = input.move_right.down and 1 or 0
-  local dir   = right - left
+  local up    = input.move_up.down    and 1 or 0
+  local down  = input.move_down.down  and 1 or 0
+  local dx    = right - left
+  local dy    = down - up
 
-  local target_x = self.x + dir*self.speed*dt
+  local target_x = self.x + dx*self.speed*dt
   target_x = math.clamp(target_x, arena.x1 + self.w/2, arena.x2 - self.w/2)
-  self:set_position(target_x, self.y)
 
-  self.vx = dir*self.speed
+  local target_y = self.y + dy*self.speed*dt
+  target_y = math.clamp(target_y, self.y_anchor - DODGE_BAND_UP,
+                                  self.y_anchor + DODGE_BAND_DOWN)
+
+  self:set_position(target_x, target_y)
+
+  self.vx = dx*self.speed
 end
 
 function Paddle:draw()

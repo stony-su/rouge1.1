@@ -550,8 +550,10 @@ function Boss:attack_spiral()
     self.t:after(i*0.1, function()
       if arena.main and arena.main.world and not self.dead then
         local a = base + dir * i * 0.42
+        -- Boss spiral: slow, matches the spiraler enemy's bullet tempo so
+        -- both attack types read as "swirling, lingering" threats.
         EnemyProjectile{group = arena.main, x = self.x, y = self.y, color = self.color,
-                        kind = 'boss_orb', angle = a, speed = 60, r_size = 3.2, life = 4}
+                        kind = 'boss_orb', angle = a, speed = 55, r_size = 3.2, life = 4}
       end
     end)
   end
@@ -572,8 +574,10 @@ function Boss:attack_shotgun()
       shoot1:play{volume = 0.32, pitch = 0.95}
       local base = math.atan2(arena.paddle.y - self.y, arena.paddle.x - self.x)
       for _, off in ipairs({-0.32, -0.16, 0, 0.16, 0.32}) do
+        -- Boss shotgun: fast 5-shot fan. Faster than the boss ring blast so
+        -- the aimed pattern feels more urgent than the radial spray.
         EnemyProjectile{group = arena.main, x = self.x, y = self.y, color = self.color,
-                        kind = 'boss_orb', angle = base + off, speed = 95, dmg = 2, r_size = 4}
+                        kind = 'boss_orb', angle = base + off, speed = 110, dmg = 2, r_size = 4}
       end
     end
   end)
@@ -595,8 +599,10 @@ function Boss:attack_ring()
             color = Color(self.color.r, self.color.g, self.color.b, 0.25), duration = 0.1}
       for i = 0, 17 do
         local a = i*(2*math.pi/18)
+        -- Boss ring blast: medium speed. The 360° wall is a wide spray, so
+        -- a moderate speed gives players room to slip between adjacent shots.
         EnemyProjectile{group = arena.main, x = self.x, y = self.y, color = self.color,
-                        kind = 'boss_orb', angle = a, speed = 70, life = 4}
+                        kind = 'boss_orb', angle = a, speed = 80, life = 4}
       end
     end
   end)
