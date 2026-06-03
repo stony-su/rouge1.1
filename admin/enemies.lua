@@ -47,11 +47,40 @@ function EnemyCritter:update(dt)
   end
 end
 
+-- Reworked to match the rest of the bullet-hell enemy projectile suite (see
+-- EnemyProjectile's per-kind draws). The critter reads as a "cursed wisp":
+-- soft pulsing outer aura, mid-tone shell, dark void in the middle and a
+-- bright soul-core that throbs at a different frequency from the aura so the
+-- whole thing feels alive instead of being a flat-shaded disc.
 function EnemyCritter:draw()
-  local s = self.hfx.hit.x
-  local col = self.hfx.hit.f and fg[0] or self.color
-  graphics.circle(self.x, self.y, (self.r_size + 0.5), bg[-2])
+  local s        = self.hfx.hit.x or 1
+  local col      = self.hfx.hit.f and fg[0] or self.color
+  local t        = love.timer.getTime()
+  -- Tying the pulse phases to the existing wobble_phase makes each critter
+  -- pulse out of sync with its neighbours, so a swarm reads as a cloud of
+  -- individual things rather than a flashing block of pixels.
+  local aura_p   = 1 + math.sin(t*5  + self.wobble_phase)*0.20
+  local core_p   = 1 + math.sin(t*9  + self.wobble_phase)*0.30
+
+  -- Outer aura — large, semi-transparent. Carries the "purple haze" read.
+  graphics.circle(self.x, self.y, (self.r_size + 3)*aura_p,
+                  Color(col.r, col.g, col.b, 0.22))
+
+  -- Mid shell — darker tint of the same colour, gives the wisp depth so it
+  -- doesn't look like a flat single-colour blob next to the aura.
+  graphics.circle(self.x, self.y, (self.r_size + 1.2)*aura_p,
+                  Color(col.r*0.55, col.g*0.55, col.b*0.7, 0.55))
+
+  -- Body. Scaled by hit-flash so damage feedback is unchanged.
   graphics.circle(self.x, self.y, self.r_size*s, col)
+
+  -- Dark inner void — the "hollow" centre of the wisp. Reads as
+  -- silhouette/skull-socket against the purple body.
+  graphics.circle(self.x, self.y, self.r_size*0.5*s, bg[-2])
+
+  -- Bright soul-core, pulses at its own faster rate so the eye is always
+  -- drawn to the centre even when the aura is dim.
+  graphics.circle(self.x, self.y, self.r_size*0.28*s*core_p, fg[5])
 end
 
 function EnemyCritter:take_damage(amount, color)
