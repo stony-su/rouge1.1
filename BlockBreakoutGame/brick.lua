@@ -22,6 +22,13 @@ local BRICK_W, BRICK_H = 18, 10
 local CELL_W, CELL_H = 22, 14
 local DEFAULT_SHAPE = {{0, 0}}
 
+-- Ranged variants hold their fire once they descend to within this vertical
+-- distance of the paddle. A shot from nearly point-blank is almost impossible
+-- to dodge ("hits too easily"), so close-up attackers go quiet and just press
+-- the breach instead. Measured paddle.y - brick.y, so it triggers as the
+-- enemy crosses the line this many pixels above the paddle.
+local RANGED_HOLD_FIRE_DIST = 160
+
 
 -- All variants share size so they slot cleanly into a row. Behaviors are
 -- driven by the `behavior` key + the corresponding branch in
@@ -201,6 +208,16 @@ function Brick:setup_behavior()
 end
 
 
+-- True once a ranged attacker has descended close enough to the paddle that
+-- its shot would be near-unavoidable. Guards every ranged cast_* below so
+-- close-up enemies stop shooting and rely on breaching instead.
+function Brick:hold_fire()
+  local arena = main.current
+  if not arena or not arena.paddle then return false end
+  return (arena.paddle.y - self.y) < RANGED_HOLD_FIRE_DIST
+end
+
+
 -- Brief boost to the whole formation's drift speed.
 function Brick:cast_speed_boost()
   if self.dead then return end
@@ -229,7 +246,7 @@ end
 
 -- Fire a slow projectile downward at the paddle's current x.
 function Brick:cast_shoot()
-  if self.dead then return end
+  if self.dead or self:hold_fire() then return end
   TelegraphRing{group = main.current.effects, x = self.x, y = self.y, radius = 6, color = self.color, duration = 0.15}
   shoot1:play{volume = 0.18, pitch = random:float(0.95, 1.05)}
   local x, y = self.x, self.y + 6
@@ -245,7 +262,7 @@ end
 -- Aimed shot: telegraphs longer than a plain shooter, then fires one fast
 -- projectile straight at the paddle's current position.
 function Brick:cast_sniper()
-  if self.dead then return end
+  if self.dead or self:hold_fire() then return end
   local arena = main.current
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 8,
                 color = red[0], duration = 0.35}
@@ -267,7 +284,7 @@ end
 
 -- Three-shot spread fan aimed straight down.
 function Brick:cast_spread()
-  if self.dead then return end
+  if self.dead or self:hold_fire() then return end
   local arena = main.current
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 7,
                 color = self.color, duration = 0.18}
@@ -290,7 +307,7 @@ end
 -- Spiral barrage: 8 projectiles around the full circle, with the start angle
 -- rotating between casts so successive bursts paint a turning spiral pattern.
 function Brick:cast_spiral()
-  if self.dead then return end
+  if self.dead or self:hold_fire() then return end
   local arena = main.current
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 10,
                 color = self.color, duration = 0.2}
@@ -315,7 +332,7 @@ end
 -- Three-shot burst: three quick straight-down shots in rapid succession,
 -- then a longer cooldown before the next burst.
 function Brick:cast_burst()
-  if self.dead then return end
+  if self.dead or self:hold_fire() then return end
   local arena = main.current
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 6,
                 color = self.color, duration = 0.15}
@@ -338,7 +355,7 @@ end
 -- slow projectile that drifts toward that area. The paddle can still escape
 -- by moving — homing turn rate is capped.
 function Brick:cast_arc_lob()
-  if self.dead then return end
+  if self.dead or self:hold_fire() then return end
   local arena = main.current
   local lx    = arena.paddle.x + random:float(-30, 30)
   local ly    = arena.paddle.y - 4

@@ -32,21 +32,26 @@ Powerup.KINDS = {
   multi_ball    = {label = 'multi',    color = 'green',   glyph = 'M',  tier = 2},
   pierce        = {label = 'pierce',   color = 'purple',  glyph = 'P',  tier = 2},
   floor         = {label = 'floor',    color = 'yellow2', glyph = '_',  tier = 2},
-  level_random  = {label = 'lvl',      color = 'yellow',  glyph = 'L',  tier = 2},
+  -- The "level-up ball" -- levels up your ball-heroes. `solo` keeps it OUT of
+  -- the generic tier_*_kinds pools below: it has its own spawn cadence
+  -- (BallPit:tick_levelup_pity) and its own distinct draw (Powerup:draw_levelup).
+  level_random  = {label = 'lvl',      color = 'yellow',  glyph = 'L',  tier = 2, solo = true},
 }
 
 
--- Helpers used by the brick drop roll and the admin terminal.
+-- Helpers used by the generic random-powerup spawners (pity roll + wave-end
+-- drop) and the admin terminal. `solo` kinds are deliberately excluded -- they
+-- spawn on their own dedicated timers instead of the shared pools.
 function Powerup.tier_1_kinds()
   local out = {}
-  for k, v in pairs(Powerup.KINDS) do if v.tier == 1 then table.insert(out, k) end end
+  for k, v in pairs(Powerup.KINDS) do if v.tier == 1 and not v.solo then table.insert(out, k) end end
   return out
 end
 
 
 function Powerup.tier_2_kinds()
   local out = {}
-  for k, v in pairs(Powerup.KINDS) do if v.tier == 2 then table.insert(out, k) end end
+  for k, v in pairs(Powerup.KINDS) do if v.tier == 2 and not v.solo then table.insert(out, k) end end
   return out
 end
 
@@ -172,7 +177,53 @@ function Powerup:fizzle()
 end
 
 
+-- The level-up ball gets its own look so it never reads as a generic pickup:
+-- a round, glowing orb (it levels up your *balls*) stamped with stacked upward
+-- chevrons, rather than the spinning diamond every other powerup uses.
+function Powerup:draw_levelup()
+  self.spring:pull(0)
+  local s     = self.spring.x
+  local now   = time or 0
+  local pulse = 1 + 0.12*math.sin(now*7)
+  local r     = self.r_size*1.7*pulse
+
+  -- Layered halo rings -- larger/brighter than a normal pickup so the rare
+  -- build-defining drop is unmistakable. Brightens further once armed (the
+  -- tier-2 "now catch it" state).
+  local arm = self.armed and (0.18 + 0.18*math.abs(math.sin(now*10))) or 0
+  for i = 3, 1, -1 do
+    graphics.circle(self.x, self.y, r*(0.7 + 0.4*i),
+      Color(self.color.r, self.color.g, self.color.b, 0.12*i + arm))
+  end
+
+  -- Dark backing + bright orb body + glossy highlight.
+  graphics.circle(self.x, self.y, r + 1.5, bg[-2])
+  graphics.circle(self.x, self.y, r*s, self.color)
+  graphics.circle(self.x - r*0.35, self.y - r*0.35, math.max(0.6, r*0.32), fg[5])
+
+  -- Two stacked upward chevrons = "level up". graphics.triangle points right
+  -- at angle 0, so push a -90 deg rotation to aim each chevron up.
+  for i = 0, 1 do
+    local cy = self.y - 1 + i*3.4
+    graphics.push(self.x, cy, -math.pi/2)
+      graphics.triangle(self.x, cy, 5.5, 2.8, fg[0])
+    graphics.pop()
+  end
+
+  -- Orbiting sparkles, faster when armed, sold as "grab me".
+  local spark_r = r + 4
+  local spin    = self.armed and 4.0 or 2.2
+  for i = 0, 3 do
+    local a = now*spin + i*(math.pi/2)
+    graphics.rectangle(self.x + math.cos(a)*spark_r, self.y + math.sin(a)*spark_r,
+                       1.6, 1.6, nil, nil, fg[5])
+  end
+end
+
+
 function Powerup:draw()
+  if self.kind == 'level_random' then self:draw_levelup(); return end
+
   self.spring:pull(0)
   local s     = self.spring.x
   local now   = time or 0

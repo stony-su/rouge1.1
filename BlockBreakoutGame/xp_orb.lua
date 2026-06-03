@@ -19,9 +19,9 @@ function XpOrb:init(args)
   -- Short pop-out window so the orb's initial scatter velocity from :init is
   -- visible before gravity / magnet takes over.
   self.magnet_delay = 0.35
-  -- Lifetime safety net. With the stronger gravity below, an unpicked orb
-  -- falls off the bottom of the arena in ~6 s on its own, so this only fires
-  -- if a physics edge case strands an orb in mid-air.
+  -- Lifetime safety net. With the gentle gravity below, an unpicked orb still
+  -- drifts off the bottom of the arena well within this window on its own, so
+  -- this only fires if a physics edge case strands an orb in mid-air.
   self.life   = 20
 
   self:set_as_circle(self.r_size, 'dynamic', 'xp')
@@ -49,23 +49,23 @@ function XpOrb:update(dt)
   if self.magnet_delay > 0 then
     self.magnet_delay = self.magnet_delay - dt
     local vx, vy = self:get_velocity()
-    self:set_velocity(vx, vy + 160*dt)
+    self:set_velocity(vx, vy + 95*dt)
 
   elseif d < self.magnet_range then
     -- In magnet range: full snap toward the paddle (vampire-survivors-style
     -- pickup feel). Pull strength ramps up as the orb gets closer.
     local ang  = math.atan2(py - self.y, px - self.x)
-    local pull = math.remap(d, 0, self.magnet_range, 240, 60)
+    local pull = math.remap(d, 0, self.magnet_range, 150, 50)
     self:set_velocity(math.cos(ang)*pull, math.sin(ang)*pull)
 
   else
-    -- Out of magnet range: gravity. Bumped up from the original 30 px/s² so
-    -- orbs actually reach the bottom of the arena in a few seconds instead
-    -- of stalling out at the damping-imposed ~15 px/s terminal velocity and
-    -- vanishing in place when the 18 s life timer expired. Missed orbs now
-    -- visibly fall through the bottom and despawn — a real pickup penalty.
+    -- Out of magnet range: gentle gravity. Lowered from 160 px/s² so orbs
+    -- drift down noticeably more slowly, but still well clear of the original
+    -- 30 px/s² that let them stall at the damping-imposed ~15 px/s terminal
+    -- velocity. Missed orbs keep falling through the bottom and despawn within
+    -- the life timer rather than hanging in mid-air — a real pickup penalty.
     local vx, vy = self:get_velocity()
-    self:set_velocity(vx, vy + 160*dt)
+    self:set_velocity(vx, vy + 95*dt)
   end
 
   if d < 8 then
