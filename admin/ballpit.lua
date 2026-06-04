@@ -23,6 +23,17 @@ BallPit:implement(State)
 BallPit:implement(GameObject)
 
 
+-- Variants that fire EnemyProjectiles at the paddle. Their spawn weights are
+-- scaled by RANGED_SPAWN_SCALE in wave_config so ranged attackers show up less
+-- often than melee/utility enemies (their projectiles were blanketing the
+-- screen). Tune the scale (0..1) to taste; 1 restores the old frequency.
+local RANGED_VARIANTS = {
+  shooter = true, sniper = true, spreader = true,
+  spiraler = true, burster = true, arc_lobber = true,
+}
+local RANGED_SPAWN_SCALE = 0.5
+
+
 -- Per-wave config: row cadence, row width, drift speed and the variant mix.
 -- Variants come from SNKRX-master/enemies.lua (Seeker flags and boss subtypes).
 -- Mix entries are {variant, weight} pairs that don't need to sum to 100.
@@ -68,6 +79,14 @@ local function wave_config(wave)
            {'swarmer', 12}, {'forcer', 10}, {'randomizer', 8}, {'sniper', 10}, {'spreader', 10},
            {'spiraler', 10}, {'burster', 8}, {'arc_lobber', 8}}
   end
+
+  -- Thin out ranged attackers relative to the rest of the mix so their shots
+  -- don't blanket the screen. Mix tables are fresh literals per call, so
+  -- mutating the weights here is safe.
+  for _, entry in ipairs(mix) do
+    if RANGED_VARIANTS[entry[1]] then entry[2] = entry[2]*RANGED_SPAWN_SCALE end
+  end
+
   -- All of these slide with wave number so the run gets progressively
   -- harder: more rows, wider swarms, shorter gap between spawns, and a
   -- shrinking minimum vertical gap between successive swarms (so they end
@@ -389,6 +408,9 @@ function BallPit:reset_run()
   self.wave_time     = 0
   self.boss          = nil
   self.boss_defeated = false
+  -- Set while wave 9 has elapsed but the arena still has live blocks; holds the
+  -- boss wave from starting until everything is cleared (see BallPit:update).
+  self.awaiting_boss = false
   self.score         = 0
   -- Combo state. Persists across paddle bounces — only a ball falling into
   -- the pit (or extended idle time) reduces points. `streak` counts
@@ -449,6 +471,15 @@ function BallPit:reset_run()
     base_chance    = 0.25,
     pity_step      = 0.20,
     tier2_chance   = 0.20,   -- on a spawn, this fraction roll the rare tier
+  }
+
+  -- The level-up ball ('level_random') spawns on its OWN timer, fully separate
+  -- from the powerup pity roll above (and excluded from those pools via the
+  -- `solo` flag in Powerup.KINDS). It drops on a randomized fixed-ish interval
+  -- rather than the chance/streak model the regular powerups use.
+  self.levelup_pity = {
+    timer   = 0,
+    next_at = random:float(20, 30),   -- first level-up ball lands ~20-30s in
   }
 
   self:start_wave()
@@ -541,6 +572,20 @@ function BallPit:add_hero(character)
   end
   table.insert(self.heroes, hero)
   return hero
+end
+
+
+-- Count the "blocks" still alive on screen: swarm bricks plus the brick-tagged
+-- critters they spawn (EnemyCritter shares the 'brick' physics tag). Used to
+-- gate the boss wave so it only starts on a fully cleared arena.
+function BallPit:live_block_count()
+  local n = 0
+  if self.main and self.main.objects then
+    for _, o in ipairs(self.main.objects) do
+      if not o.dead and (o:is(Brick) or o:is(EnemyCritter)) then n = n + 1 end
+    end
+  end
+  return n
 end
 
 
@@ -897,19 +942,36 @@ function BallPit:update(dt)
 
     -- Powerup pity timer (random spawns replacing the old per-brick drop).
     self:tick_powerup_pity(sdt)
+    self:tick_levelup_pity(sdt)
     self:tick_combo(sdt)
 
-    -- Boss wave: short-circuit the duration check. advance_wave fires the
-    -- moment the boss flips boss_defeated in its die().
-    if self.wave_cfg.boss and self.boss_defeated then
-      self.boss_defeated = false
-      self.boss          = nil
-      self:advance_wave()
-    end
-
-    -- Wave end → wave advance (purely time-based; leftover bricks roll into the next wave).
-    if self.wave_time >= self.wave_cfg.duration then
-      self:advance_wave()
+    -- Wave advance. Three cases:
+    --   * Boss wave (10): never advances on time -- only once the boss is dead
+    --     (it flips boss_defeated in Boss:die). This is what makes wave 10 end
+    --     strictly on boss defeat.
+    --   * Wave 9 -> 10: once wave 9's timer is up, hold the boss wave until every
+    --     block on screen is cleared, so the boss never spawns onto a half-full
+    --     arena. New swarm spawns are stopped while we drain.
+    --   * Any other wave: plain time-based advance (leftover bricks roll over).
+    if self.wave_cfg.boss then
+      if self.boss_defeated then
+        self.boss_defeated = false
+        self.boss          = nil
+        self:advance_wave()
+      end
+    elseif self.wave_time >= self.wave_cfg.duration then
+      if self.wave == 9 then
+        if not self.awaiting_boss then
+          self.awaiting_boss = true
+          self.t:cancel('spawn_swarm')   -- stop adding blocks while the arena drains
+        end
+        if self:live_block_count() == 0 then
+          self.awaiting_boss = false
+          self:advance_wave()
+        end
+      else
+        self:advance_wave()
+      end
     end
   end
 end
@@ -1062,8 +1124,9 @@ end
 
 
 -- Called from Brick:on_ball_contact after damage is applied. Awards points
--- with a small variety + streak bonus, spawns a floating "+N" at the brick,
--- and triggers the rank-up presentation if a threshold was crossed.
+-- with a small variety + streak bonus and triggers the rank-up SFX/shake if
+-- a threshold was crossed. Points are read off the combo meter HUD -- there's
+-- deliberately no per-bounce floating "+N" anymore.
 function BallPit:on_brick_bounce(ball, brick)
   local c = self.combo
   if not c then return end
@@ -1081,26 +1144,17 @@ function BallPit:on_brick_bounce(ball, brick)
   local gained = COMBO_BASE_POINTS + streak_bonus + variety_bonus
   c.points = c.points + gained
 
-  -- Small per-bounce feedback. Colour scales with how chunky the bonus is.
-  local col = (variety_bonus > 0) and yellow[0] or fg[0]
-  FloatingText{group = self.effects, x = brick.x, y = brick.y - 6,
-               text = '+' .. gained, color = col, duration = 0.45}
-
   local new_idx = self:combo_rank_index()
   if new_idx > prev_idx then self:on_combo_rank_up(new_idx) end
 end
 
 
--- Big visual on rank advancement: centre-screen flash, big floating rank
--- letter, level-up SFX, and a shake at higher ranks for that ULTRAKILL
--- "you're cooking" feeling.
+-- Rank advancement feedback: a level-up SFX (pitched up per rank) plus a
+-- small camera shake at higher ranks for that ULTRAKILL "you're cooking"
+-- feeling. The centre-screen flash and big floating rank letter were removed
+-- as too bright/noisy -- the combo meter HUD (draw_combo_meter) is the only
+-- persistent rank readout now.
 function BallPit:on_combo_rank_up(new_idx)
-  local rank = COMBO_RANKS[new_idx]
-  local col  = _G[rank.color_key][0]
-  Flash{group = self.effects, x = gw/2, y = gh/2,
-        color = Color(col.r, col.g, col.b, 0.28), duration = 0.18}
-  FloatingText{group = self.effects, x = gw/2, y = gh/2 - 30,
-               text = rank.label, color = col, duration = 1.3}
   if level_up1 then
     level_up1:play{volume = 0.35, pitch = 0.85 + new_idx*0.06}
   end
@@ -1118,13 +1172,6 @@ function BallPit:on_ball_missed(ball)
   c.points       = math.max(0, c.points - COMBO_PENALTY_MISS)
   c.streak       = 0
   c.last_variant = nil
-
-  local fx = (ball and ball.x) or (self.paddle and self.paddle.x) or gw/2
-  local fy = (self.paddle and self.paddle.y - 12) or gh/2
-  FloatingText{group = self.effects, x = fx, y = fy,
-               text = '-' .. COMBO_PENALTY_MISS, color = red[0], duration = 0.7}
-  Flash{group = self.effects, x = gw/2, y = gh/2,
-        color = red_transparent_weak, duration = 0.1}
 
   if self:combo_rank_index() < prev_idx then
     camera:shake(2, 0.15, 80)
@@ -1762,6 +1809,45 @@ function BallPit:spawn_random_powerup()
   self.t:after(0, function()
     if self.main and self.main.world then
       Powerup{group = self.main, x = x, y = y, kind = kind}
+    end
+  end)
+end
+
+
+-- Dedicated spawn cadence for the level-up ball, independent of the regular
+-- powerup pity timer. Fires every `next_at` seconds, then re-rolls the gap.
+function BallPit:tick_levelup_pity(dt)
+  if not Powerup then return end
+  if self.upgrade_pending or self.game_over then return end
+  local p = self.levelup_pity
+  if not p then return end
+
+  p.timer = p.timer + dt
+  if p.timer < p.next_at then return end
+  p.timer   = 0
+  p.next_at = random:float(24, 36)   -- gap until the next level-up ball
+  self:spawn_levelup_powerup()
+end
+
+
+-- Drop a single level-up ball near the top of the arena. Skipped (and retried
+-- next interval) if every ball-hero is already max level, so the player never
+-- has to chase a powerup that would do nothing.
+function BallPit:spawn_levelup_powerup()
+  if not (Powerup and self.main and self.main.world) then return end
+
+  local has_target = false
+  for _, h in ipairs(self.heroes) do
+    if h and not h.dead and (h.level or 1) < 3 then has_target = true; break end
+  end
+  if not has_target then return end
+
+  local arena_w = self.x2 - self.x1
+  local x = self:arena_center_x() + random:float(-arena_w/3, arena_w/3)
+  local y = self.y1 + 16
+  self.t:after(0, function()
+    if self.main and self.main.world then
+      Powerup{group = self.main, x = x, y = y, kind = 'level_random'}
     end
   end)
 end

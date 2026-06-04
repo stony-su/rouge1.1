@@ -32,21 +32,26 @@ Powerup.KINDS = {
   multi_ball    = {label = 'multi',    color = 'green',   glyph = 'M',  tier = 2},
   pierce        = {label = 'pierce',   color = 'purple',  glyph = 'P',  tier = 2},
   floor         = {label = 'floor',    color = 'yellow2', glyph = '_',  tier = 2},
-  level_random  = {label = 'lvl',      color = 'yellow',  glyph = 'L',  tier = 2},
+  -- The "level-up ball" -- levels up your ball-heroes. `solo` keeps it OUT of
+  -- the generic tier_*_kinds pools below: it has its own spawn cadence
+  -- (BallPit:tick_levelup_pity) and its own distinct draw (Powerup:draw_level_chevrons).
+  level_random  = {label = 'lvl',      color = 'yellow',  glyph = 'L',  tier = 2, solo = true},
 }
 
 
--- Helpers used by the brick drop roll and the admin terminal.
+-- Helpers used by the generic random-powerup spawners (pity roll + wave-end
+-- drop) and the admin terminal. `solo` kinds are deliberately excluded -- they
+-- spawn on their own dedicated timers instead of the shared pools.
 function Powerup.tier_1_kinds()
   local out = {}
-  for k, v in pairs(Powerup.KINDS) do if v.tier == 1 then table.insert(out, k) end end
+  for k, v in pairs(Powerup.KINDS) do if v.tier == 1 and not v.solo then table.insert(out, k) end end
   return out
 end
 
 
 function Powerup.tier_2_kinds()
   local out = {}
-  for k, v in pairs(Powerup.KINDS) do if v.tier == 2 then table.insert(out, k) end end
+  for k, v in pairs(Powerup.KINDS) do if v.tier == 2 and not v.solo then table.insert(out, k) end end
   return out
 end
 
