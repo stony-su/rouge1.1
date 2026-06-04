@@ -209,7 +209,18 @@ function EnemyProjectile:update(dt)
   -- bullet-hell shots can also exit sideways or off the top.
   if self.y > arena.y2 + 8 or self.y < arena.y1 - 8 then self.dead = true end
   if self.x < arena.x1 - 8 or self.x > arena.x2 + 8 then self.dead = true end
-  if self.y > arena.paddle.y - 4 and math.abs(self.x - arena.paddle.x) < arena.paddle.w/2 + 3 then
+  -- Paddle hit. Swept vertical test over the segment the bullet travelled this
+  -- frame, instead of the old "anywhere below paddle.y - 4" column — that acted
+  -- like an infinitely tall hitbox under the paddle, so lifting the paddle in
+  -- its dodge band let bullets far below it still score hits. Sweeping also
+  -- stops fast shots tunnelling through the thin (4px) bar between frames.
+  local _, p_vy  = self:get_velocity()
+  local p_prev_y = self.y - p_vy*dt
+  local p_ylo    = math.min(p_prev_y, self.y) - self.r_size
+  local p_yhi    = math.max(p_prev_y, self.y) + self.r_size
+  if  math.abs(self.x - arena.paddle.x) < arena.paddle.w/2 + self.r_size
+  and p_yhi >= arena.paddle.y - arena.paddle.h/2
+  and p_ylo <= arena.paddle.y + arena.paddle.h/2 then
     -- Hit the paddle directly. Admin godmode swallows the hp loss but still
     -- plays the impact feedback so the operator can see what would have hit.
     if not arena.god then
@@ -601,22 +612,24 @@ function Boss:init(args)
   self:set_friction(0)
   self.hfx:add('hit', 1)
 
-  -- Movement anchor: where the boss orbits around. y stays high so it never
-  -- breaches the paddle line.
-  local arena = main.current
-  self.x_anchor = (arena and arena:arena_center_x()) or gw/2
+  -- Vertical anchor for the path modes (the recenter target in update). y stays
+  -- high so the boss never reaches the paddle line.
   self.y_anchor = self.y
 
-  -- Movement state machine. Instead of one fixed sine sweep, the boss runs a
-  -- phase-gated pool of named path modes (see choose_move_mode / movement_point)
-  -- and eases toward a per-mode target point each frame. anchor_target lets the
-  -- orbit centre roam so the fight isn't permanently glued to mid-screen.
+  -- Movement state machine. The boss eases toward a target traced by one of
+  -- several smooth parametric path modes (see choose_move_mode / movement_point).
+  -- Each mode is anchored to begin exactly where the boss is, so switching modes
+  -- is seamless; path_cx/cy then recenter slowly so it never drifts to an edge.
   self.move_mode     = 'sweep'
   self.move_t        = 0
   self.move_dur      = 3
   self.move_ease     = 3.0
-  self.dash_x        = self.x
-  self.anchor_target = self.x_anchor
+  self.path_clock    = 0
+  self.path_cx       = self.x
+  self.path_cy       = self.y
+  self.shape_dir     = 1
+  self.shape_k       = 3
+  self.shape_phase   = 0
   self:choose_move_mode()
 
   spawn1:play{volume = 0.5, pitch = 0.7}
@@ -909,22 +922,21 @@ function Boss:spawn_minions()
 end
 
 
--- Picks the next movement path mode from a phase-gated pool and sets up its
--- duration / easing. Higher phases unlock more aggressive, harder-to-read modes
--- (strafe, dash, weave). Avoids repeating the current mode back-to-back.
+-- Picks the next movement path mode from a phase-gated pool and rolls fresh
+-- shape parameters for it, so a repeated mode traces a different-looking curve.
+-- Every mode is a smooth, continuous parametric path; higher phases unlock the
+-- more elaborate ones. Avoids repeating the current mode back-to-back.
 function Boss:choose_move_mode()
   local arena   = main.current
   local arena_w = (arena and (arena.x2 - arena.x1)) or gw
-  local center  = (arena and arena:arena_center_x()) or gw/2
-  local half    = arena_w*0.34
 
   local pool
   if self.phase == 1 then
-    pool = {'sweep', 'sweep', 'figure8', 'pendulum'}
+    pool = {'sweep', 'figure8', 'pendulum', 'orbit'}
   elseif self.phase == 2 then
-    pool = {'figure8', 'pendulum', 'orbit', 'strafe', 'figure8'}
+    pool = {'figure8', 'pendulum', 'orbit', 'lissajous', 'spirograph', 'bloom'}
   else
-    pool = {'orbit', 'strafe', 'weave', 'dash', 'weave', 'strafe'}
+    pool = {'orbit', 'lissajous', 'spirograph', 'rose', 'bloom', 'figure8'}
   end
 
   -- Re-roll up to a few times so we don't immediately repeat the same mode.
@@ -933,72 +945,85 @@ function Boss:choose_move_mode()
     pick = pool[random:int(1, #pool)]
     if pick ~= self.move_mode then break end
   end
-  self.move_mode = pick
-  self.move_t    = 0
-  self.move_dur  = random:float(2.4, 4.2)
+  self.move_mode  = pick
+  self.move_t     = 0
+  self.path_clock = 0
+
+  -- Fresh shape params each time: rotation direction, petal / frequency count
+  -- and a phase offset, so the same pattern looks different on repeat.
+  self.shape_dir   = random:bool(50) and 1 or -1
+  self.shape_k     = random:int(2, 4)
+  self.shape_phase = random:float(0, 2*math.pi)
+
+  -- The elaborate closed curves run longer so the whole shape has time to draw
+  -- before the next mode is chosen.
+  local complex  = (pick == 'lissajous' or pick == 'spirograph'
+                 or pick == 'rose'      or pick == 'bloom')
+  self.move_dur  = complex and random:float(5.5, 8.0) or random:float(4.0, 6.0)
   self.move_ease = 3.0
 
-  if pick == 'dash' then
-    -- Telegraphed lunge toward the player's current column: short, snappy, and
-    -- dips slightly downward so it reads as a committed strike.
-    self.move_dur  = random:float(0.7, 1.1)
-    self.move_ease = 7.0
-    local px = (arena and arena.paddle and arena.paddle.x) or self.x
-    self.dash_x = math.clamp(px + random:float(-28, 28), center - half, center + half)
-    if arena then
-      TelegraphRing{group = arena.effects, x = self.dash_x, y = self.y + 16,
-                    radius = 24, color = self.color, duration = 0.3}
-    end
-  elseif pick == 'strafe' then
-    -- Quick slide to one far side, then hold there until the next pick.
-    self.move_dur  = random:float(1.0, 1.7)
-    self.move_ease = 4.5
-    self.dash_x = center + (random:bool(50) and 1 or -1)*half*random:float(0.7, 1.0)
-  elseif pick == 'orbit' then
-    self.move_ease = 2.4
-  end
-
-  -- Roam the orbit centre within the middle third so the boss doesn't sit glued
-  -- to mid-screen; update() drifts x_anchor toward this slowly.
-  self.anchor_target = center + random:float(-arena_w*0.12, arena_w*0.12)
+  -- Anchor the pattern so its t=0 point is exactly the boss's current position:
+  -- the curve begins where the boss already is, so a mode switch never jumps it
+  -- to a far spot. update() then recenters path_cx/cy slowly so the boss doesn't
+  -- drift to an edge over many modes.
+  local rx0, ry0 = self:movement_point(0, arena_w)
+  self.path_cx = self.x - rx0
+  self.path_cy = self.y - ry0
 end
 
 
--- Returns the target point for the current movement mode at scaled time `t`.
--- The boss eases toward this each frame (see update); modes differ in path
--- shape, amplitude and how much vertical travel they use.
-function Boss:movement_point(t, arena_w)
-  local cx = self.x_anchor
+-- Returns the curve's DISPLACEMENT (rx, ry) from its centre at per-mode time
+-- `mt`, for the current mode. update() adds it to the (recentering) pattern
+-- centre path_cx/cy; choose_move_mode anchors that centre so mt=0 lands on the
+-- boss, making mode switches seamless. A is the horizontal reach. Every branch
+-- is a smooth, continuous parametric curve.
+function Boss:movement_point(mt, arena_w)
   local A  = arena_w*0.34
+  local d  = self.shape_dir or 1
+  local ph = self.shape_phase or 0
   local m  = self.move_mode
-  local tx, ty
+  local rx, ry
   if m == 'figure8' then
-    -- Lissajous 8: horizontal at f, vertical at 2f → a crossing loop.
-    tx = cx + math.sin(t*0.85)*A
-    ty = self.y_anchor + math.sin(t*1.70)*22
+    -- Lissajous 1:2 — a crossing figure-eight.
+    rx = math.sin(mt*0.85)*A
+    ry = math.sin(mt*1.70)*22
   elseif m == 'pendulum' then
-    -- Eased swing that lingers at the extremes (a beat of menace before fire).
-    local s = math.sin(t*0.8)
-    tx = cx + (s < 0 and -1 or 1)*(math.abs(s)^0.55)*A
-    ty = self.y_anchor + math.sin(t*1.6)*7
+    -- Eased swing that lingers at the extremes.
+    local s = math.sin(mt*0.8)
+    rx = (s < 0 and -1 or 1)*(math.abs(s)^0.55)*A
+    ry = math.sin(mt*1.6)*7
   elseif m == 'orbit' then
-    tx = cx + math.cos(t*1.05)*A*0.75
-    ty = self.y_anchor + math.sin(t*1.05)*26
-  elseif m == 'weave' then
-    -- Two summed harmonics → an erratic serpentine that's hard to read.
-    tx = cx + math.sin(t*0.75)*A*0.62 + math.sin(t*1.9 + 1.3)*A*0.34
-    ty = self.y_anchor + math.sin(t*1.35)*18 + math.sin(t*2.7)*7
-  elseif m == 'dash' then
-    tx = self.dash_x
-    ty = self.y_anchor + 16
-  elseif m == 'strafe' then
-    tx = self.dash_x
-    ty = self.y_anchor + math.sin(t*1.4)*5
-  else  -- 'sweep' (default): the original gentle horizontal hover.
-    tx = cx + math.sin(t*0.6)*A
-    ty = self.y_anchor + math.sin(t*1.1)*5
+    -- Plain elliptical orbit.
+    rx = math.cos(d*mt*1.05 + ph)*A*0.78
+    ry = math.sin(d*mt*1.05 + ph)*34
+  elseif m == 'lissajous' then
+    -- Higher-order Lissajous (2:3): a denser, multi-lobed closed weave.
+    rx = math.sin(d*mt*0.90 + ph)*A
+    ry = math.sin(mt*1.35)*40
+  elseif m == 'spirograph' then
+    -- Epitrochoid: a fast small circle riding a slow big one → rosette loops.
+    -- The two radii sum to 1 so it stays inside the play box.
+    local a1, a2 = mt*0.55, d*mt*1.85 + ph
+    rx = (math.cos(a1)*0.64 + math.cos(a2)*0.36)*A
+    ry = (math.sin(a1)*0.64 + math.sin(a2)*0.36)*40
+  elseif m == 'rose' then
+    -- Rhodonea (rose): the radius swings with the angle, sweeping petals out
+    -- through the centre and back.
+    local ang = d*mt*0.70 + ph
+    local rr  = math.cos((self.shape_k or 3)*ang)
+    rx = rr*math.cos(ang)*A
+    ry = rr*math.sin(ang)*40
+  elseif m == 'bloom' then
+    -- Breathing orbit: an orbit whose radius pulses in and out like a flower.
+    local ang = d*mt*1.00 + ph
+    local rad = 0.55 + 0.40*math.sin(mt*0.35)
+    rx = math.cos(ang)*A*rad
+    ry = math.sin(ang)*42*rad
+  else  -- 'sweep': a gentle horizontal hover.
+    rx = math.sin(mt*0.6)*A
+    ry = math.sin(mt*1.1)*5
   end
-  return tx, ty
+  return rx, ry
 end
 
 
@@ -1039,28 +1064,37 @@ function Boss:update(dt)
   end
 
   -- ---- Path logic --------------------------------------------------------
-  -- Advance the mode timer, re-pick a path mode when it elapses, and drift the
-  -- orbit centre toward its roaming target so the boss keeps repositioning.
-  self.move_t = self.move_t + dt
+  -- Advance the per-mode timers and re-pick a path mode when the current one
+  -- elapses. path_clock integrates *scaled* time each frame (so a phase or slow
+  -- change can't jump the curve), and resets to 0 in choose_move_mode.
+  self.move_t     = self.move_t + dt
+  self.path_clock = self.path_clock + dt*speed_factor
   if self.move_t >= self.move_dur then self:choose_move_mode() end
 
   local arena   = main.current
   local arena_w = (arena and (arena.x2 - arena.x1)) or gw
-  self.x_anchor = self.x_anchor + (self.anchor_target - self.x_anchor)*math.min(1, dt*0.4)
 
-  -- Per-mode target point (time scaled by speed_factor so slow / phase changes
-  -- stretch or compress the whole path), then ease toward it.
-  local t      = self.spawn_t * speed_factor
-  local tx, ty = self:movement_point(t, arena_w)
+  -- Slowly recenter the pattern toward mid-screen so the boss doesn't wander to
+  -- an edge over many modes (choose_move_mode anchors it where the boss is, so
+  -- the centre starts off-centre; this eases it back without any visible jump).
+  local rcx = (arena and arena:arena_center_x()) or gw/2
+  local rcy = self.y_anchor + 16
+  self.path_cx = self.path_cx + (rcx - self.path_cx)*math.min(1, dt*0.2)
+  self.path_cy = self.path_cy + (rcy - self.path_cy)*math.min(1, dt*0.2)
+
+  -- Target = pattern centre + the curve's offset at the current per-mode time.
+  -- Because choose_move_mode anchored the centre so the curve starts at the
+  -- boss's position, switching modes is seamless — the boss flows from one
+  -- pattern straight into the next instead of darting to a new spot.
+  local rx, ry = self:movement_point(self.path_clock, arena_w)
+  local tx, ty = self.path_cx + rx, self.path_cy + ry
 
   -- Clamp inside the arena and pinned to the upper region, so no mode can shove
   -- the boss off-screen or down onto the paddle line.
   local margin  = self.r_outer + 4
-  local cx1     = (arena and arena.x1 or 0) + margin
-  local cx2     = (arena and arena.x2 or gw) - margin
   local ay1     = (arena and arena.y1) or 0
   local arena_h = (arena and (arena.y2 - arena.y1)) or gh
-  tx = math.clamp(tx, cx1, cx2)
+  tx = math.clamp(tx, (arena and arena.x1 or 0) + margin, (arena and arena.x2 or gw) - margin)
   ty = math.clamp(ty, ay1 + self.r_outer + 6, ay1 + arena_h*0.42)
 
   -- Frame-rate-independent ease, clamped so a frame spike can't overshoot.

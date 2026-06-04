@@ -625,7 +625,11 @@ function BallPit:advance_wave()
       local x    = self:arena_center_x() + random:float(-40, 40)
       local y    = self.y1 + 20
       self.t:after(0, function()
-        if self.main and self.main.world then
+        -- By the time this deferred drop fires, start_wave has set the new
+        -- wave_cfg; skip it entirely if we've just entered the boss wave, so no
+        -- powerup appears during the boss fight. The post-boss clear still drops
+        -- normally (wave 11 isn't a boss wave).
+        if self.main and self.main.world and not (self.wave_cfg and self.wave_cfg.boss) then
           Powerup{group = self.main, x = x, y = y, kind = kind}
         end
       end)
@@ -1669,6 +1673,9 @@ end
 function BallPit:tick_powerup_pity(dt)
   if not Powerup then return end
   if self.upgrade_pending or self.game_over then return end
+  -- No powerups during the boss wave (wave 10): the fight should be dodged on
+  -- its own terms, not trivialised by mid-fight pickups.
+  if self.wave_cfg and self.wave_cfg.boss then return end
   local p = self.powerup_pity
   if not p then return end
 
@@ -1719,6 +1726,8 @@ end
 function BallPit:tick_levelup_pity(dt)
   if not Powerup then return end
   if self.upgrade_pending or self.game_over then return end
+  -- No level-up balls during the boss wave either (see tick_powerup_pity).
+  if self.wave_cfg and self.wave_cfg.boss then return end
   local p = self.levelup_pity
   if not p then return end
 
