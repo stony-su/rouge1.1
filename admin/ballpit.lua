@@ -983,12 +983,17 @@ function BallPit:update(dt)
       end
     end
   end
+
+  -- Debug: sample the boss position into the path trace if the `trace` terminal
+  -- command turned it on.
+  self:update_boss_trace(dt)
 end
 
 
 function BallPit:draw()
   self.main:draw()
   self.effects:draw()
+  if self.boss_trace then self:draw_boss_trace() end
   if self.stuck_count > 0 or input.launch.down then self:draw_aim_line() end
   self.ui:draw()
   self:draw_hud()
@@ -1011,6 +1016,67 @@ function BallPit:draw()
   -- picker, game-over modal, terminal panel itself acting as a close button).
   -- Clicking it pauses the game and opens the command terminal.
   self:draw_admin_button()
+end
+
+
+-- Records the boss's position each frame into a rolling window while the
+-- `trace` terminal command is active; cleared when no boss is alive so the
+-- trail doesn't linger between waves. (Admin-only debug aid.)
+function BallPit:update_boss_trace(dt)
+  local tr = self.boss_trace
+  if not tr then return end
+  if self.boss and not self.boss.dead then
+    tr.acc = (tr.acc or 0) + dt
+    if tr.acc >= 0.025 then
+      tr.acc = 0
+      tr.pts[#tr.pts + 1] = {x = self.boss.x, y = self.boss.y}
+      while #tr.pts > 500 do table.remove(tr.pts, 1) end
+    end
+  elseif #tr.pts > 0 then
+    tr.pts = {}
+  end
+end
+
+
+-- Draws the recorded boss path as a fading polyline plus a live readout of the
+-- boss's current movement-path logic. Toggled by the `trace` command.
+function BallPit:draw_boss_trace()
+  local tr  = self.boss_trace
+  local pts = tr.pts
+  local n   = #pts
+  for i = 2, n do
+    local a, b = pts[i - 1], pts[i]
+    local k = i/n   -- newer segments brighter
+    graphics.line(a.x, a.y, b.x, b.y,
+                  Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.12 + 0.55*k), 1.5)
+  end
+
+  local b = self.boss
+  if b and not b.dead then
+    graphics.circle(b.x, b.y, 2.5, yellow[0])
+  end
+
+  -- Readout of the current path logic, top-left inside the arena (below the
+  -- boss HP bar / title).
+  local lines
+  if b and not b.dead then
+    local per  = b.move_period or 0
+    local prog = (per > 0) and math.clamp((b.path_clock or 0)/per, 0, 1) or 0
+    lines = {
+      'BOSS PATH TRACE',
+      'mode:  ' .. tostring(b.move_mode),
+      string.format('cycle: %d%%', math.floor(prog*100)),
+      string.format('w %.2f   period %.2f', b.move_w or 0, per),
+      string.format('phase %d   dir %s   k %d', b.phase or 0,
+                    ((b.shape_dir or 1) >= 0) and '+' or '-', b.shape_k or 0),
+    }
+  else
+    lines = { 'BOSS PATH TRACE', '(no boss alive)' }
+  end
+  for i, ln in ipairs(lines) do
+    graphics.print(ln, pixul_font, self.x1 + 5, self.y1 + 24 + (i - 1)*9,
+                   0, 1, 1, 0, 0, yellow[0])
+  end
 end
 
 

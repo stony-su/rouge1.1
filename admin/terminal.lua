@@ -18,6 +18,7 @@
 --   xp <n>                     — gain n xp (will trigger level-ups)
 --   level                      — open the level-up upgrade picker
 --   phase [2|3]                — drop the wave-10 boss's HP to the next phase
+--   trace                      — toggle a live boss movement-path trace + readout
 --   cls                        — clear the terminal log
 
 Terminal = Object:extend()
@@ -181,6 +182,7 @@ function Terminal:register_commands()
     t:log("  xp <n>                  gain n xp")
     t:log("  level                   open level-up picker")
     t:log("  phase [2|3]             drop boss hp to next phase")
+    t:log("  trace                   toggle boss path trace + readout")
     t:log("  powerups                list powerup kinds")
     t:log("  powerup <kind>          apply a powerup effect directly")
     t:log("  dropp <kind>            spawn a powerup orb above paddle")
@@ -299,6 +301,21 @@ function Terminal:register_commands()
     -- so a 1->3 jump walks through each intermediate phase in turn.
     for p = boss.phase + 1, target do boss:enter_phase(p) end
     t:log("boss -> phase " .. boss.phase .. "  (hp " .. math.floor(boss.hp) .. "/" .. math.floor(boss.max_hp) .. ")")
+  end
+
+  -- Toggle a live trace of the boss's movement path. Draws the path it has
+  -- walked as a fading line plus an on-screen readout of the current path mode
+  -- (mode name, cycle %, base frequency / period, phase, direction, petals).
+  -- Run again to clear it.
+  C.trace = function(t, args)
+    local arena = t.arena
+    if arena.boss_trace then
+      arena.boss_trace = nil
+      t:log("boss path trace OFF")
+    else
+      arena.boss_trace = { pts = {}, acc = 0 }
+      t:log("boss path trace ON")
+    end
   end
 
   C.powerups = function(t, args)
