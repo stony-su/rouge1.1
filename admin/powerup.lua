@@ -66,9 +66,22 @@ function Powerup:init(args)
   self.label  = def.label
   self.r_size = self.tier == 2 and 5 or 4
   self.life   = 16
-  self.armed  = false               -- tier-2 only; flips true after the first paddle bounce
+  self.armed  = false               -- tier-2 only; flips true once it has been bounced enough
   self.cant_catch = 0               -- cooldown so the same contact doesn't count twice
-  self.deflect_count = 0            -- safety: cap to two deflects, then fizzle
+  self.deflect_count = 0            -- how many times the paddle has bounced it so far
+
+  -- Tier-2 orbs must be deflected off the paddle before they can be caught.
+  -- Generic ones need a single bounce; the level-up orb needs as many bounces as
+  -- the levels it will grant (1-5, pre-rolled now) so the required bounce count
+  -- IS a preview of the reward: more bounces to earn == more levels on the catch.
+  self.level_amount   = (self.kind == 'level_random') and random:int(1, 5) or 0
+  self.bounces_needed = (self.kind == 'level_random') and self.level_amount
+                        or (self.tier == 2 and 1 or 0)
+
+  -- Ballistic fall gravity. Ramps up on every bounce (see deflect_off_paddle) so
+  -- each successive catch attempt drops faster -- the multi-bounce level orb gets
+  -- progressively harder to read the deeper into its bounce chain you go.
+  self.fall_gravity = 60
 
   -- 'powerup' tag has wall collision ENABLED (see BallPit:reset_run) so the
   -- orb bounces off the left/right/top walls instead of phasing through and
@@ -120,13 +133,13 @@ function Powerup:update(dt)
       self:set_velocity(vx, vy + 30*dt)
     end
   else
-    self:set_velocity(vx, vy + 80*dt)   -- pure ballistic
+    self:set_velocity(vx, vy + self.fall_gravity*dt)   -- ballistic; gravity ramps each bounce
   end
 
   -- Paddle proximity = touch. Use a box overlap (the paddle is wide and
   -- thin, so Euclidean distance gives false hits at the corners). Tier 1
-  -- applies immediately; tier 2 arms on first contact, applies on the
-  -- second after the cant_catch cooldown expires.
+  -- applies immediately; tier 2 must be bounced bounces_needed times (1 for
+  -- generic orbs, up to 5 for the level orb) before a contact finally applies.
   local pw, ph = arena.paddle.w, arena.paddle.h
   local in_box = math.abs(self.x - px) <= pw/2 + self.r_size
              and math.abs(self.y - py) <= ph/2 + self.r_size + 1
@@ -152,25 +165,39 @@ function Powerup:deflect_off_paddle()
   local pw    = arena.paddle.w
   local off   = math.clamp((self.x - arena.paddle.x)/(pw*0.5), -1, 1)
   local ang   = -math.pi/2 + off*(math.pi*0.32)
-  local speed = 180
+  local speed = 240                                   -- bounce launch; higher = pops up higher
   self:set_velocity(math.cos(ang)*speed, math.sin(ang)*speed)
-  self:set_angular_velocity(off * 16)                 -- edge hits impart visible english
-  self.armed       = true
-  self.cant_catch  = 0.18
   self.deflect_count = self.deflect_count + 1
+
+  -- Spin english from where it hit, with a floor so a dead-centre bounce never
+  -- freezes the tumble -- that floor is what keeps tier-2 orbs visibly spinning
+  -- through the air instead of locking up the instant they touch the paddle.
+  local spin = off * 14
+  if math.abs(spin) < 6 then spin = (spin < 0 and -6 or 6) end
+  self:set_angular_velocity(spin)
+
+  -- Each bounce drops a little harder than the last: nudge the ballistic gravity
+  -- up so successive descents get gradually faster and lower-arc, ramping the
+  -- difficulty across a long multi-bounce chain without spiking it.
+  self.fall_gravity = self.fall_gravity + 25
+
+  -- Only arm (become catchable) once it has been bounced the required number of
+  -- times; until then every paddle contact just bounces it again.
+  if self.deflect_count >= self.bounces_needed then self.armed = true end
+
+  self.cant_catch    = 0.18
   pop1:play{volume = 0.25, pitch = random:float(1.05, 1.2)}
   self.spring:pull(0.3)
-  if self.deflect_count >= 3 then
-    -- Safety: if the orb somehow keeps hitting the paddle, fizzle on the 3rd
-    -- deflect so we don't get an infinite-bounce powerup.
-    self:fizzle()
-  end
+
+  -- Safety: a couple of contacts past the point where it should have armed means
+  -- something went wrong, so fizzle rather than bounce forever.
+  if self.deflect_count >= self.bounces_needed + 2 then self:fizzle() end
 end
 
 
 function Powerup:apply_and_die()
   local arena = main.current
-  arena:apply_powerup(self.kind, self.x, self.y, self.color)
+  arena:apply_powerup(self.kind, self.x, self.y, self.color, self.level_amount)
   confirm1:play{volume = 0.35, pitch = random:float(1.0, 1.15)}
   spawn_burst(arena.effects, self.x, self.y, self.color, 8, 60, 140)
   self.dead = true
@@ -229,6 +256,19 @@ function Powerup:draw_level_rune()
   graphics.push(self.x, self.y, ang - math.pi/2)
     graphics.triangle(self.x, self.y, aw, ah, bg[-2])
   graphics.pop()
+
+  -- Remaining-bounce pips: one dot per bounce still owed before the orb arms,
+  -- drawn upright (not tumbling) above the rune so the player can read how many
+  -- more deflects -- and therefore how many levels -- this orb is worth.
+  local remaining = (self.bounces_needed or 0) - self.deflect_count
+  if remaining > 0 then
+    local gap   = 3
+    local total = (remaining - 1) * gap
+    local py    = self.y - self.r_size * 2.4
+    for i = 0, remaining - 1 do
+      graphics.rectangle(self.x - total/2 + i*gap, py, 1.8, 1.8, nil, nil, c)
+    end
+  end
 end
 
 

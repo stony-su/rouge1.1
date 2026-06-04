@@ -1733,7 +1733,7 @@ function BallPit:spawn_levelup_powerup()
 end
 
 
-function BallPit:apply_powerup(kind, x, y, color)
+function BallPit:apply_powerup(kind, x, y, color, amount)
   local def = Powerup and Powerup.KINDS and Powerup.KINDS[kind]
   if not def then return end
 
@@ -1753,7 +1753,7 @@ function BallPit:apply_powerup(kind, x, y, color)
   elseif kind == 'multi_ball'   then self:apply_multi_ball()
   elseif kind == 'pierce'       then self:apply_pierce_buff()
   elseif kind == 'floor'        then self:apply_floor()
-  elseif kind == 'level_random' then self:apply_level_random()
+  elseif kind == 'level_random' then self:apply_level_random(amount)
   end
 end
 
@@ -2018,13 +2018,16 @@ function BallPit:apply_floor()
 end
 
 
-function BallPit:apply_level_random()
+function BallPit:apply_level_random(amount)
   local pool = {}
   for _, h in ipairs(self.heroes) do
     if h and not h.dead and (h.level or 1) < 3 then table.insert(pool, h) end
   end
   if #pool == 0 then return end
-  local n = math.min(#pool, random:int(1, 5))
+  -- `amount` is the bounce-earned level count from the powerup (1-5); fall back to
+  -- a fresh roll if applied without one (e.g. the admin terminal). Capped by how
+  -- many heroes can still take a level so we never promise more than we deliver.
+  local n = math.min(#pool, amount or random:int(1, 5))
   for i = 1, n do
     local j = random:int(i, #pool)
     pool[i], pool[j] = pool[j], pool[i]
