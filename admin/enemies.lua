@@ -1078,7 +1078,10 @@ function Boss:update(dt)
   -- modes only once it has traced one full period of the current curve, so every
   -- pattern is drawn start-to-end instead of being cut off by a timer.
   self.path_clock = self.path_clock + dt*speed_factor
-  if self.path_clock >= self.move_period then self:choose_move_mode() end
+  -- The boss EASES toward the target, so it trails the curve by ~1/move_ease (in
+  -- path-clock units). Trace that bit past one full period before switching, so
+  -- the boss reaches the loop's closing point instead of cutting it a little short.
+  if self.path_clock >= self.move_period + 1.5/self.move_ease then self:choose_move_mode() end
 
   local arena   = main.current
   local arena_w = (arena and (arena.x2 - arena.x1)) or gw
