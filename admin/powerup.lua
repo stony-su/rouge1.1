@@ -34,7 +34,7 @@ Powerup.KINDS = {
   floor         = {label = 'floor',    color = 'yellow2', glyph = '_',  tier = 2},
   -- The "level-up ball" -- levels up your ball-heroes. `solo` keeps it OUT of
   -- the generic tier_*_kinds pools below: it has its own spawn cadence
-  -- (BallPit:tick_levelup_pity) and its own distinct draw (Powerup:draw_level_chevrons).
+  -- (BallPit:tick_levelup_pity) and its own distinct draw (Powerup:draw_level_rune).
   level_random  = {label = 'lvl',      color = 'yellow',  glyph = 'L',  tier = 2, solo = true},
 }
 
@@ -76,16 +76,22 @@ function Powerup:init(args)
   -- xp, other powerups) is disabled in the matrix; paddle catches are driven
   -- by the proximity check in :update, not Box2D contacts.
   self:set_as_circle(self.r_size, 'dynamic', 'powerup')
-  self:set_fixed_rotation(true)
+  -- Free rotation: the orb is a real physics body that tumbles through the air.
+  -- Walls are frictionless (see Wall:init) so bounces preserve spin, exactly as
+  -- a real object would in a frictionless arena; angular damping bleeds it off
+  -- slowly. :draw reads the visible spin straight off the body angle.
+  self:set_fixed_rotation(false)
   self:set_restitution(0.85)                          -- lively bounce off side walls
   self:set_friction(0)
   self:set_damping(0.4)
+  self:set_angular_damping(0.5)                       -- spin decays gently over its life
   self:set_mass(0.2)
 
   -- Small toss outward so the orb doesn't fall straight down on top of the
   -- brick that spawned it. Clamped to mostly-horizontal so the first bounce
-  -- off a wall feels intentional, not chaotic.
+  -- off a wall feels intentional, not chaotic. Pair it with a random tumble.
   self:set_velocity(random:float(-40, 40), random:float(-15, -45))
+  self:set_angular_velocity(random:float(5, 9) * (random:float(0, 1) > 0.5 and 1 or -1))
 
   self.t:after(self.life, function() self.dead = true end)
 end
@@ -148,6 +154,7 @@ function Powerup:deflect_off_paddle()
   local ang   = -math.pi/2 + off*(math.pi*0.32)
   local speed = 180
   self:set_velocity(math.cos(ang)*speed, math.sin(ang)*speed)
+  self:set_angular_velocity(off * 16)                 -- edge hits impart visible english
   self.armed       = true
   self.cant_catch  = 0.18
   self.deflect_count = self.deflect_count + 1
@@ -177,69 +184,64 @@ function Powerup:fizzle()
 end
 
 
--- Ascending-chevron look for the level-up orb (kind 'level_random'). Instead
--- of the shared rotating diamond, a column of upward chevrons scrolls up and
--- loops so the pickup visibly "rises" -- reads as LEVEL UP with no glyph. The
--- tier-2 deflect/arm logic is unchanged; armed just scrolls faster + glows
--- brighter, same juice language as the diamond.
-function Powerup:draw_level_chevrons()
-  local now   = time or 0
-  local s     = self.spring.x
-  local pulse = 1 + 0.10*math.sin(now*7)
-  local c     = self.color
+-- Level-up "rune" look for the level-up orb (kind 'level_random'). A rune square
+-- stamped with an up-arrow that tumbles with the physics body, wrapped in rings
+-- that ripple outward from it like a level-up cast. The rings stay radial so the
+-- ripple reads no matter how the rune is rotated; the deflect/arm logic is
+-- unchanged and armed just ripples faster + brighter.
+function Powerup:draw_level_rune()
+  local now = time or 0
+  local s   = self.spring.x
+  local c   = self.color
 
-  local count   = 3
-  local spacing = self.r_size * 1.6
-  local band    = spacing * count
-  local speed   = self.armed and 90 or 46
-  local y_bot   = self.y + band*0.5
-
-  -- Slim halo column behind the stack; brighter + strobing when armed.
-  local halo_a = self.armed and (0.5 + 0.35*math.abs(math.sin(now*10))) or 0.28
-  graphics.rectangle(self.x, self.y, self.r_size*1.8*pulse, band*pulse, 2, 2,
-    Color(c.r, c.g, c.b, halo_a))
-
-  -- Chevrons climb the band on a staggered phase, fading in at the bottom and
-  -- out at the top so the loop never pops.
-  local edge = band * 0.28
-  for i = 0, count - 1 do
-    local t  = (now*speed + i*spacing) % band
-    local cy = y_bot - t
-    local a  = 1
-    if     t < edge        then a = t/edge
-    elseif t > band - edge then a = (band - t)/edge end
-    a = a*a
-    local sc = (0.7 + 0.3*a) * s * pulse
-    local w  = self.r_size * 2.5 * sc
-    local h  = self.r_size * 1.5 * sc
-    -- Dark backing then coloured face, both rotated -pi/2 to point up.
-    graphics.push(self.x, cy, -math.pi/2)
-      graphics.triangle(self.x, cy, w + 1.5, h + 1.5, Color(bg[-2].r, bg[-2].g, bg[-2].b, a))
-      graphics.triangle(self.x, cy, w, h, Color(c.r, c.g, c.b, a))
-    graphics.pop()
-  end
-
-  -- Rising sparkles recycle up the band, reinforcing the upward read instead
-  -- of orbiting like the other powerups.
+  -- Expanding ripple rings emanate from the orb -- three on a staggered phase
+  -- so a ripple is always in flight; each grows outward and fades as it goes.
+  local period = self.armed and 0.7 or 1.3
+  local r_min  = self.r_size * 1.2
+  local r_max  = self.r_size * 4.0
   for i = 0, 2 do
-    local t  = (now*speed*1.3 + i*(band/3)) % band
-    local sx = self.x + math.sin(now*3 + i*2.1) * (self.r_size + 3)
-    local sa = math.clamp((band - t)/edge, 0, 1)
-    graphics.rectangle(sx, y_bot - t, 1.4, 1.4, nil, nil, Color(fg[5].r, fg[5].g, fg[5].b, sa))
+    local ph = ((now/period) + i/3) % 1
+    local rr = r_min + (r_max - r_min)*ph
+    local a  = (1 - ph) * (self.armed and 0.65 or 0.45)
+    graphics.circle(self.x, self.y, rr, Color(c.r, c.g, c.b, a), 1.5)
   end
+
+  -- Soft square glow behind the rune; brighter + strobing when armed.
+  local glow_a = self.armed and (0.4 + 0.25*math.abs(math.sin(now*10))) or 0.22
+  graphics.rectangle(self.x, self.y, self.r_size*3.0, self.r_size*3.0, 2, 2,
+    Color(c.r, c.g, c.b, glow_a))
+
+  -- Body: the rune tumbles with the physics body, so rotate everything attached
+  -- to it by the body angle -- dark backing for contrast on the bg grid, then
+  -- the bright face. Scaled by the catch/deflect spring so it still pops when
+  -- grabbed. The rings above stay radial so the ripple reads at any rotation.
+  local ang = self:get_angle() or 0
+  local sz  = self.r_size * 2.3 * s
+  local aw  = self.r_size * 1.5 * s
+  local ah  = self.r_size * 1.3 * s
+  graphics.push(self.x, self.y, ang)
+    graphics.rectangle(self.x, self.y, sz + 1.5, sz + 1.5, 2, 2, bg[-2])
+    graphics.rectangle(self.x, self.y, sz, sz, 2, 2, c)
+  graphics.pop()
+
+  -- Stamped up-arrow: -pi/2 turns the right-facing triangle to point "up" within
+  -- the rune; adding the body angle makes it tumble rigidly with the square.
+  graphics.push(self.x, self.y, ang - math.pi/2)
+    graphics.triangle(self.x, self.y, aw, ah, bg[-2])
+  graphics.pop()
 end
 
 
 function Powerup:draw()
   self.spring:pull(0)
-  if self.kind == 'level_random' then return self:draw_level_chevrons() end
+  if self.kind == 'level_random' then return self:draw_level_rune() end
   local s     = self.spring.x
   local now   = time or 0
   local pulse = 1 + 0.10*math.sin(now*7)
-  -- Tier-1 rotates slowly, tier-2 spins faster + flips direction when armed
-  -- so the deflected orb reads as a different state from the falling orb.
-  local rot_speed = self.tier == 2 and 1.7 or 0.9
-  local rot       = now*rot_speed*(self.armed and -1 or 1)
+  -- Spin is read straight off the physics body, so what you see is the orb's
+  -- real angular velocity tumbling through the air (and the english from a
+  -- paddle deflect), not a cosmetic clock.
+  local rot = self:get_angle() or 0
 
   local inner_sz = self.r_size * 1.9 * s * pulse
   local outer_sz = self.r_size * 2.7 * pulse
@@ -263,10 +265,10 @@ function Powerup:draw()
       Color(self.color.r*0.65, self.color.g*0.65, self.color.b*0.85, 1))
   graphics.pop()
 
-  -- Tier-2 counter-rotating outline diamond. Pure yellow so it reads as a
-  -- "this is the rare one" marker even before the player learns the colours.
+  -- Tier-2 outline, rigidly attached to the body (offset 45 deg from the face
+  -- diamond so the pair reads as a spinning star). Pure yellow = "rare one".
   if self.tier == 2 then
-    graphics.push(self.x, self.y, -rot)
+    graphics.push(self.x, self.y, rot)
       graphics.rectangle(self.x, self.y, outer_sz, outer_sz, 1, 1, yellow[0], 1)
     graphics.pop()
   end
@@ -276,11 +278,11 @@ function Powerup:draw()
   graphics.print_centered(self.glyph, pixul_font, self.x, self.y - 4, 0, 1, 1, 0, 0, fg[0])
 
   -- Sparkle: a few tiny offsets that orbit the diamond, sold as "this is
-  -- not background scenery, grab me". Cheaper than spawning HitParticles
-  -- every frame; just a 2-dot rotating pattern.
+  -- not background scenery, grab me". Clock-driven so they keep orbiting even
+  -- after the body's spin damps out.
   local spark_r = self.r_size + 4
   for i = 0, 2 do
-    local a = rot*2 + i*(math.pi*2/3)
+    local a = now*2 + i*(math.pi*2/3)
     local sx, sy = self.x + math.cos(a)*spark_r, self.y + math.sin(a)*spark_r
     graphics.rectangle(sx, sy, 1.4, 1.4, nil, nil, fg[5])
   end
