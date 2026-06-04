@@ -172,8 +172,62 @@ function Powerup:fizzle()
 end
 
 
+-- Ascending-chevron look for the level-up orb (kind 'level_random'). Instead
+-- of the shared rotating diamond, a column of upward chevrons scrolls up and
+-- loops so the pickup visibly "rises" -- reads as LEVEL UP with no glyph. The
+-- tier-2 deflect/arm logic is unchanged; armed just scrolls faster + glows
+-- brighter, same juice language as the diamond.
+function Powerup:draw_level_chevrons()
+  local now   = time or 0
+  local s     = self.spring.x
+  local pulse = 1 + 0.10*math.sin(now*7)
+  local c     = self.color
+
+  local count   = 3
+  local spacing = self.r_size * 1.6
+  local band    = spacing * count
+  local speed   = self.armed and 90 or 46
+  local y_bot   = self.y + band*0.5
+
+  -- Slim halo column behind the stack; brighter + strobing when armed.
+  local halo_a = self.armed and (0.5 + 0.35*math.abs(math.sin(now*10))) or 0.28
+  graphics.rectangle(self.x, self.y, self.r_size*1.8*pulse, band*pulse, 2, 2,
+    Color(c.r, c.g, c.b, halo_a))
+
+  -- Chevrons climb the band on a staggered phase, fading in at the bottom and
+  -- out at the top so the loop never pops.
+  local edge = band * 0.28
+  for i = 0, count - 1 do
+    local t  = (now*speed + i*spacing) % band
+    local cy = y_bot - t
+    local a  = 1
+    if     t < edge        then a = t/edge
+    elseif t > band - edge then a = (band - t)/edge end
+    a = a*a
+    local sc = (0.7 + 0.3*a) * s * pulse
+    local w  = self.r_size * 2.5 * sc
+    local h  = self.r_size * 1.5 * sc
+    -- Dark backing then coloured face, both rotated -pi/2 to point up.
+    graphics.push(self.x, cy, -math.pi/2)
+      graphics.triangle(self.x, cy, w + 1.5, h + 1.5, Color(bg[-2].r, bg[-2].g, bg[-2].b, a))
+      graphics.triangle(self.x, cy, w, h, Color(c.r, c.g, c.b, a))
+    graphics.pop()
+  end
+
+  -- Rising sparkles recycle up the band, reinforcing the upward read instead
+  -- of orbiting like the other powerups.
+  for i = 0, 2 do
+    local t  = (now*speed*1.3 + i*(band/3)) % band
+    local sx = self.x + math.sin(now*3 + i*2.1) * (self.r_size + 3)
+    local sa = math.clamp((band - t)/edge, 0, 1)
+    graphics.rectangle(sx, y_bot - t, 1.4, 1.4, nil, nil, Color(fg[5].r, fg[5].g, fg[5].b, sa))
+  end
+end
+
+
 function Powerup:draw()
   self.spring:pull(0)
+  if self.kind == 'level_random' then return self:draw_level_chevrons() end
   local s     = self.spring.x
   local now   = time or 0
   local pulse = 1 + 0.10*math.sin(now*7)
