@@ -429,6 +429,11 @@ function BallPit:reset_run()
   self.upgrade_pending = false
   self.upgrade_choices = nil
   self.upgrade_selected = 1
+  -- Number of upgrade pickers still owed after the one currently on screen.
+  -- A single large XP gain can cross several level thresholds at once (see
+  -- gain_xp); each owed level queues here and is drawn one after another as the
+  -- player confirms each pick, instead of collapsing into a single picker.
+  self.pending_levelups = 0
   self.show_hero_labels = false
 
   -- Stuck-ball aim state. While stuck_count > 0, paddle freezes and the
@@ -1294,7 +1299,14 @@ function BallPit:level_up()
   Flash{group = self.effects, x = gw/2, y = gh/2, color = yellow_transparent_weak, duration = 0.15}
   camera:shake(3, 0.2, 90)
   self.paddle.hfx:use('hit', 0.3, 200, 10)
-  self:offer_upgrades()
+  -- If a picker is already open (e.g. one big XP pickup crossed several levels
+  -- in gain_xp's loop), queue this level so it gets its own picker after the
+  -- current pick is confirmed; otherwise open one now. See confirm_upgrade.
+  if self.upgrade_pending then
+    self.pending_levelups = self.pending_levelups + 1
+  else
+    self:offer_upgrades()
+  end
 end
 
 
@@ -1378,8 +1390,16 @@ function BallPit:confirm_upgrade()
     self:add_hero(choice.character)
   end
   confirm1:play{volume = 0.4}
-  self.upgrade_pending = false
-  self.upgrade_choices = nil
+  -- More levels were earned than pickers shown so far: immediately open the
+  -- next one instead of closing, so a multi-level XP gain yields one picker per
+  -- level. offer_upgrades rebuilds a fresh draft and keeps upgrade_pending set.
+  if self.pending_levelups > 0 then
+    self.pending_levelups = self.pending_levelups - 1
+    self:offer_upgrades()
+  else
+    self.upgrade_pending = false
+    self.upgrade_choices = nil
+  end
 end
 
 

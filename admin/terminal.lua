@@ -17,6 +17,7 @@
 --   god                        — toggle invulnerability
 --   xp <n>                     — gain n xp (will trigger level-ups)
 --   level                      — open the level-up upgrade picker
+--   phase [2|3]                — drop the wave-10 boss's HP to the next phase
 --   cls                        — clear the terminal log
 
 Terminal = Object:extend()
@@ -179,6 +180,7 @@ function Terminal:register_commands()
     t:log("  god                     toggle invulnerability")
     t:log("  xp <n>                  gain n xp")
     t:log("  level                   open level-up picker")
+    t:log("  phase [2|3]             drop boss hp to next phase")
     t:log("  powerups                list powerup kinds")
     t:log("  powerup <kind>          apply a powerup effect directly")
     t:log("  dropp <kind>            spawn a powerup orb above paddle")
@@ -273,6 +275,30 @@ function Terminal:register_commands()
   C.level = function(t, args)
     t.arena:level_up()
     t:log("level-up picker opened")
+  end
+
+  -- Drop the wave-10 boss's HP to the next phase boundary and run that phase
+  -- transition. Bare `phase` steps one phase up; `phase 3` jumps straight to
+  -- the final phase. Phase 2 begins at 2/3 max HP, phase 3 at 1/3.
+  C.phase = function(t, args)
+    local boss = t.arena.boss
+    if not (boss and not boss.dead) then t:log("no boss alive (wave 10 only)"); return end
+    local target
+    if args[1] then
+      target = tonumber(args[1])
+      if not target then t:log("usage: phase [2|3]"); return end
+      target = math.floor(target)
+    else
+      target = boss.phase + 1
+    end
+    if target > 3 then t:log("boss has only 3 phases"); return end
+    if target <= boss.phase then t:log("boss already at phase " .. boss.phase); return end
+    local frac = (target >= 3) and (1/3) or (2/3)
+    boss.hp = math.min(boss.hp, boss.max_hp*frac - 1)
+    -- enter_phase only steps a single phase and guards against going backwards,
+    -- so a 1->3 jump walks through each intermediate phase in turn.
+    for p = boss.phase + 1, target do boss:enter_phase(p) end
+    t:log("boss -> phase " .. boss.phase .. "  (hp " .. math.floor(boss.hp) .. "/" .. math.floor(boss.max_hp) .. ")")
   end
 
   C.powerups = function(t, args)

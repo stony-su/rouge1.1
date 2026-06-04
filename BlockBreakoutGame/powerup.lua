@@ -106,7 +106,7 @@ function Powerup:init(args)
   self:set_velocity(random:float(-40, 40), random:float(-15, -45))
   self:set_angular_velocity(random:float(5, 9) * (random:float(0, 1) > 0.5 and 1 or -1))
 
-  self.t:after(self.life, function() self.dead = true end)
+  self.t:after(self.life, function() self.dead = true end, 'despawn')
 end
 
 
@@ -168,6 +168,11 @@ function Powerup:deflect_off_paddle()
   local speed = 240                                   -- bounce launch; higher = pops up higher
   self:set_velocity(math.cos(ang)*speed, math.sin(ang)*speed)
   self.deflect_count = self.deflect_count + 1
+
+  -- A successful bounce refreshes the despawn timer: as long as you keep the orb
+  -- in play you never run out the clock mid-chain (only a whiff or 16s of total
+  -- inactivity drops it). This is what fixes multi-bounce level orbs timing out.
+  self.t:after(self.life, function() self.dead = true end, 'despawn')
 
   -- Spin english from where it hit, with a floor so a dead-centre bounce never
   -- freezes the tumble -- that floor is what keeps tier-2 orbs visibly spinning

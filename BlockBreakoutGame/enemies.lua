@@ -145,6 +145,11 @@ function EnemyProjectile:init(args)
   -- mixin's set_as_circle (engine/game/physics.lua) writes to self.shape with
   -- a Circle instance, which would clobber any value we put there.
   self.kind         = self.kind or 'spike'
+  -- Unbreakable bullets are fired only by the boss: hero balls phase straight
+  -- through them (see the mask tweak below) and can never destroy them, so the
+  -- player must dodge with the paddle instead of batting them away. Defaults
+  -- off, so every existing brick-enemy caller keeps fully breakable shots.
+  self.unbreakable  = self.unbreakable or false
   self.spin_t      = random:float(0, math.pi*2)
   self.spin_speed  = random:float(4, 7) * (random:bool(50) and 1 or -1)
   self.trail       = {}
@@ -159,6 +164,21 @@ function EnemyProjectile:init(args)
   self:set_mass(0.2)
   self:set_velocity(math.cos(self.angle)*self.speed, math.sin(self.angle)*self.speed)
   self.hfx:add('hit', 1)
+
+  -- Unbreakable: drop the 'ball' category from this fixture's collide mask so
+  -- hero balls pass through without a bounce, a collision callback, or damage.
+  -- We start from the shared 'brick' don't-collide masks (paddle/brick/wall)
+  -- and add 'ball', leaving the manual paddle hit-test in update() untouched.
+  if self.unbreakable and self.fixture and self.group and self.group.collision_tags then
+    local brick_tag = self.group.collision_tags['brick']
+    local ball_tag  = self.group.collision_tags['ball']
+    if brick_tag and ball_tag then
+      local m = {}
+      for _, c in ipairs(brick_tag.masks) do m[#m + 1] = c end
+      m[#m + 1] = ball_tag.category
+      self.fixture:setMask(unpack(m))
+    end
+  end
 
   -- Optional self-destruct timer so short-range bullet-hell shots don't pile
   -- up forever when fired away from the paddle.
@@ -246,7 +266,14 @@ function EnemyProjectile:draw()
   elseif self.kind == 'bolt'     then self:draw_bolt()
   elseif self.kind == 'bomb'     then self:draw_bomb()
   elseif self.kind == 'boss_orb' then self:draw_boss_orb()
+  elseif self.kind == 'star'     then self:draw_star()
+  elseif self.kind == 'comet'    then self:draw_comet()
+  elseif self.kind == 'diamond'  then self:draw_diamond()
   else                                self:draw_spike() end
+  -- Unbreakable (boss) bullets get a bright crystalline shell on top of
+  -- whatever shape they are, so the player can tell at a glance which shots
+  -- can't be blocked by a ball.
+  if self.unbreakable then self:draw_armor() end
 end
 
 
@@ -380,7 +407,72 @@ function EnemyProjectile:draw_boss_orb()
   graphics.circle(self.x, self.y, self.r_size*0.28*s,  fg[5])
 end
 
+
+-- 'star' (boss flower spiral): a spinning 4-point star, clearly different from
+-- the round boss_orb so overlapping flower + spiral patterns stay legible.
+function EnemyProjectile:draw_star()
+  self:draw_trail(self.color)
+  local s   = self.hfx.hit.x or 1
+  local col = self.hfx.hit.f and fg[0] or self.color
+  local r   = self.r_size*s
+  local verts = {}
+  for i = 0, 7 do
+    local a  = (self.spin_t or 0) + i*(math.pi/4)
+    local rr = (i % 2 == 0) and r*2.2 or r*0.85
+    verts[#verts + 1] = self.x + math.cos(a)*rr
+    verts[#verts + 1] = self.y + math.sin(a)*rr
+  end
+  graphics.polygon(verts, col)
+  graphics.circle(self.x, self.y, r*0.5, fg[5])
+end
+
+
+-- 'comet' (boss homing seeker): a glowing pulsing head riding its own trail,
+-- so a curving shot reads as "tracking you" rather than a stray spiral bullet.
+function EnemyProjectile:draw_comet()
+  self:draw_trail(self.color)
+  local s     = self.hfx.hit.x or 1
+  local col   = self.hfx.hit.f and fg[0] or self.color
+  local pulse = 1 + math.sin((time or 0)*12 + (self.spin_t or 0))*0.3
+  graphics.circle(self.x, self.y, (self.r_size + 2.5)*pulse,
+                  Color(col.r, col.g, col.b, 0.30))
+  graphics.circle(self.x, self.y, self.r_size*s, col)
+  graphics.circle(self.x, self.y, self.r_size*0.45*s, fg[5])
+end
+
+
+-- 'diamond' (boss gap wall): a slowly spinning rhombus. A flat row of these
+-- marching down reads cleanly as a barrier with a gap to slip the paddle into.
+function EnemyProjectile:draw_diamond()
+  self:draw_trail(self.color)
+  local s   = self.hfx.hit.x or 1
+  local col = self.hfx.hit.f and fg[0] or self.color
+  local r   = self.r_size*1.6*s
+  local a   = (self.spin_t or 0)*0.5
+  local ca, sa = math.cos(a), math.sin(a)
+  local function rot(lx, ly) return self.x + lx*ca - ly*sa, self.y + lx*sa + ly*ca end
+  local x1, y1 = rot(0, -r)
+  local x2, y2 = rot(r*0.7, 0)
+  local x3, y3 = rot(0, r)
+  local x4, y4 = rot(-r*0.7, 0)
+  graphics.polygon({x1, y1, x2, y2, x3, y3, x4, y4}, col)
+  graphics.circle(self.x, self.y, self.r_size*0.4*s, fg[5])
+end
+
+
+-- Overlay drawn on top of any unbreakable (boss) bullet: a bright shell that
+-- pulses on its own beat, signalling "this one can't be blocked."
+function EnemyProjectile:draw_armor()
+  local p = 0.55 + 0.45*math.sin((time or 0)*10 + (self.spin_t or 0))
+  graphics.circle(self.x, self.y, self.r_size*1.9 + 0.5, Color(1, 1, 1, 0.20*p), 1)
+end
+
+
 function EnemyProjectile:take_damage(amount, color)
+  -- Unbreakable boss bullets can't be destroyed. Balls already phase through
+  -- them (see the init mask) and the arena's AoE abilities skip non-Brick
+  -- objects, so reaching here is unexpected — absorb it rather than dying.
+  if self.unbreakable then return end
   self.hfx:use('hit', 0.25, 200, 10)
   spawn_burst(main.current.effects, self.x, self.y, color or self.color, 3, 40, 80)
   self.dead = true
@@ -512,6 +604,18 @@ function Boss:init(args)
   self.x_anchor = (arena and arena:arena_center_x()) or gw/2
   self.y_anchor = self.y
 
+  -- Movement state machine. Instead of one fixed sine sweep, the boss runs a
+  -- phase-gated pool of named path modes (see choose_move_mode / movement_point)
+  -- and eases toward a per-mode target point each frame. anchor_target lets the
+  -- orbit centre roam so the fight isn't permanently glued to mid-screen.
+  self.move_mode     = 'sweep'
+  self.move_t        = 0
+  self.move_dur      = 3
+  self.move_ease     = 3.0
+  self.dash_x        = self.x
+  self.anchor_target = self.x_anchor
+  self:choose_move_mode()
+
   spawn1:play{volume = 0.5, pitch = 0.7}
 
   -- Schedule attacks. Phase 3 also runs a separate minion-drop timer started
@@ -546,22 +650,52 @@ function Boss:enter_phase(phase)
 end
 
 
+-- Every projectile the boss fires routes through here, so it always spawns at
+-- the boss's live position, in its current phase colour, and — crucially —
+-- flagged unbreakable. Returns the projectile (or nil), and no-ops safely when
+-- called from a deferred timer after the world is gone / the boss has died.
+function Boss:fire(opts)
+  local arena = main.current
+  if not (arena and arena.main and arena.main.world and not self.dead) then return end
+  opts.group = arena.main
+  if opts.x == nil then opts.x = self.x end
+  if opts.y == nil then opts.y = self.y end
+  opts.color = opts.color or self.color
+  if opts.unbreakable == nil then opts.unbreakable = true end
+  -- Boss bullets must survive long enough to cross the tall (~600px) arena and
+  -- then despawn at the edge via EnemyProjectile's off-screen cleanup, instead
+  -- of self-destructing mid-flight. The per-attack `life` values were far
+  -- shorter than the slow bullets' arena-crossing time, so enforce a floor.
+  opts.life = math.max(opts.life or 0, 16)
+  return EnemyProjectile(opts)
+end
+
+
 function Boss:choose_attack()
   if self.dead then return end
-  -- Attack pool unlocks with phase. Phase 1 alternates spiral + aimed
-  -- shotgun; phase 2 adds the 360° ring blast.
+  -- Attack pool unlocks with phase; each tier layers denser / harder-to-read
+  -- patterns on top of the last.
+  --   p1: spiral, aimed shotgun, fast snipe darts
+  --   p2: + 360° ring, multi-arm flower spiral, sweeping gap wall
+  --   p3: + counter-rotating double spiral, homing seekers (shotgun drops out;
+  --       the phase-3 pressure comes from the denser radial patterns instead)
   local pool
   if self.phase == 1 then
-    pool = {'spiral', 'shotgun'}
+    pool = {'spiral', 'shotgun', 'snipe'}
   elseif self.phase == 2 then
-    pool = {'spiral', 'shotgun', 'ring'}
+    pool = {'spiral', 'shotgun', 'ring', 'snipe', 'flower', 'wall'}
   else
-    pool = {'spiral', 'shotgun', 'ring', 'shotgun'}  -- shotgun doubled = more aimed pressure
+    pool = {'ring', 'flower', 'wall', 'spiral_double', 'homing', 'snipe', 'flower'}
   end
   local pick = pool[random:int(1, #pool)]
-  if     pick == 'spiral'  then self:attack_spiral()
-  elseif pick == 'shotgun' then self:attack_shotgun()
-  elseif pick == 'ring'    then self:attack_ring() end
+  if     pick == 'spiral'        then self:attack_spiral()
+  elseif pick == 'shotgun'       then self:attack_shotgun()
+  elseif pick == 'ring'          then self:attack_ring()
+  elseif pick == 'snipe'         then self:attack_snipe()
+  elseif pick == 'flower'        then self:attack_flower()
+  elseif pick == 'wall'          then self:attack_wall()
+  elseif pick == 'spiral_double' then self:attack_spiral_double()
+  elseif pick == 'homing'        then self:attack_homing() end
 end
 
 
@@ -577,12 +711,50 @@ function Boss:attack_spiral()
   local dir  = random:bool(50) and 1 or -1
   for i = 0, 15 do
     self.t:after(i*0.1, function()
-      if arena.main and arena.main.world and not self.dead then
-        local a = base + dir * i * 0.42
-        -- Boss spiral: slow, matches the spiraler enemy's bullet tempo so
-        -- both attack types read as "swirling, lingering" threats.
-        EnemyProjectile{group = arena.main, x = self.x, y = self.y, color = self.color,
-                        kind = 'boss_orb', angle = a, speed = 55, r_size = 3.2, life = 4}
+      -- Boss spiral: slow, matches the spiraler enemy's bullet tempo so both
+      -- attack types read as "swirling, lingering" threats.
+      self:fire{kind = 'boss_orb', angle = base + dir*i*0.42, speed = 55, r_size = 3.2, life = 4}
+    end)
+  end
+end
+
+
+-- Counter-rotating double spiral (phase 3): two arms turning in opposite
+-- directions at once, weaving a much denser lattice than the single spiral.
+-- Slightly faster per-shot cadence so the screen fills quickly.
+function Boss:attack_spiral_double()
+  if self.dead then return end
+  local arena = main.current
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 26,
+                color = self.color, duration = 0.3}
+  shoot1:play{volume = 0.32, pitch = 0.78}
+  local base = random:float(0, 2*math.pi)
+  for i = 0, 17 do
+    self.t:after(i*0.08, function()
+      self:fire{kind = 'boss_orb', angle = base + i*0.34,           speed = 52, r_size = 3, life = 4.5}
+      self:fire{kind = 'boss_orb', angle = base + math.pi - i*0.34, speed = 52, r_size = 3, life = 4.5}
+    end)
+  end
+end
+
+
+-- Multi-arm "flower" spiral: several arms fired together and rotated each step,
+-- painting overlapping petals. Uses the spinning star bullet so it reads as
+-- distinct from the round boss_orb spirals even when they overlap.
+function Boss:attack_flower()
+  if self.dead then return end
+  local arena = main.current
+  local arms  = (self.phase >= 3) and 5 or 4
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 24,
+                color = self.color, duration = 0.3}
+  shoot1:play{volume = 0.3, pitch = 1.0}
+  local base = random:float(0, 2*math.pi)
+  local dir  = random:bool(50) and 1 or -1
+  for i = 0, 13 do
+    self.t:after(i*0.085, function()
+      for arm = 0, arms - 1 do
+        local a = base + dir*i*0.30 + arm*(2*math.pi/arms)
+        self:fire{kind = 'star', angle = a, speed = 58, r_size = 3, life = 4.5}
       end
     end)
   end
@@ -599,40 +771,119 @@ function Boss:attack_shotgun()
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 16,
                 color = self.color, duration = 0.4}
   self.t:after(0.4, function()
-    if arena.main and arena.main.world and not self.dead then
-      shoot1:play{volume = 0.32, pitch = 0.95}
-      local base = math.atan2(arena.paddle.y - self.y, arena.paddle.x - self.x)
-      for _, off in ipairs({-0.32, -0.16, 0, 0.16, 0.32}) do
-        -- Boss shotgun: fast 5-shot fan. Faster than the boss ring blast so
-        -- the aimed pattern feels more urgent than the radial spray.
-        EnemyProjectile{group = arena.main, x = self.x, y = self.y, color = self.color,
-                        kind = 'boss_orb', angle = base + off, speed = 110, dmg = 2, r_size = 4}
-      end
+    if not (arena.main and arena.main.world and not self.dead) then return end
+    shoot1:play{volume = 0.32, pitch = 0.95}
+    local base = math.atan2(arena.paddle.y - self.y, arena.paddle.x - self.x)
+    for _, off in ipairs({-0.32, -0.16, 0, 0.16, 0.32}) do
+      -- Boss shotgun: fast 5-shot fan. Faster than the ring blast so the aimed
+      -- pattern feels more urgent than the radial spray.
+      self:fire{kind = 'boss_orb', angle = base + off, speed = 110, dmg = 2, r_size = 4}
     end
   end)
 end
 
 
--- Ring blast: 0.6s expanding telegraph, then 18 projectiles fired outward in
--- a perfect 360° circle.
+-- Snipe: a short telegraph then three fast darts, each RE-AIMED at the paddle's
+-- live position as it fires, so a player who just strafes gets tracked. Much
+-- faster and narrower than the shotgun fan, rewarding a committed dodge.
+function Boss:attack_snipe()
+  if self.dead then return end
+  local arena = main.current
+  TelegraphRing{group = arena.effects, x = arena.paddle.x, y = arena.paddle.y - 4,
+                radius = 14, color = self.color, duration = 0.45}
+  for shot = 0, 2 do
+    self.t:after(0.45 + shot*0.13, function()
+      if not (arena.main and arena.main.world and not self.dead) then return end
+      shoot1:play{volume = 0.3, pitch = 1.15}
+      local a = math.atan2(arena.paddle.y - self.y, arena.paddle.x - self.x)
+      self:fire{kind = 'dart', angle = a, speed = 150, dmg = 2, r_size = 3.4, life = 5}
+    end)
+  end
+end
+
+
+-- Ring blast: 0.6s expanding telegraph, then 18 projectiles fired outward in a
+-- perfect 360° circle. Phase 3 adds a second, slower ring offset half a step,
+-- doubling it into a denser 36-shot lattice.
 function Boss:attack_ring()
   if self.dead then return end
   local arena = main.current
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 50,
                 color = self.color, duration = 0.6}
   self.t:after(0.6, function()
-    if arena.main and arena.main.world and not self.dead then
-      shoot1:play{volume = 0.4, pitch = 0.8}
-      explosion1:play{volume = 0.25, pitch = 1.3}
-      Flash{group = arena.effects, x = gw/2, y = gh/2,
-            color = Color(self.color.r, self.color.g, self.color.b, 0.25), duration = 0.1}
-      for i = 0, 17 do
-        local a = i*(2*math.pi/18)
-        -- Boss ring blast: medium speed. The 360° wall is a wide spray, so
-        -- a moderate speed gives players room to slip between adjacent shots.
-        EnemyProjectile{group = arena.main, x = self.x, y = self.y, color = self.color,
-                        kind = 'boss_orb', angle = a, speed = 80, life = 4}
+    if not (arena.main and arena.main.world and not self.dead) then return end
+    shoot1:play{volume = 0.4, pitch = 0.8}
+    explosion1:play{volume = 0.25, pitch = 1.3}
+    Flash{group = arena.effects, x = gw/2, y = gh/2,
+          color = Color(self.color.r, self.color.g, self.color.b, 0.25), duration = 0.1}
+    for i = 0, 17 do
+      local a = i*(2*math.pi/18)
+      -- Medium speed so players can slip between adjacent shots.
+      self:fire{kind = 'boss_orb', angle = a, speed = 80, life = 4}
+      if self.phase >= 3 then
+        self:fire{kind = 'boss_orb', angle = a + math.pi/18, speed = 55, life = 5}
       end
+    end
+  end)
+end
+
+
+-- Sweeping gap wall: a full-width row of bullets spawns at the top of the arena
+-- and marches straight down, leaving one (phase 1-2) or two (phase 3) gaps the
+-- player must line the paddle up with. Telegraphed by per-column rings during
+-- the wind-up; the gap columns get no ring, so the safe lane is readable.
+function Boss:attack_wall()
+  if self.dead then return end
+  local arena = main.current
+  local n     = 13
+  local x1    = arena.x1 + 10
+  local x2    = arena.x2 - 10
+  local y0    = arena.y1 + 8
+  -- Pick gap columns, avoiding the two outermost so the gap stays reachable.
+  local gaps  = { random:int(1, n - 2) }
+  if self.phase >= 3 then
+    local g2
+    repeat g2 = random:int(1, n - 2) until math.abs(g2 - gaps[1]) >= 3
+    gaps[#gaps + 1] = g2
+  end
+  local function is_gap(i)
+    for _, g in ipairs(gaps) do if i == g then return true end end
+    return false
+  end
+  for i = 0, n - 1 do
+    if not is_gap(i) then
+      local px = math.lerp(i/(n - 1), x1, x2)
+      TelegraphRing{group = arena.effects, x = px, y = y0, radius = 9,
+                    color = self.color, duration = 0.7}
+    end
+  end
+  self.t:after(0.7, function()
+    if not (arena.main and arena.main.world and not self.dead) then return end
+    shoot1:play{volume = 0.4, pitch = 0.7}
+    for i = 0, n - 1 do
+      if not is_gap(i) then
+        local px = math.lerp(i/(n - 1), x1, x2)
+        self:fire{x = px, y = y0, kind = 'diamond', angle = math.pi/2, speed = 64, life = 8}
+      end
+    end
+  end)
+end
+
+
+-- Homing seekers (phase 3): a few slow orbs that gently curve toward the
+-- paddle. Turn rate is deliberately low so committed movement still shakes
+-- them, but they punish standing still after another pattern goes out.
+function Boss:attack_homing()
+  if self.dead then return end
+  local arena = main.current
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 20,
+                color = self.color, duration = 0.4}
+  self.t:after(0.4, function()
+    if not (arena.main and arena.main.world and not self.dead) then return end
+    shoot1:play{volume = 0.3, pitch = 0.9}
+    for _, off in ipairs({-0.5, 0, 0.5}) do
+      self:fire{kind = 'comet', angle = math.pi/2 + off, speed = 60, r_size = 3.4,
+                life = 7, homing = true, homing_turn = 0.85}
     end
   end)
 end
@@ -652,6 +903,99 @@ function Boss:spawn_minions()
       end
     end)
   end
+end
+
+
+-- Picks the next movement path mode from a phase-gated pool and sets up its
+-- duration / easing. Higher phases unlock more aggressive, harder-to-read modes
+-- (strafe, dash, weave). Avoids repeating the current mode back-to-back.
+function Boss:choose_move_mode()
+  local arena   = main.current
+  local arena_w = (arena and (arena.x2 - arena.x1)) or gw
+  local center  = (arena and arena:arena_center_x()) or gw/2
+  local half    = arena_w*0.34
+
+  local pool
+  if self.phase == 1 then
+    pool = {'sweep', 'sweep', 'figure8', 'pendulum'}
+  elseif self.phase == 2 then
+    pool = {'figure8', 'pendulum', 'orbit', 'strafe', 'figure8'}
+  else
+    pool = {'orbit', 'strafe', 'weave', 'dash', 'weave', 'strafe'}
+  end
+
+  -- Re-roll up to a few times so we don't immediately repeat the same mode.
+  local pick = self.move_mode
+  for _ = 1, 6 do
+    pick = pool[random:int(1, #pool)]
+    if pick ~= self.move_mode then break end
+  end
+  self.move_mode = pick
+  self.move_t    = 0
+  self.move_dur  = random:float(2.4, 4.2)
+  self.move_ease = 3.0
+
+  if pick == 'dash' then
+    -- Telegraphed lunge toward the player's current column: short, snappy, and
+    -- dips slightly downward so it reads as a committed strike.
+    self.move_dur  = random:float(0.7, 1.1)
+    self.move_ease = 7.0
+    local px = (arena and arena.paddle and arena.paddle.x) or self.x
+    self.dash_x = math.clamp(px + random:float(-28, 28), center - half, center + half)
+    if arena then
+      TelegraphRing{group = arena.effects, x = self.dash_x, y = self.y + 16,
+                    radius = 24, color = self.color, duration = 0.3}
+    end
+  elseif pick == 'strafe' then
+    -- Quick slide to one far side, then hold there until the next pick.
+    self.move_dur  = random:float(1.0, 1.7)
+    self.move_ease = 4.5
+    self.dash_x = center + (random:bool(50) and 1 or -1)*half*random:float(0.7, 1.0)
+  elseif pick == 'orbit' then
+    self.move_ease = 2.4
+  end
+
+  -- Roam the orbit centre within the middle third so the boss doesn't sit glued
+  -- to mid-screen; update() drifts x_anchor toward this slowly.
+  self.anchor_target = center + random:float(-arena_w*0.12, arena_w*0.12)
+end
+
+
+-- Returns the target point for the current movement mode at scaled time `t`.
+-- The boss eases toward this each frame (see update); modes differ in path
+-- shape, amplitude and how much vertical travel they use.
+function Boss:movement_point(t, arena_w)
+  local cx = self.x_anchor
+  local A  = arena_w*0.34
+  local m  = self.move_mode
+  local tx, ty
+  if m == 'figure8' then
+    -- Lissajous 8: horizontal at f, vertical at 2f → a crossing loop.
+    tx = cx + math.sin(t*0.85)*A
+    ty = self.y_anchor + math.sin(t*1.70)*22
+  elseif m == 'pendulum' then
+    -- Eased swing that lingers at the extremes (a beat of menace before fire).
+    local s = math.sin(t*0.8)
+    tx = cx + (s < 0 and -1 or 1)*(math.abs(s)^0.55)*A
+    ty = self.y_anchor + math.sin(t*1.6)*7
+  elseif m == 'orbit' then
+    tx = cx + math.cos(t*1.05)*A*0.75
+    ty = self.y_anchor + math.sin(t*1.05)*26
+  elseif m == 'weave' then
+    -- Two summed harmonics → an erratic serpentine that's hard to read.
+    tx = cx + math.sin(t*0.75)*A*0.62 + math.sin(t*1.9 + 1.3)*A*0.34
+    ty = self.y_anchor + math.sin(t*1.35)*18 + math.sin(t*2.7)*7
+  elseif m == 'dash' then
+    tx = self.dash_x
+    ty = self.y_anchor + 16
+  elseif m == 'strafe' then
+    tx = self.dash_x
+    ty = self.y_anchor + math.sin(t*1.4)*5
+  else  -- 'sweep' (default): the original gentle horizontal hover.
+    tx = cx + math.sin(t*0.6)*A
+    ty = self.y_anchor + math.sin(t*1.1)*5
+  end
+  return tx, ty
 end
 
 
@@ -691,13 +1035,34 @@ function Boss:update(dt)
     if self.curse_timer <= 0 then self.curse_mult = 1 end
   end
 
-  -- Sinusoidal hover. arena_w*0.35 keeps the boss within the play area.
+  -- ---- Path logic --------------------------------------------------------
+  -- Advance the mode timer, re-pick a path mode when it elapses, and drift the
+  -- orbit centre toward its roaming target so the boss keeps repositioning.
+  self.move_t = self.move_t + dt
+  if self.move_t >= self.move_dur then self:choose_move_mode() end
+
   local arena   = main.current
   local arena_w = (arena and (arena.x2 - arena.x1)) or gw
-  local t       = self.spawn_t * speed_factor
-  local nx = self.x_anchor + math.sin(t*0.6)  * (arena_w*0.32)
-  local ny = self.y_anchor + math.sin(t*1.1)  * 4
-  self:set_position(nx, ny)
+  self.x_anchor = self.x_anchor + (self.anchor_target - self.x_anchor)*math.min(1, dt*0.4)
+
+  -- Per-mode target point (time scaled by speed_factor so slow / phase changes
+  -- stretch or compress the whole path), then ease toward it.
+  local t      = self.spawn_t * speed_factor
+  local tx, ty = self:movement_point(t, arena_w)
+
+  -- Clamp inside the arena and pinned to the upper region, so no mode can shove
+  -- the boss off-screen or down onto the paddle line.
+  local margin  = self.r_outer + 4
+  local cx1     = (arena and arena.x1 or 0) + margin
+  local cx2     = (arena and arena.x2 or gw) - margin
+  local ay1     = (arena and arena.y1) or 0
+  local arena_h = (arena and (arena.y2 - arena.y1)) or gh
+  tx = math.clamp(tx, cx1, cx2)
+  ty = math.clamp(ty, ay1 + self.r_outer + 6, ay1 + arena_h*0.42)
+
+  -- Frame-rate-independent ease, clamped so a frame spike can't overshoot.
+  local k = math.min(1, self.move_ease * speed_factor * dt)
+  self:set_position(self.x + (tx - self.x)*k, self.y + (ty - self.y)*k)
 end
 
 
