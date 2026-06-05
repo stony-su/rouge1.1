@@ -163,6 +163,8 @@ function BallPit:init(name)
     {scale = 2.0,  label = '2x     960 x 1312'},
   }
   self.settings_open = false
+  self.tutorial_open = false
+  self.tutorial_page = 1
   self.settings_selected = 1
   for i, opt in ipairs(self.scale_options) do
     if math.abs(opt.scale - sx) < 0.01 then self.settings_selected = i; break end
@@ -198,13 +200,17 @@ end
 
 
 function BallPit:update_settings(dt)
+  local tut_idx = #self.scale_options + 1
+
+  -- Hover priority: scale rows first, then the HOW TO PLAY button below them.
   local hovered = self:settings_option_under_mouse()
+  if not hovered and self:tutorial_button_under_mouse() then hovered = tut_idx end
   if hovered then
     if hovered ~= self.settings_selected then
       self.settings_selected = hovered
       ui_switch1:play{volume = 0.25}
     end
-    if input.click.pressed then self:apply_scale_option(self.settings_selected) end
+    if input.click.pressed then self:activate_settings_selection() end
   end
 
   if input.aim_left.pressed or input.move_left.pressed then
@@ -212,10 +218,10 @@ function BallPit:update_settings(dt)
     ui_switch1:play{volume = 0.3}
   end
   if input.aim_right.pressed or input.move_right.pressed then
-    self.settings_selected = math.min(#self.scale_options, self.settings_selected + 1)
+    self.settings_selected = math.min(tut_idx, self.settings_selected + 1)
     ui_switch1:play{volume = 0.3}
   end
-  if input.confirm.pressed then self:apply_scale_option(self.settings_selected) end
+  if input.confirm.pressed then self:activate_settings_selection() end
 end
 
 
@@ -240,9 +246,15 @@ function BallPit:draw_settings()
     graphics.print_centered(label, pixul_font, gw/2, oy - 4, 0, 1, 1, 0, 0, color)
   end
 
-  graphics.print_centered('arrows or mouse to choose, enter or click to apply',
-    pixul_font, gw/2, gh/2 + 72, 0, 1, 1, 0, 0, fg_alt[0])
-  graphics.print_centered('press ESC to close', pixul_font, gw/2, gh/2 + 86, 0, 1, 1, 0, 0, fg_alt[0])
+  -- HOW TO PLAY button: selectable as the row just past the last scale option.
+  local tut_on = (self.settings_selected == #self.scale_options + 1)
+  graphics.rectangle(gw/2, gh/2 + 60, 200, 16, 3, 3, bg[-1])
+  graphics.rectangle(gw/2, gh/2 + 60, 200, 16, 3, 3, tut_on and green[0] or fg_transparent_weak, tut_on and 2 or 1)
+  graphics.print_centered('HOW TO PLAY', pixul_font, gw/2, gh/2 + 56, 0, 1, 1, 0, 0, tut_on and green[0] or fg[0])
+
+  graphics.print_centered('arrows or mouse to choose, enter or click to select',
+    pixul_font, gw/2, gh/2 + 80, 0, 1, 1, 0, 0, fg_alt[0])
+  graphics.print_centered('press ESC to close', pixul_font, gw/2, gh/2 + 92, 0, 1, 1, 0, 0, fg_alt[0])
 
   -- Hero roster lives below the close-hint, in the otherwise-empty bottom
   -- half of the settings overlay. Hovering a ball pops a name/level/ability
@@ -317,6 +329,326 @@ function BallPit:draw_settings_heroes()
     local tip = string.upper(h.character) .. '  lv ' .. (h.level or 1)
                 .. '  -  ' .. self:hero_ability_blurb(h.character)
     graphics.print_centered(tip, pixul_font, gw/2, tip_y, 0, 1, 1, 0, 0, h.color)
+  end
+end
+
+
+-- ----- Tutorial overlay -----
+-- Opened from the ESC settings menu (HOW TO PLAY button) and layered on top
+-- of it. A small paged "how to play" guide: each page pairs a few lines of
+-- text with a diagram drawn from the same primitives the live game uses, so
+-- the visuals match what the player sees in the arena. Gameplay is frozen
+-- while it's up, exactly like the settings overlay.
+
+-- Small filled arrowhead pointing 'left' / 'right' / 'up' / 'down'.
+local function tut_arrow(x, y, size, dir, color)
+  local s = size
+  local v
+  if dir == 'left' then
+    v = {x - s, y, x + s*0.6, y - s, x + s*0.6, y + s}
+  elseif dir == 'right' then
+    v = {x + s, y, x - s*0.6, y - s, x - s*0.6, y + s}
+  elseif dir == 'up' then
+    v = {x, y - s, x - s, y + s*0.6, x + s, y + s*0.6}
+  else
+    v = {x, y + s, x - s, y - s*0.6, x + s, y - s*0.6}
+  end
+  graphics.polygon(v, color)
+end
+
+local TUTORIAL_PAGES = {
+  {
+    heading = 'CONTROLS',
+    visual  = 'controls',
+    lines = {
+      'A and D slide the paddle, W and S dodge',
+      'hold SPACE to aim, release to launch',
+      'LEFT and RIGHT arrows fine-tune the aim',
+    },
+  },
+  {
+    heading = 'BREAK THE BLOCKS',
+    visual  = 'bricks',
+    lines = {
+      'enemy blocks drift down from the top',
+      'bounce ball-heroes into them to break them',
+      'if a block reaches the paddle you lose a heart',
+    },
+  },
+  {
+    heading = 'COLLECT XP',
+    visual  = 'xp',
+    lines = {
+      'broken blocks drop XP orbs - sweep them up',
+      'fill the bar to level up and draft a hero',
+      'more heroes means more balls in play',
+    },
+  },
+  {
+    heading = 'COMBO METER',
+    visual  = 'combo',
+    lines = {
+      'chain block hits to climb the rank ladder',
+      'higher rank means a bigger damage bonus',
+      'dropping a ball in the pit resets the streak',
+    },
+  },
+  {
+    heading = 'POWERUPS',
+    visual  = 'powerups',
+    lines = {
+      'catch falling powerups for buffs',
+      'glowing orbs - bounce once, then catch',
+      'survive the waves - wave 10 is the BOSS',
+    },
+  },
+}
+
+-- Shared geometry for the tutorial nav arrows, used by both the hit-test and
+-- the draw so they stay aligned. cy matches the diagram panel centre below.
+local TUT_PANEL_CY = 210
+local TUT_ARROW_X  = 52
+
+
+function BallPit:activate_settings_selection()
+  if self.settings_selected == #self.scale_options + 1 then
+    self:open_tutorial()
+  else
+    self:apply_scale_option(self.settings_selected)
+  end
+end
+
+
+function BallPit:open_tutorial()
+  self.tutorial_open = true
+  self.tutorial_page = 1
+  confirm1:play{volume = 0.4}
+end
+
+
+function BallPit:tutorial_button_under_mouse()
+  local bx, by, bw, bh = gw/2, gh/2 + 60, 200, 16
+  return mouse.x >= bx - bw/2 and mouse.x <= bx + bw/2
+     and mouse.y >= by - bh/2 and mouse.y <= by + bh/2
+end
+
+
+function BallPit:tutorial_arrow_under_mouse()
+  if self.tutorial_page > 1
+     and math.distance(mouse.x, mouse.y, TUT_ARROW_X, TUT_PANEL_CY) <= 18 then
+    return 'prev'
+  end
+  if self.tutorial_page < #TUTORIAL_PAGES
+     and math.distance(mouse.x, mouse.y, gw - TUT_ARROW_X, TUT_PANEL_CY) <= 18 then
+    return 'next'
+  end
+  return nil
+end
+
+
+function BallPit:tutorial_set_page(p)
+  p = math.clamp(p, 1, #TUTORIAL_PAGES)
+  if p ~= self.tutorial_page then
+    self.tutorial_page = p
+    ui_switch1:play{volume = 0.3}
+  end
+end
+
+
+function BallPit:update_tutorial(dt)
+  local n = #TUTORIAL_PAGES
+
+  -- ESC backs out to the settings menu it was opened from.
+  if input.escape.pressed then
+    self.tutorial_open = false
+    ui_switch1:play{volume = 0.3}
+    return
+  end
+
+  -- Mouse: click the side arrows to page through.
+  local hovered = self:tutorial_arrow_under_mouse()
+  if hovered and input.click.pressed then
+    self:tutorial_set_page(self.tutorial_page + (hovered == 'next' and 1 or -1))
+  end
+
+  -- Keyboard: left/right page; SPACE or ENTER advances, and closes the
+  -- tutorial once it's stepped past the final page.
+  if input.aim_left.pressed or input.move_left.pressed then
+    self:tutorial_set_page(self.tutorial_page - 1)
+  end
+  if input.aim_right.pressed or input.move_right.pressed then
+    self:tutorial_set_page(self.tutorial_page + 1)
+  end
+  if input.launch.pressed or input.confirm.pressed then
+    if self.tutorial_page < n then
+      self:tutorial_set_page(self.tutorial_page + 1)
+    else
+      self.tutorial_open = false
+      ui_switch1:play{volume = 0.3}
+    end
+  end
+end
+
+
+function BallPit:draw_tutorial()
+  local n    = #TUTORIAL_PAGES
+  local page = TUTORIAL_PAGES[self.tutorial_page]
+
+  -- Near-opaque backdrop so the frozen arena behind doesn't distract.
+  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, Color(0.04, 0.04, 0.08, 0.93))
+
+  graphics.print_centered('HOW TO PLAY', fat_font, gw/2, 50, 0, 1.4, 1.4, 0, 0, yellow[0])
+  graphics.print_centered(page.heading, pixul_font, gw/2, 72, 0, 1, 1, 0, 0, fg[0])
+
+  -- Diagram panel.
+  local cx, cy, pw, ph = gw/2, TUT_PANEL_CY, 304, 200
+  graphics.rectangle(cx, cy, pw, ph, 4, 4, bg[-2])
+  graphics.rectangle(cx, cy, pw, ph, 4, 4, fg_transparent_weak, 1)
+  self:draw_tutorial_diagram(page.visual, cx, cy, pw, ph)
+
+  -- Body text under the panel.
+  for i, line in ipairs(page.lines) do
+    graphics.print_centered(line, pixul_font, gw/2, 338 + (i-1)*18, 0, 1, 1, 0, 0, fg_alt[0])
+  end
+
+  -- Prev / next arrows, hidden at the ends.
+  local hovered = self:tutorial_arrow_under_mouse()
+  if self.tutorial_page > 1 then
+    tut_arrow(TUT_ARROW_X, cy, 12, 'left', hovered == 'prev' and yellow[0] or fg[0])
+  end
+  if self.tutorial_page < n then
+    tut_arrow(gw - TUT_ARROW_X, cy, 12, 'right', hovered == 'next' and yellow[0] or fg[0])
+  end
+
+  -- Page dots.
+  for i = 1, n do
+    local dx = gw/2 - (n-1)*7/2 + (i-1)*7
+    graphics.circle(dx, 410, 2.5, i == self.tutorial_page and yellow[0] or bg[3])
+  end
+
+  -- Footer hint.
+  local tip = (self.tutorial_page < n)
+    and 'SPACE or arrows to navigate   -   ESC to close'
+    or  'SPACE to finish   -   ESC to close'
+  graphics.print_centered(tip, pixul_font, gw/2, 444, 0, 1, 1, 0, 0, fg_alt[0])
+end
+
+
+-- Each branch draws a small illustration centred in the panel (cx, cy) with
+-- half-extents up to ~100px, using the same shapes/colors as the real game.
+function BallPit:draw_tutorial_diagram(tag, cx, cy, w, h)
+  if tag == 'controls' then
+    local pad_y = cy + 46
+    -- aim line up-left from the stuck ball
+    graphics.dashed_line(cx, pad_y - 8, cx - 46, cy - 54, 4, 3, fg_transparent, 1)
+    graphics.circle(cx - 46, cy - 54, 2, fg[0])
+    -- paddle + a ball stuck on it, ready to launch
+    graphics.rectangle(cx, pad_y, 46, 5, 2, 2, fg[0])
+    graphics.rectangle(cx, pad_y - 2.5, 46, 1, nil, nil, fg[5])
+    graphics.circle(cx, pad_y - 8, 5, yellow[0])
+    graphics.circle(cx - 1.6, pad_y - 9.6, 1.6, fg[5])
+    -- A / D horizontal movement
+    tut_arrow(cx - 80, pad_y, 7, 'left', fg[0])
+    graphics.print_centered('A', pixul_font, cx - 64, pad_y, 0, 1, 1, 0, 0, fg[0])
+    tut_arrow(cx + 80, pad_y, 7, 'right', fg[0])
+    graphics.print_centered('D', pixul_font, cx + 64, pad_y, 0, 1, 1, 0, 0, fg[0])
+    -- W / S vertical dodge, set up-right so it clears the aim line
+    tut_arrow(cx + 74, cy - 40, 6, 'up', fg_alt[0])
+    tut_arrow(cx + 74, cy - 8, 6, 'down', fg_alt[0])
+    graphics.dashed_line(cx + 74, cy - 32, cx + 74, cy - 16, 3, 3, fg_alt_transparent, 1)
+    graphics.print_centered('W S', pixul_font, cx + 98, cy - 24, 0, 1, 1, 0, 0, fg_alt[0])
+
+  elseif tag == 'bricks' then
+    -- a row of enemy blocks near the top, one mid-break
+    local cols = {red[0], orange[0], blue[0], green[0]}
+    local by = cy - 56
+    for i = 1, 4 do
+      local bx = cx - 33 + (i - 1)*22
+      if i == 2 then
+        graphics.rectangle(bx, by, 18, 10, 2, 2, Color(cols[i].r, cols[i].g, cols[i].b, 0.35))
+        for a = 0, 5 do
+          local ang = a*math.pi/3
+          graphics.line(bx + math.cos(ang)*7, by + math.sin(ang)*7,
+                        bx + math.cos(ang)*12, by + math.sin(ang)*12, cols[i], 1)
+        end
+      else
+        graphics.rectangle(bx, by, 18, 10, 2, 2, cols[i])
+        graphics.rectangle(bx, by - 4, 18, 2, nil, nil, fg[5])
+      end
+    end
+    -- drift-down hint arrows above the row
+    for i = 0, 2 do
+      tut_arrow(cx - 22 + i*22, by - 18, 5, 'down', fg_alt_transparent)
+    end
+    -- paddle + ball trajectory bouncing up into the breaking block
+    local pad_y = cy + 64
+    graphics.rectangle(cx, pad_y, 40, 5, 2, 2, fg[0])
+    graphics.dashed_line(cx, pad_y - 4, cx + 34, cy + 6, 4, 3, fg_transparent, 1)
+    graphics.dashed_line(cx + 34, cy + 6, cx - 11, by + 6, 4, 3, fg_transparent, 1)
+    graphics.circle(cx + 34, cy + 6, 4, yellow[0])
+    graphics.circle(cx + 34 - 1.3, cy + 6 - 1.3, 1.3, fg[5])
+
+  elseif tag == 'xp' then
+    -- a just-broken block at the top
+    graphics.rectangle(cx, cy - 60, 18, 10, 2, 2, Color(red[0].r, red[0].g, red[0].b, 0.3))
+    -- three XP orbs (blue / green / yellow, matching the in-game tiers)
+    local orbs = {{cx - 22, cy - 34, 3,   blue[0]},
+                  {cx,      cy - 28, 3.5, green[0]},
+                  {cx + 22, cy - 38, 4,   yellow[0]}}
+    local pad_y = cy + 52
+    for _, o in ipairs(orbs) do
+      graphics.dashed_line(o[1], o[2], cx, pad_y - 6, 3, 4, fg_alt_transparent, 1)
+    end
+    for _, o in ipairs(orbs) do
+      graphics.circle(o[1], o[2], o[3] + 0.5, bg[-2])
+      graphics.circle(o[1], o[2], o[3], o[4])
+      graphics.circle(o[1] - o[3]*0.3, o[2] - o[3]*0.3, math.max(0.5, o[3]*0.3), fg[5])
+    end
+    -- paddle sweeping the orbs in
+    graphics.rectangle(cx, pad_y, 40, 5, 2, 2, fg[0])
+    -- XP bar filling toward a level
+    local barw = 150
+    graphics.rectangle(cx, cy + 70, barw, 5, nil, nil, bg[-2])
+    graphics.rectangle(cx - barw/2 + barw*0.62/2, cy + 70, barw*0.62, 5, nil, nil, blue[0])
+    graphics.print_centered('XP', pixul_font, cx - barw/2 - 10, cy + 70, 0, 1, 1, 0, 0, fg_alt[0])
+
+  elseif tag == 'combo' then
+    -- big rank readout, styled like the live combo meter
+    graphics.print_centered('S', fat_font, cx - 26, cy - 44, 0, 2.2, 2.2, 0, 0, red[0])
+    graphics.print_centered('x2.4', pixul_font, cx + 18, cy - 44, 0, 1, 1, 0, 0, red[0])
+    local barw = 90
+    graphics.rectangle(cx, cy - 24, barw, 3, nil, nil, bg[-2])
+    graphics.rectangle(cx - barw/2 + barw*0.7/2, cy - 24, barw*0.7, 3, nil, nil, red[0])
+    graphics.print_centered('D  C  B  A  S  SS  SSS', pixul_font, cx, cy - 8, 0, 0.85, 0.85, 0, 0, fg_alt[0])
+    -- a chain of bounces among three blocks
+    local pts = {{cx - 56, cy + 46}, {cx - 14, cy + 22}, {cx + 30, cy + 48}, {cx + 60, cy + 24}}
+    for i = 1, #pts - 1 do
+      graphics.dashed_line(pts[i][1], pts[i][2], pts[i+1][1], pts[i+1][2], 4, 3, yellow_transparent, 1)
+    end
+    local blk = {{cx - 14, cy + 22, orange[0]}, {cx + 30, cy + 48, blue[0]}, {cx + 60, cy + 24, green[0]}}
+    for _, b in ipairs(blk) do graphics.rectangle(b[1], b[2], 16, 9, 2, 2, b[3]) end
+    graphics.circle(pts[1][1], pts[1][2], 4, yellow[0])
+
+  elseif tag == 'powerups' then
+    -- left: a tier-2 powerup that must be deflected, then caught
+    local ox, oy = cx - 66, cy - 26
+    graphics.circle(ox, oy, 11, Color(green[0].r, green[0].g, green[0].b, 0.3))
+    graphics.circle(ox, oy, 9, green[0])
+    graphics.circle(ox, oy, 11, green[0], 1)
+    graphics.print_centered('M', pixul_font, ox, oy, 0, 1, 1, 0, 0, bg[-2])
+    local pdy = cy + 30
+    graphics.rectangle(ox, pdy, 32, 5, 2, 2, fg[0])
+    tut_arrow(ox, (oy + pdy)/2, 6, 'up', green[0])
+    graphics.print_centered('bounce', pixul_font, ox, pdy + 14, 0, 0.85, 0.85, 0, 0, fg_alt[0])
+    graphics.print_centered('then catch', pixul_font, ox, pdy + 24, 0, 0.85, 0.85, 0, 0, fg_alt[0])
+    -- right: the boss
+    local bx2, by2 = cx + 66, cy - 16
+    graphics.rectangle(bx2, by2, 48, 34, 6, 6, purple[0])
+    graphics.rectangle(bx2, by2, 48, 34, 6, 6, purple[5], 1)
+    graphics.circle(bx2 - 10, by2 - 4, 3, red[0])
+    graphics.circle(bx2 + 10, by2 - 4, 3, red[0])
+    graphics.rectangle(bx2, by2 + 9, 22, 3, 1, 1, red_transparent)
+    graphics.print_centered('BOSS - wave 10', pixul_font, bx2, by2 + 34, 0, 0.9, 0.9, 0, 0, red[0])
   end
 end
 
@@ -864,8 +1196,8 @@ function BallPit:update(dt)
   -- early-return) so it works as both "open" and "close" — and so the click
   -- doesn't fall through to the upgrade-card hit-test or any future click
   -- consumers.
-  if input.toggle_terminal.pressed then self.terminal:toggle() end
-  if input.click.pressed and self:admin_button_hit() then
+  if input.toggle_terminal.pressed and not self.tutorial_open then self.terminal:toggle() end
+  if input.click.pressed and self:admin_button_hit() and not self.tutorial_open then
     self.terminal:toggle()
     -- Eat this click so it doesn't double up with anything else this frame.
     input.click.pressed = false
@@ -880,6 +1212,14 @@ function BallPit:update(dt)
 
   -- ESC toggles the settings overlay (window size). Checked after the
   -- terminal early-return so ESC is ignored while the operator is typing.
+  -- The how-to-play overlay opens from the settings menu and layers on top of
+  -- it. Handle it before the ESC toggle below so its own ESC backs out to the
+  -- settings menu instead of flipping the whole settings overlay off.
+  if self.tutorial_open then
+    self:update_tutorial(dt)
+    return
+  end
+
   if input.escape.pressed then
     self.settings_open = not self.settings_open
     ui_switch1:play{volume = 0.3}
@@ -1008,7 +1348,8 @@ function BallPit:draw()
 
   if self.upgrade_pending then self:draw_upgrade() end
   if self.game_over then self:draw_game_over() end
-  if self.settings_open then self:draw_settings() end
+  if self.settings_open and not self.tutorial_open then self:draw_settings() end
+  if self.tutorial_open then self:draw_tutorial() end
   -- Terminal draws on top of everything so it stays readable over flashes,
   -- the upgrade dialog, and the game-over overlay.
   if self.terminal then self.terminal:draw() end
