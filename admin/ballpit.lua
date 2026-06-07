@@ -23,15 +23,33 @@ BallPit:implement(State)
 BallPit:implement(GameObject)
 
 
--- Variants that fire EnemyProjectiles at the paddle. Their spawn weights are
--- scaled by RANGED_SPAWN_SCALE in wave_config so ranged attackers show up less
--- often than melee/utility enemies (their projectiles were blanketing the
--- screen). Tune the scale (0..1) to taste; 1 restores the old frequency.
-local RANGED_VARIANTS = {
-  shooter = true, sniper = true, spreader = true,
-  spiraler = true, burster = true, arc_lobber = true,
-}
-local RANGED_SPAWN_SCALE = 0.5
+-- Ranged variants fire EnemyProjectiles at the paddle. Two rules keep their
+-- shots from blanketing the screen:
+--   1. Gradual introduction -- one new ranged type per wave starting at wave 3,
+--      in RANGED_ORDER below (ordered easiest-to-read pattern first), instead
+--      of the old "dump four ranged types in at once at wave 5".
+--   2. Low spawn share -- each ranged variant is layered onto the melee/utility
+--      base mix at a small weight. The one introduced on the current wave gets
+--      a brief spotlight weight so the player notices it; older ones settle to
+--      a low maintenance weight.
+local RANGED_ORDER      = {'shooter', 'sniper', 'spreader', 'burster', 'arc_lobber', 'spiraler'}
+local RANGED_INTRO_WAVE = 3   -- the first ranged variant unlocks on this wave
+local RANGED_NEW_WEIGHT = 5   -- weight for the variant introduced this wave
+local RANGED_OLD_WEIGHT = 2   -- weight for each ranged variant unlocked earlier
+
+
+-- Appends the ranged variants unlocked by `wave` to `mix` (one new type per
+-- wave from RANGED_INTRO_WAVE onward). The just-introduced type gets the
+-- spotlight weight; once every type is unlocked nothing is "new" and they all
+-- sit at the maintenance weight. No-op before the intro wave.
+local function append_ranged(mix, wave)
+  local new_idx  = wave - RANGED_INTRO_WAVE + 1      -- index introduced this wave
+  local unlocked = math.clamp(new_idx, 0, #RANGED_ORDER)
+  for i = 1, unlocked do
+    local w = (i == new_idx) and RANGED_NEW_WEIGHT or RANGED_OLD_WEIGHT
+    table.insert(mix, {RANGED_ORDER[i], w})
+  end
+end
 
 
 -- Per-wave config: row cadence, row width, drift speed and the variant mix.
@@ -55,37 +73,31 @@ local function wave_config(wave)
     }
   end
 
+  -- Melee/utility base mix per wave tier. Ranged variants are NOT listed here
+  -- anymore -- append_ranged layers them in on top, gradually (see below).
   local mix
   if wave <= 2 then
     mix = {{'seeker', 80}, {'speed_booster', 20}}
   elseif wave <= 4 then
-    mix = {{'seeker', 50}, {'speed_booster', 15}, {'exploder', 15}, {'tank', 10}, {'sniper', 10}}
+    mix = {{'seeker', 50}, {'speed_booster', 15}, {'exploder', 15}, {'tank', 10}}
   elseif wave <= 6 then
-    mix = {{'seeker', 25}, {'speed_booster', 10}, {'exploder', 12}, {'tank', 12}, {'headbutter', 12},
-           {'shooter', 8}, {'sniper', 8}, {'spreader', 8}, {'burster', 5}}
+    mix = {{'seeker', 25}, {'speed_booster', 10}, {'exploder', 12}, {'tank', 12}, {'headbutter', 12}}
   elseif wave <= 8 then
-    mix = {{'seeker', 15}, {'exploder', 12}, {'tank', 12}, {'headbutter', 10}, {'shooter', 8},
-           {'spawner', 8}, {'swarmer', 10}, {'sniper', 8}, {'spreader', 8}, {'burster', 5},
-           {'arc_lobber', 4}}
+    mix = {{'seeker', 15}, {'exploder', 12}, {'tank', 12}, {'headbutter', 10},
+           {'spawner', 8}, {'swarmer', 10}}
   elseif wave == 9 then
-    -- Pre-boss "warning" wave: every ranged variant is active, including the
-    -- spiraler, so the player gets to taste what the boss will throw at them.
-    mix = {{'seeker', 10}, {'tank', 10}, {'shooter', 8}, {'sniper', 10}, {'spreader', 10},
-           {'spiraler', 8}, {'burster', 8}, {'arc_lobber', 8}, {'swarmer', 10}, {'forcer', 8},
-           {'randomizer', 10}}
+    -- Pre-boss "warning" wave: by now every ranged variant has been introduced,
+    -- so append_ranged layers in the full set -- a taste of what the boss throws.
+    mix = {{'seeker', 10}, {'tank', 10}, {'swarmer', 10}, {'forcer', 8}, {'randomizer', 10}}
   else
-    -- wave 11+ post-boss tier: hardest mix including all new ranged variants.
-    mix = {{'seeker', 8}, {'tank', 12}, {'headbutter', 8}, {'shooter', 6}, {'spawner', 10},
-           {'swarmer', 12}, {'forcer', 10}, {'randomizer', 8}, {'sniper', 10}, {'spreader', 10},
-           {'spiraler', 10}, {'burster', 8}, {'arc_lobber', 8}}
+    -- wave 11+ post-boss tier: hardest melee/utility base; all ranged appended.
+    mix = {{'seeker', 8}, {'tank', 12}, {'headbutter', 8}, {'spawner', 10},
+           {'swarmer', 12}, {'forcer', 10}, {'randomizer', 8}}
   end
 
-  -- Thin out ranged attackers relative to the rest of the mix so their shots
-  -- don't blanket the screen. Mix tables are fresh literals per call, so
-  -- mutating the weights here is safe.
-  for _, entry in ipairs(mix) do
-    if RANGED_VARIANTS[entry[1]] then entry[2] = entry[2]*RANGED_SPAWN_SCALE end
-  end
+  -- Layer ranged attackers on top of the melee/utility base above, introduced
+  -- one new type per wave from wave 3 (see append_ranged / RANGED_ORDER).
+  append_ranged(mix, wave)
 
   -- All of these slide with wave number so the run gets progressively
   -- harder: more rows, wider swarms, shorter gap between spawns, and a

@@ -9,13 +9,18 @@ XpOrb:implement(Physics)
 function XpOrb:init(args)
   self:init_game_object(args)
   self.value  = self.value or 1
-  self.color  = self.value >= 5 and yellow[0] or (self.value >= 2 and green[0] or blue[0])
-  self.r_size = self.value >= 5 and 3.5 or (self.value >= 2 and 3 or 2.5)
-  -- Finite magnet range — the paddle has to get reasonably close before the
-  -- orb snaps in. Slightly wider than the original 64 so a paddle traveling
-  -- along the bottom can sweep up a column of falling orbs without having to
-  -- be perfectly underneath each one.
-  self.magnet_range = 88
+  -- Muted, semi-transparent dots. A cleared swarm dumps a lot of XP at once;
+  -- the old bright beads (full-alpha fill + dark outline + specular pip) piled
+  -- up and cluttered the arena, so keep each orb small and low-contrast -- a
+  -- shower now reads as a faint scatter you can see through. Value still tints
+  -- the orb (blue < green < yellow) and nudges its size, just more subtly.
+  local ramp  = self.value >= 5 and yellow or (self.value >= 2 and green or blue)
+  self.color  = Color(ramp[0].r, ramp[0].g, ramp[0].b, 0.6)
+  self.r_size = self.value >= 5 and 2.5 or (self.value >= 2 and 2 or 1.5)
+  -- Magnet range — the paddle pulls in any orb within this radius. Widened
+  -- over time (64 -> 88 -> 130) so the paddle vacuums up a whole column of
+  -- falling XP without having to pass directly under each orb.
+  self.magnet_range = 130
   -- Short pop-out window so the orb's initial scatter velocity from :init is
   -- visible before gravity / magnet takes over.
   self.magnet_delay = 0.35
@@ -52,10 +57,11 @@ function XpOrb:update(dt)
     self:set_velocity(vx, vy + 95*dt)
 
   elseif d < self.magnet_range then
-    -- In magnet range: full snap toward the paddle (vampire-survivors-style
-    -- pickup feel). Pull strength ramps up as the orb gets closer.
+    -- In magnet range: hard snap toward the paddle (vampire-survivors-style
+    -- pickup feel). Pull strength ramps up as the orb gets closer; the whole
+    -- curve was boosted (150/50 -> 320/140 px/s) so caught orbs leap in fast.
     local ang  = math.atan2(py - self.y, px - self.x)
-    local pull = math.remap(d, 0, self.magnet_range, 150, 50)
+    local pull = math.remap(d, 0, self.magnet_range, 320, 140)
     self:set_velocity(math.cos(ang)*pull, math.sin(ang)*pull)
 
   else
@@ -83,7 +89,7 @@ end
 function XpOrb:draw()
   self.spring:pull(0)
   local s = self.spring.x
-  graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
+  -- Single soft dot: no dark outline ring or bright specular pip, so clustered
+  -- orbs blend into a faint scatter instead of a wall of beads.
   graphics.circle(self.x, self.y, self.r_size*s, self.color)
-  graphics.circle(self.x - self.r_size*0.3, self.y - self.r_size*0.3, math.max(0.5, self.r_size*0.3), fg[5])
 end

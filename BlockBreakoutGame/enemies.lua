@@ -165,11 +165,15 @@ function EnemyProjectile:init(args)
   self:set_velocity(math.cos(self.angle)*self.speed, math.sin(self.angle)*self.speed)
   self.hfx:add('hit', 1)
 
-  -- Unbreakable: drop the 'ball' category from this fixture's collide mask so
-  -- hero balls pass through without a bounce, a collision callback, or damage.
-  -- We start from the shared 'brick' don't-collide masks (paddle/brick/wall)
-  -- and add 'ball', leaving the manual paddle hit-test in update() untouched.
-  if self.unbreakable and self.fixture and self.group and self.group.collision_tags then
+  -- Enemy shots phase through hero balls: drop the 'ball' category from this
+  -- fixture's collide mask so balls pass through without a bounce, a collision
+  -- callback, or destroying the shot. Ranged fire is dodged with the paddle
+  -- (the manual hit-test in update), never batted away. This used to be
+  -- boss-only ('unbreakable'); applying it to EVERY enemy projectile stops
+  -- shots fired into a field full of bouncing balls from being wiped out at
+  -- the muzzle. We start from the shared 'brick' don't-collide masks
+  -- (paddle/brick/wall) and add 'ball'.
+  if self.fixture and self.group and self.group.collision_tags then
     local brick_tag = self.group.collision_tags['brick']
     local ball_tag  = self.group.collision_tags['ball']
     if brick_tag and ball_tag then
