@@ -320,9 +320,12 @@ function Brick:cast_spiral()
       for i = 0, 7 do
         local a = i*math.pi/4 + phase
         -- Spiraler: slowest of all so the rotating wall hangs in the air
-        -- long enough for the player to read the spiral pattern.
+        -- long enough for the player to read the spiral pattern. No `life`
+        -- timer -- the slow orbs travel until they reach an arena wall and
+        -- despawn there (off-screen cleanup in EnemyProjectile:update) instead
+        -- of blinking out mid-flight.
         EnemyProjectile{group = arena.main, x = sx, y = sy, color = self.color,
-                        kind = 'orb', angle = a, speed = 45, r_size = 3, life = 3.5}
+                        kind = 'orb', angle = a, speed = 45, r_size = 3}
       end
     end
   end)
@@ -370,10 +373,14 @@ function Brick:cast_arc_lob()
     if arena.main and arena.main.world then
       local angle = math.atan2(ly - sy, lx - sx)
       -- Arc lobber: slow heavy homing lob. Slow enough that the homing curve
-      -- reads visually as a tracking threat rather than an instant hit.
+      -- reads visually as a tracking threat rather than an instant hit. No
+      -- `life` timer -- it homes until it hits the paddle or curves past it and
+      -- off a wall (off-screen cleanup in EnemyProjectile:update); the capped
+      -- turn rate + the paddle being pinned to the bottom guarantee it exits
+      -- rather than vanishing in mid-air or orbiting forever.
       EnemyProjectile{group = arena.main, x = sx, y = sy, color = yellow[0],
                       kind = 'bomb', angle = angle, speed = 55, dmg = 2,
-                      homing = true, homing_turn = 1.2, life = 5}
+                      homing = true, homing_turn = 1.2}
     end
   end)
 end
