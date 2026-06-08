@@ -168,7 +168,7 @@ function Brick:setup_behavior()
     self.t:every({4, 6}, function() self:cast_headbutt() end, 0, nil, 'behavior')
 
   elseif b == 'shooter' then
-    self.t:every({4, 6}, function() self:cast_shoot() end, 0, nil, 'behavior')
+    self.t:every({6.7, 10}, function() self:cast_shoot() end, 0, nil, 'behavior')
 
   elseif b == 'spawner' then
     self.t:every({6, 8}, function() self:cast_spawn_critter() end, 0, nil, 'behavior')
@@ -177,32 +177,22 @@ function Brick:setup_behavior()
     self.t:every({5, 8}, function() self:cast_force_push() end, 0, nil, 'behavior')
 
   elseif b == 'sniper' then
-    self.t:every({3.5, 5}, function() self:cast_sniper() end, 0, nil, 'behavior')
+    self.t:every({5.8, 8.3}, function() self:cast_sniper() end, 0, nil, 'behavior')
 
   elseif b == 'spreader' then
-    self.t:every({4.5, 6.5}, function() self:cast_spread() end, 0, nil, 'behavior')
+    self.t:every({7.5, 10.8}, function() self:cast_spread() end, 0, nil, 'behavior')
 
   elseif b == 'spiraler' then
-    self.t:every({5, 7}, function() self:cast_spiral() end, 0, nil, 'behavior')
+    self.t:every({8.3, 11.7}, function() self:cast_spiral() end, 0, nil, 'behavior')
 
   elseif b == 'burster' then
-    self.t:every({5, 7}, function() self:cast_burst() end, 0, nil, 'behavior')
+    self.t:every({8.3, 11.7}, function() self:cast_burst() end, 0, nil, 'behavior')
 
   elseif b == 'arc_lobber' then
-    self.t:every({4, 6}, function() self:cast_arc_lob() end, 0, nil, 'behavior')
+    self.t:every({6.7, 10}, function() self:cast_arc_lob() end, 0, nil, 'behavior')
 
   elseif b == 'randomizer' then
-    self.t:every({4, 6}, function()
-      local pick = random:table{'speed_boost', 'shoot', 'spawn', 'force', 'sniper', 'spread', 'spiral', 'burst'}
-      if     pick == 'speed_boost' then self:cast_speed_boost()
-      elseif pick == 'shoot'       then self:cast_shoot()
-      elseif pick == 'spawn'       then self:cast_spawn_critter()
-      elseif pick == 'force'       then self:cast_force_push()
-      elseif pick == 'sniper'      then self:cast_sniper()
-      elseif pick == 'spread'      then self:cast_spread()
-      elseif pick == 'spiral'      then self:cast_spiral()
-      elseif pick == 'burst'       then self:cast_burst() end
-    end, 0, nil, 'behavior')
+    self.t:every({4, 6}, function() self:cast_randomizer() end, 0, nil, 'behavior')
   end
   -- exploder and swarmer trigger on death, not on timer.
 end
@@ -228,10 +218,18 @@ function Brick:hold_fire()
 end
 
 
--- Brief boost to the whole formation's drift speed.
+-- Brief boost to the whole formation's drift speed. Bold green tell so the
+-- player can see WHY everything suddenly rushes down: a big expanding ring, a
+-- SPEED+ label, and a spray of downward green streaks.
 function Brick:cast_speed_boost()
   if self.dead or self:frozen() then return end
-  TelegraphRing{group = main.current.effects, x = self.x, y = self.y, radius = 12, color = green[0], duration = 0.2}
+  local fx = main.current.effects
+  TelegraphRing{group = fx, x = self.x, y = self.y, radius = 22, color = green[0], duration = 0.35}
+  FloatingText{group = fx, x = self.x, y = self.y - self.h/2 - 3, text = 'SPEED+', color = green[0]}
+  for _ = 1, 8 do
+    HitParticle{group = fx, x = self.x + random:float(-self.w/2, self.w/2), y = self.y,
+                color = green[0], v = random:float(60, 110), r = math.pi/2, w = 2, duration = 0.4}
+  end
   for _, row in ipairs(main.current.swarms.objects) do
     if not row.dead then
       row._base_drift = row._base_drift or row.drift_speed
@@ -246,10 +244,19 @@ function Brick:cast_speed_boost()
 end
 
 
--- Charge forward in formation — row gets a small downward kick.
+-- Charge forward in formation — row gets a small downward kick. Bold orange
+-- tell: ring + CHARGE label + a jolt of downward sparks + a small shake, so the
+-- lunge is unmistakable.
 function Brick:cast_headbutt()
   if self.dead or not self.swarm or self:frozen() then return end
-  TelegraphRing{group = main.current.effects, x = self.x, y = self.y, radius = 8, color = orange[0], duration = 0.15}
+  local fx = main.current.effects
+  TelegraphRing{group = fx, x = self.x, y = self.y, radius = 14, color = orange[0], duration = 0.25}
+  FloatingText{group = fx, x = self.x, y = self.y - self.h/2 - 3, text = 'CHARGE', color = orange[0]}
+  for _ = 1, 6 do
+    HitParticle{group = fx, x = self.x + random:float(-self.w/3, self.w/3), y = self.y + self.h/2,
+                color = orange[0], v = random:float(70, 120), r = math.pi/2, w = 2, duration = 0.35}
+  end
+  camera:shake(2, 0.12, 90)
   self.swarm:apply_knockback(40, math.pi/2)
 end
 
@@ -396,26 +403,38 @@ function Brick:cast_arc_lob()
 end
 
 
--- Drop a small EnemyCritter just below this brick.
+-- Drop a small EnemyCritter just below this brick. Bold purple tell: a SPAWN
+-- label on the caster, then a ring + burst blooming at the drop point so the
+-- new enemy's arrival is obvious.
 function Brick:cast_spawn_critter()
   if self.dead or self:frozen() then return end
-  TelegraphRing{group = main.current.effects, x = self.x, y = self.y, radius = 6, color = purple[0], duration = 0.15}
-  critter1:play{volume = 0.22, pitch = random:float(0.95, 1.05)}
+  local fx = main.current.effects
   local x, y = self.x, self.y + 8
+  TelegraphRing{group = fx, x = self.x, y = self.y, radius = 10, color = purple[0], duration = 0.2}
+  FloatingText{group = fx, x = self.x, y = self.y - self.h/2 - 3, text = 'SPAWN', color = purple[0]}
+  critter1:play{volume = 0.28, pitch = random:float(0.95, 1.05)}
   local arena = main.current
   arena.t:after(0, function()
     if arena.main and arena.main.world then
+      TelegraphRing{group = fx, x = x, y = y, radius = 12, color = purple[0], duration = 0.3}
+      spawn_burst(fx, x, y, purple[0], 8, 40, 90)
       EnemyCritter{group = arena.main, x = x, y = y, color = purple[0]}
     end
   end)
 end
 
 
--- Knock all nearby balls outward radially.
+-- Knock all nearby balls outward radially. Bold yellow tell: two stacked
+-- expanding shockwave rings + a PUSH! label + a small shake, and every ball it
+-- shoves throws a spark, so the push reads instantly.
 function Brick:cast_force_push()
   if self.dead or self:frozen() then return end
-  TelegraphRing{group = main.current.effects, x = self.x, y = self.y, radius = 64, color = yellow[0], duration = 0.25}
-  force1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
+  local fx = main.current.effects
+  TelegraphRing{group = fx, x = self.x, y = self.y, radius = 64, color = yellow[0], duration = 0.35}
+  TelegraphRing{group = fx, x = self.x, y = self.y, radius = 40, color = yellow2[0], duration = 0.45}
+  FloatingText{group = fx, x = self.x, y = self.y - self.h/2 - 3, text = 'PUSH!', color = yellow[0]}
+  force1:play{volume = 0.35, pitch = random:float(0.95, 1.05)}
+  camera:shake(3, 0.18, 80)
   local arena = main.current
   for _, hero in ipairs(arena.heroes) do
     if hero and not hero.dead and not hero.returning and hero.body then
@@ -423,9 +442,31 @@ function Brick:cast_force_push()
       if d < 64 and d > 0.5 then
         local ang = math.atan2(hero.y - self.y, hero.x - self.x)
         hero:apply_impulse(math.cos(ang)*40, math.sin(ang)*40)
+        spawn_burst(fx, hero.x, hero.y, yellow[0], 4, 50, 100)
       end
     end
   end
+end
+
+
+-- Randomizer: every cycle it telegraphs with a wild multi-colour ring + a
+-- RANDOM label, then fires a random one of the other behaviours (which plays
+-- its own tell on top). The rainbow flicker flags "this one is unpredictable".
+function Brick:cast_randomizer()
+  if self.dead or self:frozen() then return end
+  local fx   = main.current.effects
+  local cols = {red[0], orange[0], yellow[0], green[0], blue[0], purple[0]}
+  TelegraphRing{group = fx, x = self.x, y = self.y, radius = 16, color = random:table(cols), duration = 0.3}
+  FloatingText{group = fx, x = self.x, y = self.y - self.h/2 - 3, text = 'RANDOM', color = random:table(cols)}
+  local pick = random:table{'speed_boost', 'shoot', 'spawn', 'force', 'sniper', 'spread', 'spiral', 'burst'}
+  if     pick == 'speed_boost' then self:cast_speed_boost()
+  elseif pick == 'shoot'       then self:cast_shoot()
+  elseif pick == 'spawn'       then self:cast_spawn_critter()
+  elseif pick == 'force'       then self:cast_force_push()
+  elseif pick == 'sniper'      then self:cast_sniper()
+  elseif pick == 'spread'      then self:cast_spread()
+  elseif pick == 'spiral'      then self:cast_spiral()
+  elseif pick == 'burst'       then self:cast_burst() end
 end
 
 
@@ -571,6 +612,10 @@ function Brick:draw()
     end
   end
 
+  -- Type icon: a small symbol identifying this enemy's role, drawn on top of the
+  -- body (and any ice/fire skin) so block types are tellable apart at a glance.
+  self:draw_type_icon()
+
   -- HP bar: spans the full bounding-box width, sits above the topmost row.
   if hp_pct < 1 then
     local bar_cx = self.x + ((self.cell_min_cx + self.cell_max_cx)/2 - self.shape_cx) * CELL_W
@@ -589,6 +634,53 @@ function Brick:draw()
     local pulse = 0.5 + 0.2*math.sin(love.timer.getTime()*5)
     local c     = Color(self.curse_color.r, self.curse_color.g, self.curse_color.b, 0.35*pulse)
     graphics.circle(self.x, self.y, self.w*0.7, c, 1.5)
+  end
+end
+
+
+-- Small per-type symbol drawn at the brick centre so enemy roles are tellable
+-- apart at a glance (colour alone collides -- e.g. orange headbutter vs burster,
+-- purple spawner/swarmer/spiraler). The contrast colour flips dark/light with
+-- the body's interior brightness so the icon reads on every variant. Seeker (the
+-- plain chaser) gets no icon -- a bare block is the baseline.
+function Brick:draw_type_icon()
+  local v = self.variant_name
+  if v == 'seeker' then return end
+  local x, y = self.x, self.y
+  -- Interior is body*0.7 (the inset dark fill); pick a contrasting icon colour.
+  local il = 0.7*(0.3*self.color.r + 0.59*self.color.g + 0.11*self.color.b)
+  local ic = (il > 0.45) and Color(0.10, 0.10, 0.15, 0.95) or Color(1, 1, 1, 0.95)
+
+  if v == 'tank' then
+    graphics.rectangle(x, y, 6, 6, 1, 1, ic)                                                          -- solid = armoured
+  elseif v == 'exploder' then
+    graphics.line(x - 3, y - 3, x + 3, y + 3, ic, 1); graphics.line(x - 3, y + 3, x + 3, y - 3, ic, 1) -- X = blows up
+  elseif v == 'headbutter' then
+    graphics.polygon({x - 3, y - 2, x + 3, y - 2, x, y + 3}, ic)                                       -- down-arrow = charges down
+  elseif v == 'speed_booster' then
+    graphics.line(x - 3, y - 3, x, y, ic, 1); graphics.line(x, y, x - 3, y + 3, ic, 1)                 -- >> = speeds the swarm
+    graphics.line(x, y - 3, x + 3, y, ic, 1); graphics.line(x + 3, y, x, y + 3, ic, 1)
+  elseif v == 'spawner' then
+    graphics.circle(x, y - 2, 1.2, ic); graphics.circle(x - 2, y + 1.6, 1.2, ic); graphics.circle(x + 2, y + 1.6, 1.2, ic) -- 3 dots = drops critters
+  elseif v == 'swarmer' then
+    graphics.circle(x - 1.7, y - 1.7, 1.1, ic); graphics.circle(x + 1.7, y - 1.7, 1.1, ic)            -- 4-dot cluster = death swarm
+    graphics.circle(x - 1.7, y + 1.7, 1.1, ic); graphics.circle(x + 1.7, y + 1.7, 1.1, ic)
+  elseif v == 'forcer' then
+    graphics.circle(x, y, 3.2, ic, 1); graphics.circle(x, y, 0.9, ic)                                 -- ring + core = radial shove
+  elseif v == 'randomizer' then
+    graphics.print_centered('?', pixul_font, x, y - 4, 0, 1, 1, 0, 0, ic)                              -- ? = random behaviour
+  elseif v == 'shooter' then
+    graphics.line(x, y - 3, x, y + 1, ic, 1); graphics.polygon({x - 2, y, x + 2, y, x, y + 3}, ic)    -- down-arrow = aimed shot
+  elseif v == 'sniper' then
+    graphics.circle(x, y, 2.4, ic, 1); graphics.line(x - 3.5, y, x + 3.5, y, ic, 1); graphics.line(x, y - 3.5, x, y + 3.5, ic, 1) -- crosshair
+  elseif v == 'spreader' then
+    graphics.line(x, y - 2.5, x - 3, y + 3, ic, 1); graphics.line(x, y - 2.5, x, y + 3, ic, 1); graphics.line(x, y - 2.5, x + 3, y + 3, ic, 1) -- 3-prong fan
+  elseif v == 'spiraler' then
+    graphics.arc('open', x, y, 3.2, 0, math.pi*1.5, ic, 1); graphics.arc('open', x, y, 1.6, math.pi, math.pi*2.5, ic, 1) -- swirl
+  elseif v == 'burster' then
+    graphics.line(x - 2.5, y - 3, x - 2.5, y + 3, ic, 1); graphics.line(x, y - 3, x, y + 3, ic, 1); graphics.line(x + 2.5, y - 3, x + 2.5, y + 3, ic, 1) -- ||| = rapid bolts
+  elseif v == 'arc_lobber' then
+    graphics.arc('open', x, y + 1.5, 3.5, math.pi, math.pi*2, ic, 1)                                   -- arc = lobbed shot
   end
 end
 

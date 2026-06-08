@@ -34,8 +34,8 @@ BallPit:implement(GameObject)
 --      a low maintenance weight.
 local RANGED_ORDER      = {'shooter', 'sniper', 'spreader', 'burster', 'arc_lobber', 'spiraler'}
 local RANGED_INTRO_WAVE = 3   -- the first ranged variant unlocks on this wave
-local RANGED_NEW_WEIGHT = 5   -- weight for the variant introduced this wave
-local RANGED_OLD_WEIGHT = 2   -- weight for each ranged variant unlocked earlier
+local RANGED_NEW_WEIGHT = 3   -- weight for the variant introduced this wave (was 5; -40% to thin ranged spawns)
+local RANGED_OLD_WEIGHT = 1.2 -- weight for each ranged variant unlocked earlier (was 2; -40%)
 
 
 -- Appends the ranged variants unlocked by `wave` to `mix` (one new type per
@@ -79,19 +79,19 @@ local function wave_config(wave)
   if wave <= 2 then
     mix = {{'seeker', 80}, {'speed_booster', 20}}
   elseif wave <= 4 then
-    mix = {{'seeker', 50}, {'speed_booster', 15}, {'exploder', 15}, {'tank', 10}}
+    mix = {{'seeker', 72}, {'speed_booster', 15}, {'exploder', 15}, {'tank', 10}}
   elseif wave <= 6 then
-    mix = {{'seeker', 25}, {'speed_booster', 10}, {'exploder', 12}, {'tank', 12}, {'headbutter', 12}}
+    mix = {{'seeker', 64}, {'speed_booster', 10}, {'exploder', 12}, {'tank', 12}, {'headbutter', 12}}
   elseif wave <= 8 then
-    mix = {{'seeker', 15}, {'exploder', 12}, {'tank', 12}, {'headbutter', 10},
+    mix = {{'seeker', 56}, {'exploder', 12}, {'tank', 12}, {'headbutter', 10},
            {'spawner', 8}, {'swarmer', 10}}
   elseif wave == 9 then
     -- Pre-boss "warning" wave: by now every ranged variant has been introduced,
     -- so append_ranged layers in the full set -- a taste of what the boss throws.
-    mix = {{'seeker', 10}, {'tank', 10}, {'swarmer', 10}, {'forcer', 8}, {'randomizer', 10}}
+    mix = {{'seeker', 38}, {'tank', 10}, {'swarmer', 10}, {'forcer', 8}, {'randomizer', 10}}
   else
     -- wave 11+ post-boss tier: hardest melee/utility base; all ranged appended.
-    mix = {{'seeker', 8}, {'tank', 12}, {'headbutter', 8}, {'spawner', 10},
+    mix = {{'seeker', 45}, {'tank', 12}, {'headbutter', 8}, {'spawner', 10},
            {'swarmer', 12}, {'forcer', 10}, {'randomizer', 8}}
   end
 
