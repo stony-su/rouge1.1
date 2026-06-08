@@ -208,19 +208,29 @@ function Brick:setup_behavior()
 end
 
 
--- True once a ranged attacker has descended close enough to the paddle that
--- its shot would be near-unavoidable. Guards every ranged cast_* below so
--- close-up enemies stop shooting and rely on breaching instead.
+-- True while the freeze powerup is active. Guards every behaviour cast so a
+-- frozen brick is completely inert -- no shots, no critters, no shoves, no
+-- formation kicks -- to match the ice-cube skin it's wearing.
+function Brick:frozen()
+  local arena = main.current
+  return (arena and arena.frozen) or false
+end
+
+
+-- True once a ranged attacker has descended close enough to the paddle that its
+-- shot would be near-unavoidable, OR while the arena is frozen. Guards every
+-- ranged cast_* below so close-up / frozen enemies stop shooting.
 function Brick:hold_fire()
   local arena = main.current
   if not arena or not arena.paddle then return false end
+  if arena.frozen then return true end
   return (arena.paddle.y - self.y) < RANGED_HOLD_FIRE_DIST
 end
 
 
 -- Brief boost to the whole formation's drift speed.
 function Brick:cast_speed_boost()
-  if self.dead then return end
+  if self.dead or self:frozen() then return end
   TelegraphRing{group = main.current.effects, x = self.x, y = self.y, radius = 12, color = green[0], duration = 0.2}
   for _, row in ipairs(main.current.swarms.objects) do
     if not row.dead then
@@ -238,7 +248,7 @@ end
 
 -- Charge forward in formation — row gets a small downward kick.
 function Brick:cast_headbutt()
-  if self.dead or not self.swarm then return end
+  if self.dead or not self.swarm or self:frozen() then return end
   TelegraphRing{group = main.current.effects, x = self.x, y = self.y, radius = 8, color = orange[0], duration = 0.15}
   self.swarm:apply_knockback(40, math.pi/2)
 end
@@ -388,7 +398,7 @@ end
 
 -- Drop a small EnemyCritter just below this brick.
 function Brick:cast_spawn_critter()
-  if self.dead then return end
+  if self.dead or self:frozen() then return end
   TelegraphRing{group = main.current.effects, x = self.x, y = self.y, radius = 6, color = purple[0], duration = 0.15}
   critter1:play{volume = 0.22, pitch = random:float(0.95, 1.05)}
   local x, y = self.x, self.y + 8
@@ -403,7 +413,7 @@ end
 
 -- Knock all nearby balls outward radially.
 function Brick:cast_force_push()
-  if self.dead then return end
+  if self.dead or self:frozen() then return end
   TelegraphRing{group = main.current.effects, x = self.x, y = self.y, radius = 64, color = yellow[0], duration = 0.25}
   force1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
   local arena = main.current
@@ -481,6 +491,26 @@ function Brick:draw()
       graphics.rectangle(cx, cy, BRICK_W - 2, BRICK_H - 2, nil, nil, dark_color)
     end
 
+    -- Ice-cube skin while the freeze powerup is active: each cell becomes a
+    -- glassy faceted block -- pale translucent body, a shaded lower-right
+    -- back-face for cube depth, two diagonal refraction lines, a bright
+    -- upper-left specular glint, and a crisp light-cyan rim. Drawn inside the
+    -- body's hit-flash scale so it squashes with the brick. Cold, sharp, still.
+    if main.current and main.current.frozen then
+      local hw, hh = BRICK_W/2, BRICK_H/2
+      for _, c in ipairs(self.shape_cells) do
+        local cx = self.x + (c[1] - self.shape_cx) * CELL_W
+        local cy = self.y + (c[2] - self.shape_cy) * CELL_H
+        local l, r, tp, bt = cx - hw, cx + hw, cy - hh, cy + hh
+        graphics.rectangle(cx, cy, BRICK_W, BRICK_H, 1, 1, Color(0.70, 0.88, 1.0, 0.50))             -- glass body
+        graphics.polygon({r, tp + hh*0.45, r, bt, l + hw*0.45, bt}, Color(0.26, 0.52, 0.80, 0.50))   -- shaded back-face (depth)
+        graphics.line(l + 2, bt - 2, r - 3, tp + 2, Color(0.90, 0.97, 1.0, 0.55), 1)                 -- refraction 1
+        graphics.line(l + hw*0.65, bt - 1.5, cx + 1, cy - 1, Color(0.90, 0.97, 1.0, 0.32), 1)        -- refraction 2
+        graphics.polygon({l + 1.5, tp + 1.5, l + hw*0.95, tp + 1.5, l + 1.5, tp + hh*0.95}, Color(1, 1, 1, 0.95)) -- specular glint
+        graphics.rectangle(cx, cy, BRICK_W, BRICK_H, 1, 1, Color(0.85, 0.97, 1.0, 0.80), 1)          -- crisp rim
+      end
+    end
+
     -- Connectors fill the 4-pixel between-cell gaps WITHIN this brick so the
     -- shape reads as one solid piece instead of N separate 1×1s. The body
     -- and dark rectangles are extended 1px into each neighbouring cell so
@@ -514,6 +544,32 @@ function Brick:draw()
       end
     end
   graphics.pop()
+
+  -- Flame skin: any block actively burning (ball-hit fire trail, pyromancer,
+  -- etc.) grows flickering flame tongues from each cell's TOP edge -- outer red,
+  -- inner orange, yellow core -- waving via sin(time). Drawn OUTSIDE the
+  -- hit-flash push/pop so tall flames keep true proportions and never squash.
+  if self.burn_timer > 0 then
+    local ft, hw = love.timer.getTime(), BRICK_W/2
+    for _, c in ipairs(self.shape_cells) do
+      local cx  = self.x + (c[1] - self.shape_cx) * CELL_W
+      local cy  = self.y + (c[2] - self.shape_cy) * CELL_H
+      local top = cy - BRICK_H/2
+      local pulse = 0.5 + 0.5*math.sin(ft*10 + cx)
+      graphics.rectangle(cx, cy, BRICK_W, BRICK_H, 1, 1, Color(1.0, 0.42, 0.10, 0.32 + 0.16*pulse)) -- hot body glow
+      for k = -1, 1 do
+        local bx    = cx + k*hw*0.6
+        local seed  = cx*0.6 + cy*0.4 + k*1.7
+        local sway  = math.sin(ft*7 + seed)*2.2
+        local flick = 0.75 + 0.25*math.sin(ft*13 + seed*1.3)
+        local hgt   = BRICK_H * (1.9 + 0.7*flick)
+        local tipx, wb = bx + sway, 3.4
+        graphics.polygon({bx - wb, top, bx + wb, top, tipx, top - hgt}, Color(0.90, 0.15, 0.08, 0.90))                                   -- outer red
+        graphics.polygon({bx - wb*0.62, top, bx + wb*0.62, top, bx + sway*0.7, top - hgt*0.66}, Color(1.0, 0.52, 0.12, 0.92))            -- inner orange
+        graphics.polygon({bx - wb*0.32, top - hgt*0.28, bx + wb*0.32, top - hgt*0.28, bx + sway*0.5, top - hgt*0.54}, Color(1.0, 0.85, 0.25, 0.95)) -- yellow core
+      end
+    end
+  end
 
   -- HP bar: spans the full bounding-box width, sits above the topmost row.
   if hp_pct < 1 then

@@ -802,6 +802,10 @@ function BallPit:reset_run()
   self.no_speed_reset     = false
   self.floor_wall         = nil
   self.pierce_active      = false
+  self.frozen             = false   -- freeze powerup: arena-wide deep freeze (gameplay + ice skins)
+  self.frost_shards       = nil     -- pre-rolled edge ice-shard clusters for the frost overlay
+  self.fire_active        = false   -- fire powerup: warm screen ambiance (visual only; no DoT)
+  self.fire_flames        = nil     -- pre-rolled bottom-edge flame bases for the fire overlay
 
   -- Powerup pity timer. Powerups no longer drop from individual bricks; they
   -- spawn on a periodic random roll instead, with a ramping pity multiplier
@@ -1164,6 +1168,9 @@ end
 
 
 function BallPit:spawn_swarm(force)
+  -- Frozen by the freeze powerup: the arena is sealed -- no new swarms (not even
+  -- the forced first-of-wave spawn) enter until it thaws.
+  if self.frozen then return end
   local cfg            = self.wave_cfg
   local rows_count     = random:int(cfg.swarm_rows_min, cfg.swarm_rows_max)
   local width_fraction = random:float(cfg.width_fraction_min, cfg.width_fraction_max)
@@ -1345,6 +1352,8 @@ end
 function BallPit:draw()
   self.main:draw()
   self.effects:draw()
+  if self.frozen then self:draw_frost_overlay() end
+  if self.fire_active then self:draw_fire_overlay() end
   if self.boss_trace then self:draw_boss_trace() end
   if self.stuck_count > 0 or input.launch.down then self:draw_aim_line() end
   self.ui:draw()
@@ -2193,8 +2202,8 @@ end
 -- ----- Powerups -----
 --
 -- Apply a powerup by name. Effects come in three flavours:
---   1. Instant (heal, freeze_wave, water_wave, level_random): no buff slot.
---   2. Timed buff (wide_paddle, big_ball, fire_trail, pierce, multi_ball):
+--   1. Instant (heal, water_wave, level_random): no buff slot.
+--   2. Timed buff (wide_paddle, big_ball, fire_trail, freeze_wave, pierce, multi_ball):
 --      stashed in self.buffs[kind] with an `expires_at` + `restore` pair;
 --      tick_buffs counts down and calls restore on expiry. Stacking the same
 --      buff while it's active extends the timer instead of stacking the
@@ -2476,30 +2485,218 @@ function BallPit:apply_big_ball_buff()
 end
 
 
+-- Fire (timed buff). While it's up the arena gets a warm fiery ambiance (a
+-- screen overlay of flames licking up from the floor), and any block the player
+-- ignites by hitting it with a ball sprouts flame tongues + takes a burn DoT.
+-- The burn itself is applied on ball contact in BallHero (gated on this buff);
+-- this function only drives the timer + the ambiance flag (self.fire_active).
+-- No screen-wide drain -- fire damages only the blocks the balls actually hit.
 function BallPit:apply_fire_trail_buff()
-  self:add_or_extend_buff('fire_trail', 10,
-    function() self.fire_trail_until = (self.run_time or 0) + 1e9 end,  -- gated by buff existence
-    function() self.fire_trail_until = 0 end)
+  local ember = Color(1.0, 0.55, 0.15, 1)
+
+  self:add_or_extend_buff('fire_trail', 8,        -- seconds of fire
+    function()
+      self.fire_active = true
+      self:spawn_fire_flames()
+    end,
+    function()
+      self.fire_active = false
+      self.fire_flames = nil
+    end)
+
+  -- One-shot cast burst, replayed on every catch (even when extending the
+  -- timer): a fiery flash, two expanding rings, a shake, a sound, and a sparkle
+  -- of embers on each brick the wave catches.
+  Flash{group = self.effects, x = gw/2, y = gh/2,
+        color = Color(red[0].r, red[0].g, red[0].b, 0.30), duration = 0.22}
+  TelegraphRing{group = self.effects, x = gw/2, y = gh/2,
+                radius = math.max(gw, gh)*0.62, color = red[0], duration = 0.45}
+  TelegraphRing{group = self.effects, x = gw/2, y = gh/2,
+                radius = math.max(gw, gh)*0.42, color = ember, duration = 0.55}
+  camera:shake(4, 0.3, 80)
+  if fire1 then fire1:play{volume = 0.5, pitch = random:float(0.85, 1.0)} end
+
+  for _, sw in ipairs(self.swarms.objects) do
+    if sw and not sw.dead then
+      for _, cell in ipairs(sw.cells or {}) do
+        if cell.brick and not cell.brick.dead then
+          spawn_burst(self.effects, cell.brick.x, cell.brick.y, ember, 3, 25, 70)
+        end
+      end
+    end
+  end
 end
 
 
-function BallPit:apply_freeze_wave()
-  TelegraphRing{group = self.effects, x = gw/2, y = gh/2, radius = math.max(gw, gh)*0.6, color = blue[0], duration = 0.4}
-  Flash{group = self.effects, x = gw/2, y = gh/2, color = Color(blue[0].r, blue[0].g, blue[0].b, 0.25), duration = 0.18}
-  for _, sw in ipairs(self.swarms.objects) do
-    if sw and not sw.dead then
-      sw._frozen_orig_drift = sw._frozen_orig_drift or sw.drift_speed
-      sw.drift_speed        = 0
+-- Pre-roll a stable row of flame bases along the BOTTOM screen edge for
+-- draw_fire_overlay. Each base has a fixed x + half-width + nominal height; the
+-- live height + sway derive from the clock so the flames lick upward without any
+-- per-frame random. The buff's restore() clears the list.
+function BallPit:spawn_fire_flames()
+  local list = {}
+  local n = 22
+  for i = 1, n do
+    list[#list + 1] = {
+      x     = (i - 0.5)*gw/n + random:float(-7, 7),
+      w     = random:float(10, 18),      -- base half-width
+      h     = random:float(50, 110),     -- nominal flame height
+      speed = random:float(6, 11),       -- flicker speed
+      seed  = random:float(0, math.pi*2),
+    }
+  end
+  self.fire_flames = list
+end
+
+
+-- Full-screen fire ambiance while the buff is live: a heat wash strongest along
+-- the floor, a warm edge vignette, and a row of flame tongues (outer red, inner
+-- orange, yellow core) licking up from the BOTTOM screen edge -- no dots/embers.
+-- Intensity eases out over the final 0.8s so the burn-out is visible.
+function BallPit:draw_fire_overlay()
+  local b = self.buffs and self.buffs.fire_trail
+  if not b then return end
+  local intensity = math.min(1, math.max(0, b.remaining)/0.8)
+  local time      = love.timer.getTime()
+
+  -- Bottom-weighted heat wash: 6 stacked full-width bands, hottest along the floor.
+  for i = 1, 6 do
+    local a  = 0.085 * (1 - (i - 1)/6) * intensity
+    local cy = gh - (gh/6)*(i - 0.5)
+    graphics.rectangle(gw/2, cy, gw, gh/6, nil, nil, Color(1.0, 0.30, 0.07, a))
+  end
+
+  -- Warm edge vignette: stacked translucent bands fading inward from each side.
+  local th = 6
+  for i = 1, 5 do
+    local a   = 0.12 * (1 - (i - 1)/5) * intensity
+    local off = (i - 1)*th + th/2
+    local c   = Color(1.0, 0.48, 0.14, a)
+    graphics.rectangle(gw/2,     off,      gw, th, nil, nil, c)
+    graphics.rectangle(gw/2,     gh - off, gw, th, nil, nil, c)
+    graphics.rectangle(off,      gh/2,     th, gh, nil, nil, c)
+    graphics.rectangle(gw - off, gh/2,     th, gh, nil, nil, c)
+  end
+
+  -- Flame tongues licking up from the bottom edge: three layered triangles each
+  -- (red base, orange mid, yellow core), waving + flickering in height. No dots.
+  if self.fire_flames then
+    for _, f in ipairs(self.fire_flames) do
+      local flick = 0.7 + 0.3*math.sin(time*f.speed + f.seed)
+      local sway  = math.sin(time*3 + f.seed)*7
+      local h     = f.h * flick * intensity
+      local tipx  = f.x + sway
+      graphics.polygon({f.x - f.w,      gh, f.x + f.w,      gh, tipx,           gh - h},
+                       Color(0.85, 0.15, 0.07, 0.42*intensity))
+      graphics.polygon({f.x - f.w*0.62, gh, f.x + f.w*0.62, gh, f.x + sway*0.7, gh - h*0.66},
+                       Color(1.0, 0.48, 0.12, 0.44*intensity))
+      graphics.polygon({f.x - f.w*0.32, gh, f.x + f.w*0.32, gh, f.x + sway*0.4, gh - h*0.42},
+                       Color(1.0, 0.82, 0.24, 0.40*intensity))
     end
   end
-  self.t:after(5, function()
-    for _, sw in ipairs(self.swarms.objects) do
-      if sw and not sw.dead and sw._frozen_orig_drift then
-        sw.drift_speed       = sw._frozen_orig_drift
-        sw._frozen_orig_drift = nil
+end
+
+
+-- Deep Freeze (timed buff). For its whole duration the arena ices over: no new
+-- swarms spawn (spawn_swarm bails on self.frozen), every live brick holds
+-- position (Swarm:update gates its drift on self.frozen) and stops acting
+-- (Brick:hold_fire + the behaviour casts check self.frozen), and a frost screen
+-- overlay + per-brick ice-cube skins render while it lasts. Restoring just
+-- clears the flag, so drift / spawns / fire resume on their own at thaw.
+function BallPit:apply_freeze_wave()
+  local ice = Color(0.85, 0.94, 1.0, 1)
+
+  self:add_or_extend_buff('freeze_wave', 6,        -- seconds of full deep-freeze
+    function()
+      self.frozen = true
+      self:spawn_frost_shards()
+    end,
+    function()
+      self.frozen       = false
+      self.frost_shards = nil
+    end)
+
+  -- One-shot cast burst, replayed on every catch (even when extending the
+  -- timer): a frost flash, two expanding rings, a shake, a sound, and a sparkle
+  -- of ice shards on each brick the wave catches.
+  Flash{group = self.effects, x = gw/2, y = gh/2,
+        color = Color(blue[0].r, blue[0].g, blue[0].b, 0.30), duration = 0.22}
+  TelegraphRing{group = self.effects, x = gw/2, y = gh/2,
+                radius = math.max(gw, gh)*0.62, color = blue[0], duration = 0.45}
+  TelegraphRing{group = self.effects, x = gw/2, y = gh/2,
+                radius = math.max(gw, gh)*0.42, color = ice, duration = 0.55}
+  camera:shake(4, 0.3, 80)
+  if frost1 then frost1:play{volume = 0.5, pitch = random:float(0.7, 0.85)} end
+
+  for _, sw in ipairs(self.swarms.objects) do
+    if sw and not sw.dead then
+      for _, cell in ipairs(sw.cells or {}) do
+        if cell.brick and not cell.brick.dead then
+          spawn_burst(self.effects, cell.brick.x, cell.brick.y, ice, 3, 20, 60)
+        end
       end
     end
-  end)
+  end
+end
+
+
+-- Pre-roll jagged ice shards rooted on all four screen edges, each pointing
+-- INWARD, for draw_frost_overlay. Each stores its base point, the inward normal
+-- (nx,ny) + along-edge tangent (tx,ty), a length and half-width. Rolled once on
+-- cast (stable, no crawl); the centre is left clear. frost_dur is stashed so the
+-- draw can compute the grow-in without a magic number.
+function BallPit:spawn_frost_shards()
+  self.frost_dur = 6   -- must match the freeze_wave buff duration above
+  local list = {}
+  -- edge: 1=top 2=bottom 3=left 4=right. n = inward normal, t = along-edge tangent.
+  local function add(edge, along, len, halfw)
+    local x, y, nx, ny, tx, ty
+    if     edge == 1 then x, y, nx, ny, tx, ty = along, 0,   0,  1, 1, 0
+    elseif edge == 2 then x, y, nx, ny, tx, ty = along, gh,  0, -1, 1, 0
+    elseif edge == 3 then x, y, nx, ny, tx, ty = 0, along,   1,  0, 0, 1
+    else                  x, y, nx, ny, tx, ty = gw, along, -1,  0, 0, 1 end
+    list[#list + 1] = {x = x, y = y, nx = nx, ny = ny, tx = tx, ty = ty,
+                       len = len, halfw = halfw}
+  end
+  local nh = 12
+  for i = 1, nh do
+    local along = (i - 0.5)*gw/nh + random:float(-8, 8)
+    add(1, along, random:float(20, 48), random:float(5, 11))
+    add(2, along, random:float(20, 48), random:float(5, 11))
+  end
+  local nv = 14
+  for i = 1, nv do
+    local along = (i - 0.5)*gh/nv + random:float(-8, 8)
+    add(3, along, random:float(18, 40), random:float(5, 10))
+    add(4, along, random:float(18, 40), random:float(5, 10))
+  end
+  self.frost_shards = list
+end
+
+
+-- Full-screen frost while the freeze buff is live: a cold blue wash plus jagged
+-- ICE SHARDS crystallizing inward from all four screen edges -- no dots. Shards
+-- grow in over the first ~0.5s and the whole effect eases out over the final
+-- 0.8s (the thaw). Each shard is a filled triangle plus white glint edges.
+function BallPit:draw_frost_overlay()
+  local b = self.buffs and self.buffs.freeze_wave
+  if not b then return end
+  local intensity = math.min(1, math.max(0, b.remaining)/0.8)
+  local grow      = math.clamp(((self.frost_dur or 6) - b.remaining)/0.5, 0, 1)
+
+  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil,
+                     Color(0.52, 0.78, 1.0, 0.14*intensity))
+
+  if self.frost_shards then
+    for _, s in ipairs(self.frost_shards) do
+      local L = s.len * grow * intensity
+      local ax, ay     = s.x - s.tx*s.halfw, s.y - s.ty*s.halfw
+      local bx, by     = s.x + s.tx*s.halfw, s.y + s.ty*s.halfw
+      local tipx, tipy = s.x + s.nx*L,       s.y + s.ny*L
+      graphics.polygon({ax, ay, bx, by, tipx, tipy}, Color(0.82, 0.93, 1.0, 0.55*intensity))
+      graphics.line(ax, ay, tipx, tipy, Color(1.0, 1.0, 1.0, 0.50*intensity), 1)
+      graphics.line(bx, by, tipx, tipy, Color(0.70, 0.88, 1.0, 0.32*intensity), 1)
+    end
+  end
 end
 
 

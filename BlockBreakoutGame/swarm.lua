@@ -192,8 +192,12 @@ function Swarm:update(dt)
   self.x_offset = self.x_offset + self.vx*dt
   self.y_offset = self.y_offset + self.vy*dt
 
-  -- Continuous downward drift.
-  self.y_top = self.y_top + self.drift_speed*dt
+  -- Continuous downward drift -- suspended while the arena is frozen by the
+  -- freeze powerup (bricks hold their position; drift resumes on thaw).
+  local arena = main.current
+  if not (arena and arena.frozen) then
+    self.y_top = self.y_top + self.drift_speed*dt
+  end
 
   -- Reposition surviving bricks and track the lowest occupied y for the
   -- breach test. For multi-cell bricks, the brick body lives at the shape
@@ -222,9 +226,9 @@ function Swarm:update(dt)
     return
   end
 
-  -- Breach: the lowest still-alive brick crossed the paddle line.
-  local arena = main.current
-  if arena and arena.paddle and lowest_y > arena.paddle.y - 10 then
+  -- Breach: the lowest still-alive brick crossed the paddle line. Frozen bricks
+  -- can't breach -- they're held in place above the paddle until the freeze lifts.
+  if arena and arena.paddle and not arena.frozen and lowest_y > arena.paddle.y - 10 then
     arena:on_row_breached(self, alive_count)
     for _, cell in ipairs(self.cells) do
       if cell.brick and not cell.brick.dead then cell.brick.dead = true end
