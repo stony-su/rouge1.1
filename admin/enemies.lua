@@ -1,6 +1,6 @@
 -- Mobile enemies that aren't bricks.
 --
--- EnemyCritter is a small circular enemy spawned by the swarmer/spawner brick
+-- EnemyCritter is a small circular enemy spawned by the swarmer brick
 -- variants. It drifts toward the paddle and dies in a single hit. If it
 -- reaches the paddle, it breaches like a brick would.
 --

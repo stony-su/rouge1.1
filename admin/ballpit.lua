@@ -84,14 +84,14 @@ local function wave_config(wave)
     mix = {{'seeker', 64}, {'speed_booster', 10}, {'exploder', 12}, {'tank', 12}, {'headbutter', 12}}
   elseif wave <= 8 then
     mix = {{'seeker', 56}, {'exploder', 12}, {'tank', 12}, {'headbutter', 10},
-           {'spawner', 8}, {'swarmer', 10}}
+           {'swarmer', 10}}
   elseif wave == 9 then
     -- Pre-boss "warning" wave: by now every ranged variant has been introduced,
     -- so append_ranged layers in the full set -- a taste of what the boss throws.
     mix = {{'seeker', 38}, {'tank', 10}, {'swarmer', 10}, {'forcer', 8}, {'randomizer', 10}}
   else
     -- wave 11+ post-boss tier: hardest melee/utility base; all ranged appended.
-    mix = {{'seeker', 45}, {'tank', 12}, {'headbutter', 8}, {'spawner', 10},
+    mix = {{'seeker', 45}, {'tank', 12}, {'headbutter', 8},
            {'swarmer', 12}, {'forcer', 10}, {'randomizer', 8}}
   end
 
@@ -119,7 +119,7 @@ local function wave_config(wave)
     -- Drift is scaled by the live arena height (relative to the original
     -- 228px playfield) so a taller map doesn't silently make swarms slower
     -- to reach the paddle. Keeps wave pressure consistent across resolutions.
-    drift_speed        = (5 + 0.25*wave)*0.65*((gh - 42)/228),
+    drift_speed        = (5 + 0.25*wave)*0.5*((gh - 42)/228),
     -- Vertical breathing room required between a new swarm and any existing
     -- swarm. Starts at 30px (about 2 brick-rows of clear space) and shrinks
     -- to 0 by wave 15, so late-game swarms can stack with no clearance.

@@ -126,6 +126,65 @@ function TelegraphSquare:draw()
 end
 
 
+-- FlickTick: a short, thin line that darts outward from a point along `r`, then
+-- shrinks and fades to nothing. A few fired together in an ability's direction
+-- are the whole tell for an enemy-block cast -- compact and self-dispersing, so
+-- they replace the old ring + word-label + particle-spray combo without
+-- cluttering the play area.
+FlickTick = Object:extend()
+FlickTick:implement(GameObject)
+function FlickTick:init(args)
+  self:init_game_object(args)
+  self.color    = self.color or fg[0]
+  self.r        = self.r or 0        -- travel direction, radians
+  self.dist     = self.dist or 9     -- how far the segment darts out
+  self.len      = self.len or 6      -- segment length
+  self.width    = self.width or 2
+  self.duration = self.duration or 0.32
+  self.age      = 0
+  self.travel   = 0
+  self.alpha    = 1
+  self.t:after(self.duration, function() self.dead = true end)
+end
+
+function FlickTick:update(dt)
+  self:update_game_object(dt)
+  self.age = self.age + dt
+  local k  = math.min(1, self.age/self.duration)
+  -- Dart outward fast then ease (cubic-out). Hold full brightness for most of
+  -- the life and only fade over the last stretch, so the flick actually
+  -- registers before it disperses (a straight alpha tween vanished too fast).
+  self.travel = self.dist*(1 - (1 - k)^3)
+  self.alpha  = (k < 0.55) and 1 or math.max(0, 1 - (k - 0.55)/0.45)
+end
+
+function FlickTick:draw()
+  local dx, dy = math.cos(self.r), math.sin(self.r)
+  local bx, by = self.x + dx*self.travel, self.y + dy*self.travel
+  local tx, ty = bx + dx*self.len,        by + dy*self.len
+  graphics.line(bx, by, tx, ty, Color(self.color.r, self.color.g, self.color.b, self.alpha), self.width)
+end
+
+
+-- Fire a small set of FlickTicks from (x, y), one per angle in `dirs`. The
+-- standard "enemy block did something" tell: pass downward angles for a lunge or
+-- shot, a full radial spread for a shove, a single aimed angle for a snipe, etc.
+-- opts overrides dist/len/duration/width; values are jittered slightly so the
+-- ticks never look mechanical.
+function spawn_flicks(group, x, y, color, dirs, opts)
+  opts = opts or {}
+  for _, a in ipairs(dirs) do
+    FlickTick{
+      group = group, x = x, y = y, color = color or fg[0], r = a,
+      dist     = opts.dist     or random:float(8, 11),
+      len      = opts.len      or random:float(5, 7),
+      duration = opts.duration or random:float(0.28, 0.38),
+      width    = opts.width    or 2,
+    }
+  end
+end
+
+
 -- DotCloud: a persistent damage zone painted by plague_doctor / witch.
 -- Doesn't apply damage itself — BallPit:burn_area runs that side via the
 -- existing brick burn timer. The cloud is purely the visual.
