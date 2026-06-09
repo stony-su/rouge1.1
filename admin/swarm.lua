@@ -226,9 +226,11 @@ function Swarm:update(dt)
     return
   end
 
-  -- Breach: the lowest still-alive brick crossed the paddle line. Frozen bricks
-  -- can't breach -- they're held in place above the paddle until the freeze lifts.
-  if arena and arena.paddle and not arena.frozen and lowest_y > arena.paddle.y - 10 then
+  -- Breach: the lowest still-alive brick crossed the red defense line (the top
+  -- of the paddle's dodge band), not the paddle itself -- keeping swarms off the
+  -- very bottom of the screen. Frozen bricks can't breach; they're held in place
+  -- above the line until the freeze lifts.
+  if arena and arena.paddle and not arena.frozen and lowest_y > arena:breach_line_y() then
     arena:on_row_breached(self, alive_count)
     for _, cell in ipairs(self.cells) do
       if cell.brick and not cell.brick.dead then cell.brick.dead = true end

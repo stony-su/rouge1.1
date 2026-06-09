@@ -1319,6 +1319,15 @@ function BallPit:draw_hud()
   graphics.rectangle((self.x1 + self.x2)/2, (self.y1 + self.y2)/2,
     self.x2 - self.x1, self.y2 - self.y1, 2, 2, fg_transparent_weak, 1)
 
+  -- Red dotted "defense line" at the top of the paddle's dodge band. Any enemy
+  -- that crosses it costs the player HP (see breach_line_y consumers), so it
+  -- doubles as a readable danger boundary and keeps the swarm action off the
+  -- very bottom of the screen. A gentle pulse marks it as a live threat line.
+  local line_y = self:breach_line_y()
+  local pulse  = 0.35 + 0.15*math.sin(love.timer.getTime()*4)
+  graphics.dashed_line(self.x1 + 1, line_y, self.x2 - 1, line_y, 5, 4,
+                       Color(red[0].r, red[0].g, red[0].b, pulse), 1)
+
   -- HP hearts.
   for i = 1, self.player_hp_max do
     local color = i <= self.player_hp and red[0] or bg[2]
@@ -1497,6 +1506,15 @@ function BallPit:draw_combo_meter()
     graphics.rectangle(cx + 4 - bar_w/2 + bar_w*pct/2, bar_y,
                        bar_w*pct, 2, nil, nil, col)
   end
+end
+
+
+-- The y of the red "defense line" at the top of the paddle's dodge band. It is
+-- both the breach boundary -- enemies that cross it cost the player HP (see the
+-- swarm and critter breach checks) -- and what draw_hud renders as the red
+-- dotted line. Falls back to a fixed offset if the paddle isn't built yet.
+function BallPit:breach_line_y()
+  return (self.paddle and self.paddle.top_reach) or (self.y2 - 94)
 end
 
 

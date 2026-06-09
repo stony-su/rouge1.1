@@ -21,6 +21,11 @@ function Paddle:init(args)
   -- Remember the spawn y so the dodge band is centred wherever the arena
   -- placed us, no matter the resolution / playfield height.
   self.y_anchor = self.y
+  -- Top of the dodge band — the highest point the paddle can climb to. The
+  -- arena draws a red "defense line" here and treats it as the enemy breach
+  -- boundary (anything that crosses it costs the player HP), so expose it for
+  -- swarm.lua / enemies.lua / the HUD instead of hiding it behind the band const.
+  self.top_reach = self.y_anchor - DODGE_BAND_UP
   self.color = fg[0]
   self:set_as_rectangle(self.w, self.h, 'kinematic', 'paddle')
   self:set_restitution(1)

@@ -44,6 +44,7 @@ rewrites a core verb, so stats are balanced by tradeoffs, not flat power.
 | **Tesla** | 1.0 | 1.0 | 0.8 | 0.8 | 0.9 | 1.4 | 1.0 | 1.1 | 4♥ | Wizard | 4 |
 | **Glacier** | 1.0 | 0.8 | 1.5 | 1.3 | 0.6 | 1.1 | 1.0 | 1.2 | 5♥ | Cryomancer | 2 |
 | **Terrorist** | 1.0 | 1.0 | 1.1 | 1.0 | 1.0 | 1.6 | FLAT ✦ | 1.0 | 3♥ | Bomber | 3 |
+| **Cannon** | 0.9 | 1.0 | 0.6 | 1.7 | 0.9 | 1.5 | 1.0 | 1.1 | 4♥ | Cannoneer | 2 |
 
 **✦ notes:** Hive deals **0 contact damage** (the critters are the damage).
 Twin Cast Count 4 = 2 hero types **mirrored**. Terrorist XP **FLAT** = every
@@ -156,6 +157,29 @@ hearts (Dmg 1.6).
 - **Hook:** pin `xp_to_next` to a constant; per-ball `t:after(fuse)` →
   `do_splash` + apply the ball's effect + respawn at the paddle.
 
+### Cannon — *artillery / Z-axis mortar*
+The ball **charges automatically every time it returns to the paddle** after its
+attack reaches the furthest wall — the same bounce-return loop the paddle already
+uses to ramp speed, no holding needed. A charged ball **fires up into the third
+dimension** (out of the screen) and falls back down onto the playfield, crashing
+into blocks from above. Depth is sold with a **ground shadow** + **ball scale** +
+real gravity on its Z height: the higher the ball rises, the further its shadow
+separates beneath it and the larger the ball draws. The **higher the charge, the
+faster it bounces up and down** (more crashes per second) and the **bigger the
+splash** each landing covers. A **direct hit** (impact centred on a block) deals
+heavy damage, with **falloff the further a block sits from the impact centre** —
+an AoE that rewards precise drops (Charge 1.7, Dmg 1.5).
+- **Downside:** almost no horizontal arena coverage (Ball 0.6) — you hit where it
+  lands, not everywhere; weak until the charge ramps over several returns, and
+  **dropping the ball into the pit resets its charge**; 4 hearts.
+- **Hook:** reuse the existing paddle-bounce charge — each time the ball returns
+  to the paddle after reaching the far wall, bump its charge (like `speed_mult`),
+  automatically. Give the ball a `z` height + `z_vel` (draw it at `(x, y - z)`
+  scaled by z, with a shadow ellipse at ground `(x, y)`) and gravity on z; when
+  `z <= 0`, call `do_splash(x, y, radius, dmg, color)` scaling damage by distance
+  from the impact centre (the falloff). Charge sets BOTH the up/down bounce
+  velocity and the splash radius.
+
 ---
 
 ## Implementation notes
@@ -165,6 +189,7 @@ hearts (Dmg 1.6).
   `speed_mult_step`; Aim → the `±π/3` term in `Paddle:on_ball_bounce`; XP →
   `gain_xp` / `xp_to_next`; Combo → the `COMBO_*` gain/penalty; Size/Move →
   `Paddle:init`/`update`; HP → `reset_run`.
+- **Z-axis system (Cannon only):** add a fake `z` height + `z_vel` to the ball, draw it at `(x, y - z)` scaled by height with a ground-shadow ellipse at `(x, y)`, and splash on `z <= 0` — the one paddle that needs out-of-plane rendering; every other paddle is pure 2D.
 - DUAL-BUILD: any actual gameplay implementation must go into BOTH
   `BlockBreakoutGame/` and `admin/` (see MEMORY / GAME_CODE_SUMMARY.txt).
 - This is a design doc only — nothing here is wired up yet.

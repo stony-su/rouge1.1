@@ -1,8 +1,8 @@
 -- Mobile enemies that aren't bricks.
 --
 -- EnemyCritter is a small circular enemy spawned by the swarmer brick
--- variants. It drifts toward the paddle and dies in a single hit. If it
--- reaches the paddle, it breaches like a brick would.
+-- variants. It drifts downward and dies in a single hit. If it crosses the
+-- red defense line, it breaches like a swarm would (costs the player HP).
 --
 -- EnemyProjectile is a slow downward shot fired by the shooter brick variant.
 -- Hits the paddle for damage. Can be destroyed by a ball.
@@ -41,7 +41,9 @@ function EnemyCritter:update(dt)
   self:set_velocity(vx + (target_vx - vx)*0.05, vy + (self.speed - vy)*0.05)
 
   local arena = main.current
-  if self.y > arena.paddle.y + 6 then
+  -- Breach at the red defense line (top of the paddle's dodge band) -- the same
+  -- boundary swarms use -- instead of wandering all the way down to the paddle.
+  if self.y > arena:breach_line_y() then
     arena:on_brick_breached(self)
     self.dead = true
   end
