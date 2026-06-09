@@ -2286,14 +2286,14 @@ end
 
 -- Fire (timed buff). While it's up the arena gets a warm fiery ambiance (a
 -- screen overlay of flames licking up from the floor), and any block the player
--- ignites by hitting it with a ball sprouts flame tongues + takes a burn DoT.
+-- ignites by hitting it with a ball burns down to black ash via a burn DoT.
 -- The burn itself is applied on ball contact in BallHero (gated on this buff);
 -- this function only drives the timer + the ambiance flag (self.fire_active).
 -- No screen-wide drain -- fire damages only the blocks the balls actually hit.
 function BallPit:apply_fire_trail_buff()
   local ember = Color(1.0, 0.55, 0.15, 1)
 
-  self:add_or_extend_buff('fire_trail', 8,        -- seconds of fire
+  self:add_or_extend_buff('fire_trail', 18,       -- seconds of fire
     function()
       self.fire_active = true
       self:spawn_fire_flames()
@@ -2304,8 +2304,9 @@ function BallPit:apply_fire_trail_buff()
     end)
 
   -- One-shot cast burst, replayed on every catch (even when extending the
-  -- timer): a fiery flash, two expanding rings, a shake, a sound, and a sparkle
-  -- of embers on each brick the wave catches.
+  -- timer): a fiery flash, two expanding rings, a shake and a sound. The old
+  -- per-brick ember sparkle on every block on screen is gone -- it dated from
+  -- when fire damaged all blocks; now it only burns the blocks the balls hit.
   Flash{group = self.effects, x = gw/2, y = gh/2,
         color = Color(red[0].r, red[0].g, red[0].b, 0.30), duration = 0.22}
   TelegraphRing{group = self.effects, x = gw/2, y = gh/2,
@@ -2314,16 +2315,6 @@ function BallPit:apply_fire_trail_buff()
                 radius = math.max(gw, gh)*0.42, color = ember, duration = 0.55}
   camera:shake(4, 0.3, 80)
   if fire1 then fire1:play{volume = 0.5, pitch = random:float(0.85, 1.0)} end
-
-  for _, sw in ipairs(self.swarms.objects) do
-    if sw and not sw.dead then
-      for _, cell in ipairs(sw.cells or {}) do
-        if cell.brick and not cell.brick.dead then
-          spawn_burst(self.effects, cell.brick.x, cell.brick.y, ember, 3, 25, 70)
-        end
-      end
-    end
-  end
 end
 
 

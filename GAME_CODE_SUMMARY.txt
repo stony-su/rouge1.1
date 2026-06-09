@@ -345,6 +345,21 @@ byte-identical) and threaded through ballpit.lua (both builds):
   apply_level_random(amount); falls back to random:int(1,5) when nil (e.g. the
   admin terminal calls it without amount).
 
+* FIRE REWORK (2026-06): fire_trail buff lasts 18s (was 8). The burn visual on
+  bricks (brick.lua, both builds) is a "burn-line sweep": missing HP renders as
+  cold black ash eating down from the brick's top edge (ash front = 1 -
+  hp/max_hp, so the visual IS the damage readout; Brick.scorched flag set by
+  apply_burn, never cleared), with a thin flickering ember line at the front
+  while burn_timer > 0. Ash motes/ember sparks drift up from the front line;
+  scorched bricks die in a gray ash puff instead of the colour burst. The
+  on-catch per-brick ember sparkle in apply_fire_trail_buff was REMOVED (legacy
+  of screen-wide fire dmg). The screen ambiance overlay (fire_active /
+  spawn_fire_flames / draw_fire_overlay) still exists and runs for the buff.
+  Burn is PERMANENT and normalized: Brick:apply_burn ignores BOTH args and sets
+  burn_timer = math.huge + burn_dps = 20% of max_hp/sec, so once lit any brick
+  dies in <=5s (faster if also cursed/ball-hit). The Boss's burn is still
+  timed + dps-based (enemies.lua Boss:apply_burn unchanged).
+
 PENDING: there is/was an unfinished MERGE COMMIT. Re-stage the four touched
 files (powerup.lua + ballpit.lua in both builds) before committing.
 

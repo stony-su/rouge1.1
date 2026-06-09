@@ -102,6 +102,7 @@ function Brick:init(args)
   self.slow_timer  = 0
   self.burn_timer  = 0
   self.burn_dps    = 0
+  self.scorched    = false   -- set on first burn: missing HP renders as ash eating down from the top
 
   -- One kinematic body, one BRICK_W×BRICK_H fixture per cell. The fixture
   -- userdata all point at the same brick id, so collision callbacks route to
@@ -453,12 +454,27 @@ function Brick:update(dt)
   if self.burn_timer > 0 then
     self.burn_timer = self.burn_timer - dt
     self:take_damage(self.burn_dps*dt, orange[0], true)
-    if random:bool(15) then
+    -- Disintegration: small dark ash flakes drift up off the burn front (the
+    -- line where missing HP meets live brick), with the odd ember spark.
+    local front_y = self.y + (self.cell_min_cy - self.shape_cy)*CELL_H - BRICK_H/2
+                  + (1 - math.clamp(self.hp/self.max_hp, 0, 1))*self.h
+    if random:bool(12) then
       HitParticle{
         group = main.current.effects,
         x = self.x + random:float(-self.w/3, self.w/3),
-        y = self.y - self.h/2,
-        color = orange[0], v = 30, r = -math.pi/2, w = 2, duration = 0.3,
+        y = front_y,
+        color = Color(0.30, 0.29, 0.28, 0.8),
+        v = random:float(10, 18), r = -math.pi/2 + random:float(-0.4, 0.4),
+        w = 1.5, duration = random:float(0.5, 0.8),
+      }
+    end
+    if random:bool(5) then
+      HitParticle{
+        group = main.current.effects,
+        x = self.x + random:float(-self.w/3, self.w/3),
+        y = front_y,
+        color = orange[0], v = random:float(20, 30),
+        r = -math.pi/2 + random:float(-0.3, 0.3), w = 1, duration = 0.35,
       }
     end
   end
@@ -556,36 +572,72 @@ function Brick:draw()
         graphics.rectangle(mx, my, gap_w + 2, gap_h + 2, nil, nil, dark_color)
       end
     end
-  graphics.pop()
 
-  -- Flame skin: any block actively burning (ball-hit fire trail, pyromancer,
-  -- etc.) grows flickering flame tongues from each cell's TOP edge -- outer red,
-  -- inner orange, yellow core -- waving via sin(time). Drawn OUTSIDE the
-  -- hit-flash push/pop so tall flames keep true proportions and never squash.
-  if self.burn_timer > 0 then
-    local ft, hw = love.timer.getTime(), BRICK_W/2
-    for _, c in ipairs(self.shape_cells) do
-      local cx  = self.x + (c[1] - self.shape_cx) * CELL_W
-      local cy  = self.y + (c[2] - self.shape_cy) * CELL_H
-      local top = cy - BRICK_H/2
-      local pulse = 0.5 + 0.5*math.sin(ft*10 + cx)
-      graphics.rectangle(cx, cy, BRICK_W, BRICK_H, 1, 1, Color(1.0, 0.42, 0.10, 0.32 + 0.16*pulse)) -- hot body glow
-      for k = -1, 1 do
-        local bx    = cx + k*hw*0.6
-        local seed  = cx*0.6 + cy*0.4 + k*1.7
-        local sway  = math.sin(ft*7 + seed)*2.2
-        local flick = 0.75 + 0.25*math.sin(ft*13 + seed*1.3)
-        local hgt   = BRICK_H * (1.9 + 0.7*flick)
-        local tipx, wb = bx + sway, 3.4
-        graphics.polygon({bx - wb, top, bx + wb, top, tipx, top - hgt}, Color(0.90, 0.15, 0.08, 0.90))                                   -- outer red
-        graphics.polygon({bx - wb*0.62, top, bx + wb*0.62, top, bx + sway*0.7, top - hgt*0.66}, Color(1.0, 0.52, 0.12, 0.92))            -- inner orange
-        graphics.polygon({bx - wb*0.32, top - hgt*0.28, bx + wb*0.32, top - hgt*0.28, bx + sway*0.5, top - hgt*0.54}, Color(1.0, 0.85, 0.25, 0.95)) -- yellow core
+    -- Burn-line sweep: on a scorched brick the missing HP renders as cold
+    -- black ash eating DOWN from the top edge, like paper burning -- fully
+    -- burnt = 0 hp = all ash. The ash front tracks hp 1:1, so it doubles as a
+    -- damage readout. Everything stays inside the brick's own footprint.
+    if self.scorched and hp_pct < 1 then
+      local box_top = self.y + (self.cell_min_cy - self.shape_cy)*CELL_H - BRICK_H/2
+      local front_y = box_top + (1 - hp_pct)*self.h
+      local ash_rim, ash_in = Color(0.09, 0.08, 0.09, 1), Color(0.15, 0.14, 0.15, 1)
+      for _, c in ipairs(self.shape_cells) do
+        local cx = self.x + (c[1] - self.shape_cx) * CELL_W
+        local cy = self.y + (c[2] - self.shape_cy) * CELL_H
+        local ah = math.clamp(front_y - (cy - BRICK_H/2), 0, BRICK_H)
+        if ah > 0 then
+          graphics.rectangle(cx, cy - BRICK_H/2 + ah/2, BRICK_W, ah, 1, 1, ash_rim)
+          if ah > 3 then
+            graphics.rectangle(cx, cy - BRICK_H/2 + ah/2, BRICK_W - 2, ah - 2, nil, nil, ash_in)
+          end
+        end
+        -- Ash the within-brick connectors too so multi-cell shapes burn as one.
+        if has_cell(c[1] + 1, c[2]) and ah > 0 then
+          local mx = self.x + (c[1] + 0.5 - self.shape_cx) * CELL_W
+          graphics.rectangle(mx, cy - BRICK_H/2 + ah/2, gap_w + 2, ah, nil, nil, ash_in)
+        end
+        if has_cell(c[1], c[2] + 1) then
+          local my  = self.y + (c[2] + 0.5 - self.shape_cy) * CELL_H
+          local vt  = my - (gap_h + 2)/2
+          local vah = math.clamp(front_y - vt, 0, gap_h + 2)
+          if vah > 0 then graphics.rectangle(cx, vt + vah/2, BRICK_W, vah, nil, nil, ash_in) end
+        end
+        if has_cell(c[1] + 1, c[2]) and has_cell(c[1], c[2] + 1) and has_cell(c[1] + 1, c[2] + 1) then
+          local mx  = self.x + (c[1] + 0.5 - self.shape_cx) * CELL_W
+          local my  = self.y + (c[2] + 0.5 - self.shape_cy) * CELL_H
+          local vt  = my - (gap_h + 2)/2
+          local vah = math.clamp(front_y - vt, 0, gap_h + 2)
+          if vah > 0 then graphics.rectangle(mx, vt + vah/2, gap_w + 2, vah, nil, nil, ash_in) end
+        end
+      end
+
+      -- The glowing burn front itself -- a thin jagged ember line flickering
+      -- yellow/orange with a faint heat haze on the unburnt side -- only while
+      -- the fire is actually alive. When the burn expires the line goes out
+      -- and the ash above it stays cold.
+      if self.burn_timer > 0 then
+        local ft  = love.timer.getTime()
+        local seg = BRICK_W/4
+        for _, c in ipairs(self.shape_cells) do
+          local cx = self.x + (c[1] - self.shape_cx) * CELL_W
+          local cy = self.y + (c[2] - self.shape_cy) * CELL_H
+          if front_y >= cy - BRICK_H/2 - 0.5 and front_y <= cy + BRICK_H/2 + 0.5 then
+            for i = 0, 3 do
+              local sx  = cx - BRICK_W/2 + (i + 0.5)*seg
+              local off = math.sin(ft*9 + cx*0.7 + i*1.9)*1.1
+              local lc  = (math.sin(ft*13 + i*2.3 + cy) > 0) and Color(1.0, 0.82, 0.25, 0.95)
+                                                              or Color(1.0, 0.48, 0.12, 0.95)
+              graphics.rectangle(sx, front_y + off, seg, 1.6, nil, nil, lc)
+              graphics.rectangle(sx, front_y + off + 2.4, seg, 3.2, nil, nil, Color(1.0, 0.45, 0.10, 0.16))
+            end
+          end
+        end
       end
     end
-  end
+  graphics.pop()
 
   -- Type icon: a small symbol identifying this enemy's role, drawn on top of the
-  -- body (and any ice/fire skin) so block types are tellable apart at a glance.
+  -- body (and any ice/ash skin) so block types are tellable apart at a glance.
   self:draw_type_icon()
 
   -- HP bar: spans the full bounding-box width, sits above the topmost row.
@@ -720,16 +772,30 @@ function Brick:apply_curse(color, mult, duration)
 end
 
 
+-- Once a brick catches fire it burns until it DIES: the burn never expires
+-- (timer set to inf; the per-frame countdown in update can't drain it), and
+-- the DoT is a flat 20% of MAX HP per second -- any burning brick is dead in
+-- at most 5s no matter how tough it is. Both args are ignored, kept only so
+-- the existing callers (fire trail, pyromancer, dot clouds, curses) don't
+-- need to change.
 function Brick:apply_burn(dps, duration)
-  self.burn_dps   = math.max(self.burn_dps, dps)
-  self.burn_timer = math.max(self.burn_timer, duration)
+  self.burn_dps   = self.max_hp*0.2
+  self.burn_timer = math.huge
+  self.scorched   = true
 end
 
 
 function Brick:die()
   local arena = main.current
   arena:on_brick_killed(self)
-  spawn_burst(arena.effects, self.x, self.y, self.color, 8, 60, 160)
+  if self.scorched then
+    -- A scorched brick doesn't pop -- it disintegrates: a slow puff of dark ash
+    -- flakes with a couple of dying embers instead of the bright colour burst.
+    spawn_burst(arena.effects, self.x, self.y, Color(0.26, 0.25, 0.24, 0.9), 10, 15, 45)
+    spawn_burst(arena.effects, self.x, self.y, orange[0], 2, 25, 50)
+  else
+    spawn_burst(arena.effects, self.x, self.y, self.color, 8, 60, 160)
+  end
   enemy_die1:play{volume = 0.3, pitch = random:float(0.92, 1.08)}
 
   -- Death triggers for two of the variants.
