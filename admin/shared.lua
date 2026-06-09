@@ -16,7 +16,7 @@ function shared_init()
   local palette = {
     white   = ColorRamp(Color(1, 1, 1, 1), 0.025),
     black   = ColorRamp(Color(0, 0, 0, 1), 0.025),
-    bg      = ColorRamp(Color'#1a1a26', 0.025),
+    bg      = ColorRamp(Color'#0c0c14', 0.025),
     fg      = ColorRamp(Color'#dadada', 0.025),
     fg_alt  = ColorRamp(Color'#b0a89f', 0.025),
     yellow  = ColorRamp(Color'#facf00', 0.025),
