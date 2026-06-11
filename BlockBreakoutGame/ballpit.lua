@@ -725,20 +725,47 @@ function BallPit:reset_run()
   -- expire a ball's pierce state when it bonks the ceiling.
   self.top_wall = self:spawn_wall((self.x1 + self.x2)/2, self.y1 - thick/2, self.x2 - self.x1 + thick, thick)
 
+  -- Paddle loadout (see paddles.lua / PADDLES.md). The selected paddle's
+  -- stat multipliers are snapshotted into run_mods BEFORE the paddle and
+  -- heroes spawn so both read them at init time.
+  PADDLES.ensure_state()
+  local pdef = PADDLES.get(state.selected_paddle)
+  self.paddle_def = pdef
+  self.run_mods = {
+    ball = pdef.ball, charge = pdef.charge, aim = pdef.aim, dmg = pdef.dmg,
+    xp = pdef.xp, combo = pdef.combo, xp_mode = pdef.xp_mode,
+    hp_mode = pdef.hp_mode, signature = pdef.signature, sig = pdef.sig,
+  }
+
   -- Paddle.
-  self.paddle = Paddle{group = self.main, x = gw/2, y = self.y2 - 14}
+  self.paddle = Paddle{
+    group = self.main, x = gw/2, y = self.y2 - 14,
+    w = math.floor(36*pdef.size + 0.5), speed = 220*pdef.move,
+    aim_mult = pdef.aim, color = _G[pdef.color_key][0],
+    flippers = (pdef.signature == 'flippers') or nil,
+    flipper_gap = pdef.sig.gap, flip_window = pdef.sig.flip_window,
+    move_mode = (pdef.signature == 'glacier') and 'ice' or nil,
+  }
 
-  -- Starting hero pool — player starts with two vagrants.
+  -- Starting hero pool — the loadout decides the lineup (Twin Cast mirrors
+  -- each one inside add_hero). seen_characters feeds the Mitosis regrow.
   self.heroes = {}
-  self:add_hero('vagrant')
-  self:add_hero('swordsman')
+  self.seen_characters = {}
+  for _, c in ipairs(pdef.start_balls) do self:add_hero(c) end
 
-  -- Run state.
-  self.player_hp     = 5
-  self.player_hp_max = 5
+  -- Run state. The Vampire's hp_mode 'bar' uses a 0-100 float (1 heart = 20
+  -- units, see damage_player/heal_hearts) instead of discrete hearts.
+  if pdef.hp_mode == 'bar' then
+    self.player_hp     = 100
+    self.player_hp_max = 100
+  else
+    self.player_hp     = pdef.hp
+    self.player_hp_max = pdef.hp
+  end
+  self.run_kills     = 0
   self.xp            = 0
   self.level         = 1
-  self.xp_to_next    = 5
+  self.xp_to_next    = (pdef.xp_mode == 'flat') and PADDLES.XP_FLAT or 5
   self.wave          = 1
   self.wave_time     = 0
   self.boss          = nil
@@ -817,6 +844,11 @@ function BallPit:reset_run()
     next_at = random:float(20, 30),   -- first level-up ball lands ~20-30s in
   }
 
+  -- One-time signature setup for the selected paddle loadout (aegis bottom
+  -- wall, mitosis regrow timer, phantom/tesla state). See paddles.lua.
+  self.shop_selected = self.shop_selected or 1
+  self:setup_signature()
+
   self:start_wave()
 end
 
@@ -839,7 +871,7 @@ end
 
 -- Counts heroes already in play whose character uses the same base colour as
 -- `character`. Comparison is on the colour value, not the character name, so
--- e.g. a wizard adds to the same-colour tally for a magician (both blue).
+-- e.g. a wizard adds to the same-colour tally for a cryomancer (both blue).
 function BallPit:count_same_color_heroes(character)
   local base = character_colors[character] or fg[0]
   local n = 0
@@ -853,7 +885,12 @@ function BallPit:count_same_color_heroes(character)
 end
 
 
-function BallPit:add_hero(character)
+-- opts.no_mirror: skip the Twin Cast pair spawn (used by the mirror call
+-- itself and by clone sources like apply_multi_ball / mitosis).
+-- opts.clone: this ball is a temporary copy — don't record it as a drafted
+-- character for the Mitosis regrow.
+function BallPit:add_hero(character, opts)
+  opts = opts or {}
   local count = #self.heroes
   local x = self.paddle.x + (count - 1)*6
   local y = self.paddle.y - 14
@@ -867,6 +904,7 @@ function BallPit:add_hero(character)
     character    = character,
     level        = 1,
     shade_offset = shade_offset,
+    run_mods     = self.run_mods,
   }
   hero.on_collision_enter = function(h, other, contact)
     if not other then return end
@@ -894,6 +932,11 @@ function BallPit:add_hero(character)
       local vx, vy = h:get_velocity()
       spawn_bounce_sparks(self.effects, h.x, h.y, math.atan2(-vy, -vx), h.color)
       if random:bool(40) then bounce1:play{volume = 0.12, pitch = random:float(1.0, 1.1)} end
+      -- Boomerang loadout: any wall hit flags the ball to curl back home,
+      -- damaging whatever it crosses on the return pass (see BallHero:update).
+      if self.run_mods and self.run_mods.signature == 'boomerang' then
+        h.boomerang_home = true
+      end
       -- Top-wall hit ends pierce for this ball. The ball was passing through
       -- bricks while moving up; bouncing off the ceiling is the natural
       -- "now play normal — go ricochet through the bricks at the top".
@@ -906,6 +949,14 @@ function BallPit:add_hero(character)
     end
   end
   table.insert(self.heroes, hero)
+  if self.seen_characters and not opts.clone then
+    self.seen_characters[character] = true
+  end
+  -- Twin Cast loadout: every drafted hero arrives mirrored as a pair.
+  if self.run_mods and self.run_mods.signature == 'twincast'
+  and not opts.no_mirror and not opts.clone then
+    self:add_hero(character, {no_mirror = true})
+  end
   return hero
 end
 
@@ -1208,6 +1259,8 @@ function BallPit:update(dt)
 
   if self.game_over then
     self.ui:update(dt)
+    -- The game-over overlay doubles as the paddle shop (see paddles.lua).
+    self:update_shop(dt)
     if input.restart.pressed then self:reset_run() end
     return
   end
@@ -1221,6 +1274,23 @@ function BallPit:update(dt)
 
   self.run_time  = self.run_time + dt
   self.wave_time = self.wave_time + dt
+
+  -- Vampire loadout: HP is a continuously draining bar — stop killing and
+  -- you die. Sits below the overlay early-returns above, so the drain
+  -- auto-pauses in menus / the upgrade picker / game over.
+  if self.run_mods and self.run_mods.hp_mode == 'bar' then
+    self.player_hp = self.player_hp - (self.run_mods.sig.drain or 2)*dt
+    if self.player_hp <= 0 then
+      self.player_hp = 0
+      self:trigger_game_over()
+      return
+    end
+  end
+
+  -- Phantom loadout: E drops a ghost-paddle anchor / teleports back to it.
+  if self.run_mods and self.run_mods.signature == 'phantom' and input.blink.pressed then
+    self:phantom_blink()
+  end
 
   -- Aim is adjustable whenever space is held OR a ball is stuck on the paddle.
   -- Holding space is the "auto-fire" mode: the aim line shows, arrow keys
@@ -1328,16 +1398,28 @@ function BallPit:draw_hud()
   graphics.dashed_line(self.x1 + 1, line_y, self.x2 - 1, line_y, 5, 4,
                        Color(red[0].r, red[0].g, red[0].b, pulse), 1)
 
-  -- HP hearts.
-  for i = 1, self.player_hp_max do
-    local color = i <= self.player_hp and red[0] or bg[2]
-    graphics.rectangle(self.x1 + 6 + (i-1)*10, self.y1 - 8, 6, 6, 1, 1, color)
+  -- HP readout: hearts normally; the Vampire loadout renders its draining
+  -- 0-100 bar instead.
+  local hp_bar_mode = self.run_mods and self.run_mods.hp_mode == 'bar'
+  if hp_bar_mode then
+    local hbw, hbh = 64, 6
+    local hbx = self.x1 + 6
+    graphics.rectangle(hbx + hbw/2, self.y1 - 8, hbw, hbh, 1, 1, bg[-2])
+    local hpct = math.clamp(self.player_hp/self.player_hp_max, 0, 1)
+    if hpct > 0 then
+      graphics.rectangle(hbx + hbw*hpct/2, self.y1 - 8, hbw*hpct, hbh, 1, 1, red[0])
+    end
+  else
+    for i = 1, self.player_hp_max do
+      local color = i <= self.player_hp and red[0] or bg[2]
+      graphics.rectangle(self.x1 + 6 + (i-1)*10, self.y1 - 8, 6, 6, 1, 1, color)
+    end
   end
 
-  -- XP bar. Width shrunk to leave a ~70px strip on the right for the
-  -- combo meter (see draw_combo_meter).
-  local bw = self.x2 - self.x1 - 140
-  local bx = self.x1 + 60
+  -- XP bar. Starts past however wide the HP readout is (Aegis runs 7 hearts)
+  -- and leaves a ~70px strip on the right for the combo meter.
+  local bx = hp_bar_mode and (self.x1 + 80) or (self.x1 + 20 + self.player_hp_max*10)
+  local bw = (self.x2 - 80) - bx
   graphics.rectangle(bx + bw/2, self.y1 - 8, bw, 4, nil, nil, bg[-2])
   local pct = math.clamp(self.xp/self.xp_to_next, 0, 1)
   if pct > 0 then
@@ -1366,6 +1448,21 @@ end
 
 function BallPit:on_brick_killed(brick)
   self.score = self.score + brick.xp_value*10
+  -- Meta currency: every block kill banks one into the persistent wallet
+  -- (spent in the post-death paddle shop; saved to disk in trigger_game_over).
+  self.run_kills = (self.run_kills or 0) + 1
+  if state then state.wallet = (state.wallet or 0) + 1 end
+
+  local mods = self.run_mods
+  if mods then
+    -- Vampire lifesteal: kills refill the draining bar.
+    if mods.hp_mode == 'bar' then
+      self.player_hp = math.min(self.player_hp_max,
+                                self.player_hp + (mods.sig.heal_per_kill or 3))
+    end
+    -- Mitosis: each kill splits off a short-lived clone ball.
+    if mods.signature == 'mitosis' then self:mitosis_on_kill() end
+  end
 end
 
 
@@ -1415,7 +1512,10 @@ function BallPit:on_brick_bounce(ball, brick)
   end
   c.last_variant  = brick.variant_name or c.last_variant
   c.bounces_total = c.bounces_total + 1
-  local gained = COMBO_BASE_POINTS + streak_bonus + variety_bonus
+  -- The loadout's Combo stat scales gain AND bleed (see on_ball_missed /
+  -- tick_combo) — high-combo paddles run a hotter, riskier meter.
+  local cm = (self.run_mods and self.run_mods.combo) or 1
+  local gained = (COMBO_BASE_POINTS + streak_bonus + variety_bonus)*cm
   c.points = c.points + gained
 
   local new_idx = self:combo_rank_index()
@@ -1443,7 +1543,8 @@ function BallPit:on_ball_missed(ball)
   local c = self.combo
   if not c or c.points <= 0 then return end
   local prev_idx = self:combo_rank_index()
-  c.points       = math.max(0, c.points - COMBO_PENALTY_MISS)
+  local cm = (self.run_mods and self.run_mods.combo) or 1
+  c.points       = math.max(0, c.points - COMBO_PENALTY_MISS*cm)
   c.streak       = 0
   c.last_variant = nil
 
@@ -1458,7 +1559,8 @@ function BallPit:tick_combo(dt)
   if not c then return end
   c.idle_t = c.idle_t + dt
   if c.idle_t > COMBO_IDLE_GRACE and c.points > 0 then
-    c.points = math.max(0, c.points - COMBO_IDLE_DECAY*dt)
+    local cm = (self.run_mods and self.run_mods.combo) or 1
+    c.points = math.max(0, c.points - COMBO_IDLE_DECAY*cm*dt)
     if c.points <= 0 then
       c.streak       = 0
       c.last_variant = nil
@@ -1520,7 +1622,7 @@ end
 
 -- Used for single-enemy breaches (mobile critters that wander down past the paddle).
 function BallPit:on_brick_breached(brick)
-  self.player_hp = self.player_hp - (brick.player_dmg or 1)
+  self:damage_player(brick.player_dmg or 1)
   hit1:play{volume = 0.45, pitch = random:float(0.95, 1.05)}
   Flash{group = self.effects, x = gw/2, y = gh/2, color = red_transparent_weak, duration = 0.08}
   spawn_burst(self.effects, brick.x, brick.y, red[0], 8, 60, 140)
@@ -1534,7 +1636,7 @@ end
 -- count but is capped so a wide swarm doesn't insta-kill.
 function BallPit:on_row_breached(swarm, brick_count)
   local dmg = math.min(3, 1 + math.floor(brick_count/4))
-  self.player_hp = self.player_hp - dmg
+  self:damage_player(dmg)
   hit1:play{volume = 0.5, pitch = random:float(0.9, 1.0)}
   Flash{group = self.effects, x = gw/2, y = gh/2, color = red_transparent_weak, duration = 0.12}
   camera:shake(6 + brick_count*0.4, 0.4, 80)
@@ -1555,6 +1657,8 @@ end
 
 
 function BallPit:gain_xp(amount)
+  -- The loadout's XP stat scales every gain (rounded, never below 1).
+  amount = math.max(1, math.floor(amount*((self.run_mods and self.run_mods.xp) or 1) + 0.5))
   self.xp = self.xp + amount
   FloatingText{group = self.effects, x = self.paddle.x, y = self.paddle.y - 16, text = '+' .. amount, color = blue[0]}
   while self.xp >= self.xp_to_next do
@@ -1565,8 +1669,12 @@ end
 
 
 function BallPit:level_up()
-  self.level      = self.level + 1
-  self.xp_to_next = math.floor(self.xp_to_next * 1.35 + 1)
+  self.level = self.level + 1
+  -- Terrorist loadout: FLAT XP — every level costs the same, so the curve
+  -- never runs away from you (slow opener, out-levels hard late).
+  if not (self.run_mods and self.run_mods.xp_mode == 'flat') then
+    self.xp_to_next = math.floor(self.xp_to_next * 1.35 + 1)
+  end
   level_up1:play{volume = 0.5}
   Flash{group = self.effects, x = gw/2, y = gh/2, color = yellow_transparent_weak, duration = 0.15}
   camera:shake(3, 0.2, 90)
@@ -1650,11 +1758,15 @@ end
 function BallPit:confirm_upgrade()
   local choice = self.upgrade_choices[self.upgrade_selected]
   if choice.action == 'upgrade' then
+    -- Twin Cast: heroes come in mirrored pairs, so a level-up pick levels two
+    -- matching balls instead of one.
+    local to_level = (self.run_mods and self.run_mods.signature == 'twincast') and 2 or 1
     for _, h in ipairs(self.heroes) do
       if h.character == choice.character and h.level < 3 then
         h.level = h.level + 1
         h.dmg = h.dmg * 1.4
-        break
+        to_level = to_level - 1
+        if to_level <= 0 then break end
       end
     end
   else
@@ -1705,91 +1817,50 @@ function BallPit:hero_ability_blurb(c)
     -- Projectile shooters
     vagrant      = 'arrow shot',
     archer       = 'pierce arrow',
-    outlaw       = 'fast arrow',
-    sage         = 'slow arrow',
-    blade        = 'short arrow',
-    dual_gunner  = 'rapid arrow',
-    hunter       = 'long range',
-    lich         = 'chain ricochet',
-    corruptor    = 'pierce x3',
-    beastmaster  = 'crit shot',
-    arcanist     = 'heavy pierce',
-    merchant     = 'basic shot',
 
     -- Knives
     scout        = 'knife x3 bounce',
-    thief        = 'knife x5 bounce',
     assassin     = 'fast pierce',
 
     -- Special projectiles
     spellblade   = 'random shot',
-    barrager     = '3-shot burst',
 
     -- Melee splash
     swordsman    = 'splash strike',
     barbarian    = 'heavy splash',
-    juggernaut   = 'splash+push',
-    elementor    = 'wide splash',
-    highlander   = 'rapid splash',
-    miner        = 'dig splash',
-
-    -- Random-target splash
-    magician     = 'random splash',
-    psychic      = 'mind splash',
 
     -- Healers
     cleric       = '+1 hp / 8s',
-    priest       = '+2 hp / 12s',
-    psykeeper    = '+1 hp / 10s',
 
     -- Curse / vulnerability
-    launcher     = 'curse x4',
     jester       = 'curse x6',
-    usurer       = 'curse + dot',
-    silencer     = 'strong curse',
-    bane         = 'big curse',
 
     -- DoT clouds
-    plague_doctor = 'poison cloud',
     witch        = 'toxic cloud',
 
     -- Bomb drops
-    saboteur     = 'drops 2 mines',
     bomber       = 'drops bomb',
-    vulcanist    = 'volcano',
 
     -- Turret drops
     engineer     = 'drops turret',
-    sentry       = 'fast turret',
-    carver       = 'long turret',
-    artificer    = 'rapid turrets',
 
     -- Force area
     psykino      = 'knockback',
 
     -- Ally damage buffs
     stormweaver  = '+50% ally dmg',
-    warden       = '+30% ally dmg',
-
-    -- Ally attack-speed buffs
-    fairy        = '2x ally aspd',
-    squire       = '1.5x ally aspd',
 
     -- Pet summons
-    host         = 'pet / 4s',
     infestor     = '3 pets / 10s',
-    illusionist  = '2 pets / 8s',
 
     -- Misc
     gambler      = 'lucky strikes',
-    chronomancer = 'slow swarms',
 
     -- On-bounce specials
     wizard       = 'chain on hit',
     cryomancer   = 'freeze on hit',
     pyromancer   = 'burn on hit',
     cannoneer    = 'boom on hit',
-    flagellant   = 'pulse on hit',
   }
   return blurbs[c] or 'ball-hero'
 end
@@ -1799,6 +1870,14 @@ function BallPit:trigger_game_over()
   self.game_over = true
   self.t:cancel('spawn_brick')
   Flash{group = self.effects, x = gw/2, y = gh/2, color = Color(0, 0, 0, 0.4), duration = 0.4}
+  -- Bank the run's kills to disk and open the paddle shop on the equipped
+  -- card (the game-over overlay IS the shop — see paddles.lua).
+  PADDLES.ensure_state()
+  self.shop_selected = 1
+  for i, id in ipairs(PADDLES.order) do
+    if id == state.selected_paddle then self.shop_selected = i; break end
+  end
+  system.save_state()
 end
 
 
@@ -2009,9 +2088,9 @@ end
 
 function BallPit:heal_player(amount)
   if amount and amount > 0 then
-    local prev = self.player_hp
-    self.player_hp = math.min(self.player_hp_max, self.player_hp + 1)
-    if self.player_hp ~= prev then
+    -- heal_hearts handles the Vampire bar conversion (1 heart = 20 units).
+    local healed = self:heal_hearts(1)
+    if healed > 0 then
       FloatingText{group = self.effects, x = self.paddle.x, y = self.paddle.y - 20, text = '+1 HP', color = green[0]}
     end
   end
@@ -2217,6 +2296,14 @@ end
 function BallPit:apply_paddle_width_buff()
   local p = self.paddle
   if not p then return end
+  -- Pinball Lobber: the rig is a two-fixture body that rebuild_rect_body
+  -- would flatten into a plain rectangle — rescale the whole rig instead.
+  if p.flippers then
+    self:add_or_extend_buff('wide_paddle', 15,
+      function() p:build_flipper_rig(1.6) end,
+      function() p:build_flipper_rig(1) end)
+    return
+  end
   self:add_or_extend_buff('wide_paddle', 15,
     function()
       p._orig_w = p._orig_w or p.w
@@ -2562,7 +2649,8 @@ function BallPit:apply_multi_ball()
   local clones = {}
   for i = 1, math.min(clone_cap, #snapshot) do
     local src   = snapshot[i]
-    local hero  = self:add_hero(src.character)
+    -- no_mirror: Twin Cast must not double the doubles past the cap.
+    local hero  = self:add_hero(src.character, {no_mirror = true, clone = true})
     hero.is_clone = true
     hero.level  = src.level
     hero.dmg    = src.dmg

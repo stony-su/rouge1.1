@@ -11,6 +11,9 @@ require 'xp_orb'
 require 'powerup'
 require 'effects'
 require 'terminal'
+-- Last on purpose: defines the PADDLES loadout table and attaches the shop /
+-- signature helpers (including the draw_game_over override) onto BallPit.
+require 'paddles'
 
 
 -- Global cheat-speed multiplier driven by the admin terminal's `speed` cmd.
@@ -33,6 +36,7 @@ function init()
   input:bind('confirm',    {'return', 'kpenter'})
   input:bind('click',      {'m1'})
   input:bind('restart',    {'r'})
+  input:bind('blink',      {'e'})   -- Phantom paddle: drop / return to anchor
   -- Admin terminal toggle. `bind_all` doesn't include backtick, so we add an
   -- explicit action that listens to both backtick and F1.
   input:bind('toggle_terminal', {'`', 'f1'})

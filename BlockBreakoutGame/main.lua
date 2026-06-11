@@ -10,6 +10,9 @@ require 'projectile'
 require 'xp_orb'
 require 'powerup'
 require 'effects'
+-- Last on purpose: defines the PADDLES loadout table and attaches the shop /
+-- signature helpers (including the draw_game_over override) onto BallPit.
+require 'paddles'
 
 
 function init()
@@ -26,6 +29,7 @@ function init()
   input:bind('confirm',    {'return', 'kpenter'})
   input:bind('click',      {'m1'})
   input:bind('restart',    {'r'})
+  input:bind('blink',      {'e'})   -- Phantom paddle: drop / return to anchor
 
   local s = {tags = {sfx}}
 

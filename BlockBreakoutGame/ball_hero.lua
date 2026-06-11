@@ -1,7 +1,9 @@
 -- BallHero is the SNKRX-style hero remixed as a bouncing ball.
--- 12 heroes attack continuously on cooldown (SNKRX-style: trigger inside an
--- attack-sensor radius), while 4 exceptions (wizard, cryomancer, pyromancer,
--- cannoneer) keep on-bounce abilities. Contact damage on bounce applies to all.
+-- The 20-ball roster (trimmed from the full 57 SNKRX archetypes so every
+-- pick has a distinct effect): 16 heroes attack continuously on cooldown
+-- (SNKRX-style: trigger inside an attack-sensor radius), while 4 exceptions
+-- (wizard, cryomancer, pyromancer, cannoneer) keep on-bounce abilities.
+-- Contact damage on bounce applies to all.
 
 BallHero = Object:extend()
 BallHero:implement(GameObject)
@@ -18,95 +20,50 @@ local HERO_STATS = {
   -- ----- Projectile shooters (behavior = 'shoot_arrow') -----
   vagrant     = {r = 6, base_speed = 160, dmg = 8,  color = 'fg',     behavior = 'shoot_arrow', range = 96,  cd = 0.5,  speed = 220},
   archer      = {r = 5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'shoot_arrow', range = 160, cd = 0.5,  speed = 260, pierce = 4},
-  outlaw      = {r = 5, base_speed = 175, dmg = 10, color = 'red',    behavior = 'shoot_arrow', range = 96,  cd = 0.75, speed = 240},
-  sage        = {r = 6, base_speed = 155, dmg = 8,  color = 'purple', behavior = 'shoot_arrow', range = 96,  cd = 2.25, speed = 200},
-  blade       = {r = 6, base_speed = 165, dmg = 12, color = 'yellow', behavior = 'shoot_arrow', range = 64,  cd = 1.0,  speed = 200},
-  dual_gunner = {r = 6, base_speed = 165, dmg = 9,  color = 'green',  behavior = 'shoot_arrow', range = 96,  cd = 0.5,  speed = 220},
-  hunter      = {r = 5, base_speed = 175, dmg = 11, color = 'green',  behavior = 'shoot_arrow', range = 160, cd = 0.5,  speed = 260},
-  lich        = {r = 6, base_speed = 155, dmg = 9,  color = 'blue',   behavior = 'shoot_arrow', range = 128, cd = 1.0,  speed = 140, ricochet = 7},
-  corruptor   = {r = 6, base_speed = 165, dmg = 10, color = 'orange', behavior = 'shoot_arrow', range = 160, cd = 0.5,  speed = 240, pierce = 3},
-  beastmaster = {r = 6, base_speed = 170, dmg = 10, color = 'red',    behavior = 'shoot_arrow', range = 160, cd = 0.5,  speed = 240, crit_chance = 25, pierce = 2},
-  arcanist    = {r = 7, base_speed = 145, dmg = 22, color = 'blue2',  behavior = 'shoot_arrow', range = 128, cd = 2.0,  speed = 80,  pierce = 10},
-  merchant    = {r = 6, base_speed = 160, dmg = 8,  color = 'yellow2',behavior = 'shoot_arrow', range = 96,  cd = 1.0,  speed = 200},
 
   -- ----- Knife shooters (behavior = 'shoot_knife') -----
   scout       = {r = 5, base_speed = 180, dmg = 6,  color = 'red',    behavior = 'shoot_knife', range = 64,  cd = 0.5, speed = 240, ricochet = 3},
-  thief       = {r = 5, base_speed = 185, dmg = 6,  color = 'red',    behavior = 'shoot_knife', range = 64,  cd = 0.5, speed = 240, ricochet = 5},
   assassin    = {r = 5, base_speed = 200, dmg = 12, color = 'purple', behavior = 'shoot_knife', range = 64,  cd = 0.5, speed = 280, pierce = 4},
 
   -- ----- Random-direction shooter -----
   spellblade  = {r = 6, base_speed = 160, dmg = 7,  color = 'blue',   behavior = 'random_shot', cd = 0.7, speed = 180},
 
-  -- ----- Multi-shot burst -----
-  barrager    = {r = 6, base_speed = 160, dmg = 7,  color = 'green',  behavior = 'multi_shot',  range = 128, cd = 1.5, shot_count = 3, speed = 200},
-
   -- ----- Melee splash (behavior = 'melee_splash') -----
   swordsman   = {r = 7, base_speed = 150, dmg = 14, color = 'yellow', behavior = 'melee_splash', range = 48,  cd = 3.0, splash = 96},
   barbarian   = {r = 8, base_speed = 140, dmg = 16, color = 'yellow', behavior = 'melee_splash', range = 48,  cd = 8.0, splash = 96},
-  juggernaut  = {r = 8, base_speed = 140, dmg = 18, color = 'yellow', behavior = 'melee_splash', range = 64,  cd = 8.0, splash = 128, knockback = 80},
-  elementor   = {r = 6, base_speed = 150, dmg = 14, color = 'blue',   behavior = 'melee_splash', range = 128, cd = 7.0, splash = 128},
-  highlander  = {r = 6, base_speed = 155, dmg = 10, color = 'yellow', behavior = 'melee_splash', range = 36,  cd = 4.0, splash = 72},
-  miner       = {r = 6, base_speed = 155, dmg = 10, color = 'yellow2',behavior = 'melee_splash', range = 48,  cd = 4.0, splash = 64},
-
-  -- ----- Random-target splash (behavior = 'random_splash') -----
-  magician    = {r = 5, base_speed = 175, dmg = 9,  color = 'blue',   behavior = 'random_splash', range = 96, cd = 2.0, splash = 32},
-  psychic     = {r = 6, base_speed = 165, dmg = 9,  color = 'fg',     behavior = 'random_splash', range = 64, cd = 3.0, splash = 32},
 
   -- ----- Healing (behavior = 'heal') -----
   cleric      = {r = 6, base_speed = 145, dmg = 4,  color = 'green',  behavior = 'heal', heal_cd = 8,  heal_amt = 1},
-  priest      = {r = 6, base_speed = 150, dmg = 5,  color = 'green',  behavior = 'heal', heal_cd = 12, heal_amt = 2},
-  psykeeper   = {r = 6, base_speed = 155, dmg = 5,  color = 'fg',     behavior = 'heal', heal_cd = 10, heal_amt = 1},
 
   -- ----- Curse / vulnerability (behavior = 'curse') -----
-  launcher    = {r = 6, base_speed = 160, dmg = 8,  color = 'yellow', behavior = 'curse', range = 96, cd = 6, curse_radius = 128, curse_targets = 4,  curse_mult = 1.4, curse_duration = 4},
   jester      = {r = 6, base_speed = 165, dmg = 8,  color = 'red',    behavior = 'curse', range = 96, cd = 6, curse_radius = 128, curse_targets = 6,  curse_mult = 1.4, curse_duration = 6},
-  usurer      = {r = 6, base_speed = 155, dmg = 8,  color = 'purple', behavior = 'curse', range = 96, cd = 6, curse_radius = 128, curse_targets = 3,  curse_mult = 1.3, curse_duration = 10, curse_dot = 1.0},
-  silencer    = {r = 6, base_speed = 160, dmg = 8,  color = 'blue2',  behavior = 'curse', range = 96, cd = 6, curse_radius = 128, curse_targets = 6,  curse_mult = 1.5, curse_duration = 6},
-  bane        = {r = 6, base_speed = 160, dmg = 8,  color = 'purple', behavior = 'curse', range = 96, cd = 6, curse_radius = 128, curse_targets = 6,  curse_mult = 1.6, curse_duration = 6},
 
   -- ----- Damage-over-time clouds (behavior = 'dot_cloud') -----
-  plague_doctor = {r = 6, base_speed = 155, dmg = 6, color = 'purple', behavior = 'dot_cloud', range = 96, cd = 5,  cloud_radius = 32, cloud_duration = 12, dps_mult = 0.4},
-  witch         = {r = 6, base_speed = 155, dmg = 6, color = 'purple', behavior = 'dot_cloud', range = 96, cd = 4,  cloud_radius = 48, cloud_duration = 14, dps_mult = 0.5},
+  witch       = {r = 6, base_speed = 155, dmg = 6, color = 'purple', behavior = 'dot_cloud', range = 96, cd = 4,  cloud_radius = 48, cloud_duration = 14, dps_mult = 0.5},
 
   -- ----- Bomb drops (behavior = 'bomb_drop') -----
-  saboteur    = {r = 6, base_speed = 155, dmg = 8,  color = 'orange', behavior = 'bomb_drop', range = 128, cd = 8,  bomb_radius = 48, fuse = 2,   count = 2, blast_mult = 1.5},
   bomber      = {r = 6, base_speed = 150, dmg = 10, color = 'orange', behavior = 'bomb_drop', range = 128, cd = 8,  bomb_radius = 64, fuse = 2,   count = 1, blast_mult = 2.0},
-  vulcanist   = {r = 7, base_speed = 145, dmg = 10, color = 'red',    behavior = 'bomb_drop', range = 192, cd = 12, bomb_radius = 80, fuse = 1.5, count = 1, blast_mult = 2.5},
 
   -- ----- Turret drops (behavior = 'turret_drop') -----
   engineer    = {r = 6, base_speed = 155, dmg = 8, color = 'orange', behavior = 'turret_drop', cd = 8,  lifetime = 10, turret_cd = 1.5, turret_range = 96,  turret_dmg = 6},
-  sentry      = {r = 6, base_speed = 155, dmg = 8, color = 'green',  behavior = 'turret_drop', cd = 7,  lifetime = 10, turret_cd = 1.0, turret_range = 96,  turret_dmg = 6},
-  carver      = {r = 6, base_speed = 150, dmg = 8, color = 'green',  behavior = 'turret_drop', cd = 14, lifetime = 16, turret_cd = 2.0, turret_range = 64,  turret_dmg = 10},
-  artificer   = {r = 6, base_speed = 155, dmg = 8, color = 'blue2',  behavior = 'turret_drop', cd = 6,  lifetime = 12, turret_cd = 2.0, turret_range = 80,  turret_dmg = 8},
 
   -- ----- Force area (behavior = 'force_area') -----
   psykino     = {r = 6, base_speed = 160, dmg = 8, color = 'fg', behavior = 'force_area', range = 128, cd = 4, force_radius = 64, force_strength = 120},
 
   -- ----- Ally damage buff -----
   stormweaver = {r = 6, base_speed = 160, dmg = 6, color = 'blue',   behavior = 'ally_buff_dmg',  cd = 8,  buff_mult = 1.5, duration = 4},
-  warden      = {r = 6, base_speed = 155, dmg = 6, color = 'yellow', behavior = 'ally_buff_dmg',  cd = 10, buff_mult = 1.3, duration = 5},
-
-  -- ----- Ally attack-speed buff -----
-  fairy       = {r = 5, base_speed = 175, dmg = 5, color = 'green',  behavior = 'ally_buff_aspd', cd = 6,  buff_mult = 2.0, duration = 6},
-  squire      = {r = 6, base_speed = 155, dmg = 7, color = 'yellow', behavior = 'ally_buff_aspd', cd = 10, buff_mult = 1.5, duration = 8},
 
   -- ----- Pet spawns (small allies that fly up and hit bricks) -----
-  host        = {r = 6, base_speed = 150, dmg = 6,  color = 'orange', behavior = 'pet_spawn', cd = 4,  count = 1, pet_speed = 70, pet_dmg = 8},
   infestor    = {r = 6, base_speed = 150, dmg = 6,  color = 'orange', behavior = 'pet_spawn', cd = 10, count = 3, pet_speed = 70, pet_dmg = 8},
-  illusionist = {r = 6, base_speed = 160, dmg = 5,  color = 'blue2',  behavior = 'pet_spawn', cd = 8,  count = 2, pet_speed = 70, pet_dmg = 8},
 
   -- ----- Gambler-style random multi-strike -----
   gambler     = {r = 6, base_speed = 165, dmg = 8, color = 'yellow2', behavior = 'gambler_burst', cd = 2, burst_count = 3, burst_mult = 3.0},
-
-  -- ----- Time-dilation aura (slows nearby swarm drift) -----
-  chronomancer = {r = 6, base_speed = 155, dmg = 7, color = 'blue', behavior = 'time_dilation', range = 128, cd = 8, duration = 3, slow_mult = 0.4},
 
   -- ----- On-bounce exceptions: ability triggers per ball-bounce, not a timer.
   wizard      = {r = 5, base_speed = 170, dmg = 7,  color = 'blue',   on_bounce = 'chain_lightning', bounce_cd = 0.3},
   cryomancer  = {r = 6, base_speed = 160, dmg = 6,  color = 'blue',   on_bounce = 'slow'},
   pyromancer  = {r = 6, base_speed = 160, dmg = 8,  color = 'red',    on_bounce = 'burn', bounce_cd = 0.4},
   cannoneer   = {r = 7, base_speed = 145, dmg = 18, color = 'orange', on_bounce = 'big_splash'},
-  flagellant  = {r = 6, base_speed = 160, dmg = 7,  color = 'fg',     on_bounce = 'flagellant_pulse'},
 }
 
 function BallHero.stats_for(character)
@@ -133,21 +90,38 @@ function BallHero:init(args)
   self:init_game_object(args)
   self.character    = self.character or 'vagrant'
   self.level        = self.level or 1
+  -- Paddle-loadout run modifiers (ball/charge/dmg multipliers + signature
+  -- tunables), passed explicitly by BallPit:add_hero so they're valid during
+  -- reset_run ordering and for clones. See paddles.lua.
+  local mods        = self.run_mods or {}
   local s           = BallHero.stats_for(self.character)
+  -- Twin Cast halves ability cooldowns. Work on a shallow copy so the shared
+  -- HERO_STATS table is never mutated across runs.
+  if mods.sig and mods.sig.cd_mult then
+    local copy = {}
+    for k, v in pairs(s) do copy[k] = v end
+    if copy.cd        then copy.cd        = copy.cd*mods.sig.cd_mult end
+    if copy.heal_cd   then copy.heal_cd   = copy.heal_cd*mods.sig.cd_mult end
+    if copy.bounce_cd then copy.bounce_cd = copy.bounce_cd*mods.sig.cd_mult end
+    s = copy
+  end
   self.stats        = s
   self.r_size       = s.r
-  -- Multiple heroes can share the same base color (e.g. wizard/magician/
+  -- Multiple heroes can share the same base color (e.g. wizard/spellblade/
   -- cryomancer are all blue). BallPit:add_hero passes a shade_offset based on
   -- how many same-colored balls were already in play, so the new ball gets a
   -- slightly lighter or darker tint and stays distinguishable.
   local base_color  = character_colors[self.character] or fg[0]
   self.color        = BallHero.shaded(base_color, self.shade_offset or 0)
-  self.dmg          = s.dmg * (1 + 0.4*(self.level-1))
+  self.dmg          = s.dmg * (1 + 0.4*(self.level-1)) * (mods.dmg or 1)
+  -- Kept separately for damage paths that bypass self.dmg (pet/turret drops).
+  self.run_dmg_mult = mods.dmg or 1
   -- Scale base ball speed by the live arena height (relative to the original
   -- 228px playfield) so balls still cross the arena in a similar bounce
   -- cadence when the canvas is taller. At gh=270 the factor is 1.0 (no
   -- change), so existing tuning is preserved on the default resolution.
-  self.base_speed   = s.base_speed * ((gh - 42)/228)
+  -- The loadout's Ball stat multiplies on top.
+  self.base_speed   = s.base_speed * ((gh - 42)/228) * (mods.ball or 1)
   self.returning      = false  -- ball fell into the pit and is being pulled back to the paddle
   self.stuck          = false  -- ball is glued to the paddle awaiting an aimed launch
   self.stuck_offset_x = 0
@@ -157,7 +131,9 @@ function BallHero:init(args)
   -- gets stuck after a miss (or on initial launch).
   self.speed_mult       = 1.0
   self.speed_mult_max   = 4.0     -- was 3.0 (orig 2.5)
-  self.speed_mult_step  = 1.25    -- was 1.15 (orig 1.07) — +25% per bounce
+  -- Per-bounce ramp increment (+25% at baseline). The loadout's Charge stat
+  -- scales the increment: Aegis 0.2 -> x1.05/bounce, Pinball 1.8 -> x1.45.
+  self.speed_mult_step  = 1 + 0.25*(mods.charge or 1)
 
   -- ULTRAKILL-style chain counter. Increments on every brick bounce; resets
   -- when the ball is caught by the paddle or falls into the pit. Multiplies
@@ -202,6 +178,12 @@ function BallHero:init(args)
   -- Continuous timer-based attacks for the 12 non-exception heroes.
   self:setup_continuous_attack()
 
+  -- Terrorist loadout: every ball self-detonates on a fuse, blasting its own
+  -- element around it, then re-forms at the paddle (see terror_detonate).
+  if mods.sig and mods.sig.fuse then
+    self.t:every(mods.sig.fuse, function() self:terror_detonate() end)
+  end
+
   -- Drop afterimage trail particles while the ball is moving above the
   -- speed-streak threshold. Empty/no-op otherwise.
   self.t:every(0.035, function() self:maybe_spawn_trail() end)
@@ -236,7 +218,7 @@ end
 
 
 function BallHero:maybe_spawn_trail()
-  if self.stuck or self.returning then return end
+  if self.stuck or self.returning or self.mortar then return end
   local mult = self.speed_mult or 1
   if mult < 1.3 then return end
 
@@ -390,8 +372,10 @@ BEHAVIORS.heal = function(self, s)
   self.t:every(s.heal_cd, function()
     if self.stuck or self.returning then return end
     local arena = main.current
-    if arena.player_hp < arena.player_hp_max then
-      arena.player_hp = math.min(arena.player_hp_max, arena.player_hp + s.heal_amt)
+    -- Routed through heal_hearts so the Vampire bar (1 heart = 20 units)
+    -- and the normal heart counter share one code path.
+    local healed = arena.heal_hearts and arena:heal_hearts(s.heal_amt) or 0
+    if healed > 0 then
       heal1:play{volume = 0.35, pitch = random:float(0.95, 1.05)}
       FloatingText{group = arena.effects, x = self.x, y = self.y - 8,
         text = '+' .. s.heal_amt .. ' HP', color = green[0]}
@@ -462,7 +446,7 @@ BEHAVIORS.turret_drop = function(self, s)
     local ty = arena.paddle.y - random:float(20, 40)
     AllyTurret{group = arena.effects, x = tx, y = ty, color = self.color,
                lifetime = s.lifetime, fire_cd = s.turret_cd, range = s.turret_range,
-               dmg = s.turret_dmg*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)}
+               dmg = s.turret_dmg*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)}
     spawn1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
   end, 0, nil, 'attack')
 end
@@ -527,7 +511,7 @@ BEHAVIORS.pet_spawn = function(self, s)
         AllyCritter{
           group = arena.main, x = self.x, y = self.y,
           color = self.color, speed = s.pet_speed or 70,
-          dmg = (s.pet_dmg or 8)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1),
+          dmg = (s.pet_dmg or 8)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1),
         }
       end)
     end
@@ -674,7 +658,32 @@ function BallHero:update(dt)
     return
   end
 
+  -- Cannon loadout: the ball is out of plane on its mortar arc; physics is
+  -- off and we integrate x/y/z manually until it has spent its impacts.
+  if self.mortar then
+    self:update_mortar(dt)
+    return
+  end
+
   self:normalize_speed()
+
+  -- Boomerang loadout: after any wall hit the ball curls back toward the
+  -- paddle, damaging whatever it crosses on the way home. Velocity is only
+  -- rotated (never re-scaled) so normalize_speed doesn't fight the turn.
+  if self.boomerang_home and arena and arena.paddle then
+    local vx, vy = self:get_velocity()
+    local sp = math.sqrt(vx*vx + vy*vy)
+    if sp > 1 then
+      local p    = arena.paddle
+      local cur  = math.atan2(vy, vx)
+      local want = math.atan2(p.y - self.y, p.x - self.x)
+      local diff = math.loop(want - cur, 2*math.pi)
+      if diff > math.pi then diff = diff - 2*math.pi end
+      local turn = (arena.run_mods and arena.run_mods.sig and arena.run_mods.sig.turn_rate) or 5
+      local na   = cur + math.clamp(diff, -turn*dt, turn*dt)
+      self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+    end
+  end
 
   -- Cache the post-normalize velocity each frame so the pierce powerup can
   -- restore it inside the next collision callback (Box2D's reflection has
@@ -684,6 +693,8 @@ function BallHero:update(dt)
   end
 
   -- Ball fell into the pit (no bottom wall) — magnetic recall back to paddle.
+  -- The Aegis wall normally makes this unreachable; if a ball ever tunnels
+  -- past it the recall is the graceful fallback.
   if self.y > arena.y2 + 12 then
     self:start_return()
   end
@@ -693,6 +704,7 @@ end
 -- Disable physics and lerp the ball back to a point just above the paddle.
 function BallHero:start_return()
   self.returning = true
+  self.boomerang_home = nil
   if self.body then self.body:setActive(false) end
   -- ULTRAKILL: missing the paddle dings the combo meter. Wipe the per-ball
   -- chain counter too so the next launch starts fresh.
@@ -743,7 +755,15 @@ end
 -- Pin the ball to the paddle's top and wait for the player to aim + launch.
 function BallHero:start_stuck()
   self.stuck            = true
+  self.boomerang_home   = nil
   self.stuck_offset_x   = random:float(-8, 8)
+  -- Pinball flipper rig: snap the stuck spot onto one of the flippers so the
+  -- ball never sits over the centre drain gap.
+  local pad = main.current and main.current.paddle
+  if pad and pad.flippers then
+    local side = random:bool(50) and 1 or -1
+    self.stuck_offset_x = side*((pad.flipper_gap or 8)/2 + 6)
+  end
   -- The floor powerup sets arena.no_speed_reset so the streak survives any
   -- miss — even if a ball somehow slips past the temporary bottom wall, the
   -- accumulated speed_mult is preserved.
@@ -801,6 +821,23 @@ end
 
 
 function BallHero:draw()
+  -- Cannon mortar: the ball is "out of the screen" — a ground shadow stays at
+  -- (x, y) while the ball draws above it, scaled up with height, so the
+  -- z-axis reads without real 3D.
+  if self.mortar then
+    local z  = self.z or 0
+    local sa = math.clamp(0.5 - z/300, 0.12, 0.5)
+    local sr = self.r_size*math.clamp(1 - z/260, 0.45, 1)
+    graphics.circle(self.x, self.y, sr, Color(0, 0, 0, sa))
+    local scale = 1 + z/140
+    local dy    = z*0.9
+    graphics.circle(self.x, self.y - dy, self.r_size*scale + 0.5, bg[-2])
+    graphics.circle(self.x, self.y - dy, self.r_size*scale, self.color)
+    graphics.circle(self.x - self.r_size*scale*0.3, self.y - dy - self.r_size*scale*0.3,
+                    math.max(1, self.r_size*scale*0.35), fg[5])
+    return
+  end
+
   self.spring:pull(0)
   local s = self.spring.x
   graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
@@ -853,14 +890,24 @@ function BallHero:normalize_speed()
     self:set_velocity(0, -target)
     return
   end
-  if math.abs(s - target) > 12 then
+  local ice = self.run_mods and self.run_mods.sig and self.run_mods.sig.ice
+  if ice then
+    -- Glacier: pucks on ice. Instead of snapping to the target speed, drift
+    -- toward it a few percent per frame — launches and knocks leave lasting
+    -- speed deviations that decay over ~a second, producing long glides.
+    local k = 1 + (target/s - 1)*0.04
+    self:set_velocity(vx*k, vy*k)
+  elseif math.abs(s - target) > 12 then
     local k = target/s
     self:set_velocity(vx*k, vy*k)
   end
   vx, vy = self:get_velocity()
-  if math.abs(vy) < target*0.15 then
+  -- Anti-horizontal floor. Halved on ice so shallow skimming paths survive.
+  local floor_frac = ice and 0.075 or 0.15
+  local bump_frac  = ice and 0.1   or 0.2
+  if math.abs(vy) < target*floor_frac then
     local sign = vy >= 0 and 1 or -1
-    self:set_velocity(vx, sign*target*0.2)
+    self:set_velocity(vx, sign*target*bump_frac)
     self:normalize_speed()
   end
 end
@@ -876,6 +923,16 @@ function BallHero:on_brick_hit(brick)
   -- in the BallPit collision callback handles the visual pass-through.
   -- Pierce ends when the ball bonks the top wall (see that callback).
   if self.piercing then return end
+  -- Hive loadout: balls deal ZERO contact damage — every brick bounce spawns
+  -- a maggot instead, and the combo meter is fed manually since we skip
+  -- Brick:on_ball_contact (where it's normally awarded).
+  local mods = self.run_mods
+  if mods and mods.sig and mods.sig.contact_zero then
+    self.bounces = (self.bounces or 0) + 1
+    if arena and arena.on_brick_bounce then arena:on_brick_bounce(self, brick) end
+    if arena and arena.hive_spawn_maggot then arena:hive_spawn_maggot(self) end
+    return
+  end
   -- Bump the chain counter BEFORE damage so Brick:on_ball_contact reads the
   -- post-increment value (a clean hit counts as the 1st bounce, not the 0th).
   self.bounces = (self.bounces or 0) + 1
@@ -885,6 +942,11 @@ function BallHero:on_brick_hit(brick)
     brick:on_ball_contact(self)
   else
     brick:take_damage(self.dmg, self.color)
+  end
+
+  -- Glacier loadout: every brick hit chills the struck block.
+  if mods and mods.sig and mods.sig.ice and brick.apply_slow then
+    brick:apply_slow(0.6, 1.5)
   end
 
   -- Fire-trail powerup: while active, every ball-on-brick contact also calls
@@ -934,4 +996,134 @@ function BallHero:on_brick_hit(brick)
     arena:do_splash(self.x, self.y, 36, self:current_dmg()*0.45, fg[0])
     flagellant1:play{volume = 0.18, pitch = random:float(0.9, 1.1)}
   end
+end
+
+
+-- ----- Terrorist loadout: timed self-detonation -----
+
+-- Blast the ball's own element in an AoE around it, then re-form at the
+-- paddle. Deliberately NOT routed through start_return: re-forming is the
+-- mechanic working as intended, so it must not eat the combo miss penalty.
+-- The relaunch goes through launch_from_paddle, which resets speed_mult and
+-- the chain counter — that reset is the glass-cannon cost of the blast.
+function BallHero:terror_detonate()
+  if self.stuck or self.returning or self.mortar or self.dead then return end
+  local arena = main.current
+  if not arena or arena.game_over then return end
+  local sig    = (self.run_mods and self.run_mods.sig) or {}
+  local radius = sig.blast_radius or 56
+  local x, y   = self.x, self.y
+
+  arena:do_splash(x, y, radius, self:current_dmg()*(sig.blast_mult or 2.2), self.color)
+  -- Element carry-over: a Pyromancer ball makes a burn blast, a Cryomancer
+  -- ball a freeze blast; everything else is the plain splash.
+  local trigger = self.stats.on_bounce
+  if trigger == 'burn' then
+    arena:burn_area(x, y, radius, self:current_dmg()*1.5, 3)
+  elseif trigger == 'slow' then
+    arena:slow_in_area(x, y, radius, 0.5, 3)
+  end
+  explosion1:play{volume = 0.4, pitch = random:float(0.9, 1.05)}
+  spawn_burst(arena.effects, x, y, self.color, 12, 80, 170)
+
+  if self.body then self.body:setActive(false) end
+  self.t:after(0.5, function()
+    if self.dead then return end
+    local a = main.current
+    if not (a and a.paddle and self.body) then return end
+    self.body:setActive(true)
+    self:launch_from_paddle()
+  end)
+end
+
+
+-- ----- Cannon loadout: the z-axis mortar -----
+
+-- A charged ball (speed_mult past the launch threshold — the existing paddle
+-- ramp IS the charge) fires "out of the screen": physics goes inactive (same
+-- pattern as the pit-return recall, so z-flight ignores all 2D collisions)
+-- and x/y/z are integrated by hand. Higher charge = faster up/down bounces
+-- (constant apex: z_vel scales with charge, gravity with charge^2) and a
+-- bigger splash per landing, with damage falloff from the impact centre.
+function BallHero:start_mortar(hit_offset)
+  if self.mortar then return end
+  local arena = main.current
+  if not arena then return end
+  self.mortar = true
+  self.boomerang_home = nil
+
+  local cf = math.clamp((self.speed_mult or 1)/2, 0.6, 2.0)
+  self.mortar_cf      = cf
+  self.z              = 0
+  self.z_vel          = 240*cf
+  self.z_g            = 580*cf*cf
+  self.mortar_bounces = 0
+  self.mortar_max     = (arena.run_mods and arena.run_mods.sig and arena.run_mods.sig.impacts) or 4
+  -- Edge hits steer the drop; a gentle climb pushes it up into the swarm.
+  self.mortar_vx      = (hit_offset or 0)*60
+  self.mortar_vy      = -(50 + 30*cf)
+
+  -- Deactivating a body inside a Box2D contact callback is illegal (this is
+  -- called from the paddle bounce), so defer it a frame.
+  self.t:after(0, function()
+    if self.body and self.mortar then self.body:setActive(false) end
+  end)
+  explosion1:play{volume = 0.25, pitch = 1.35}
+  spawn_burst(main.current.effects, self.x, self.y, self.color, 8, 80, 160)
+end
+
+
+function BallHero:update_mortar(dt)
+  local arena = main.current
+  if not arena then return end
+
+  -- Gentle homing toward the nearest brick so drops land among the swarm.
+  -- Falls back to the boss on wave 10 (it isn't a Brick instance).
+  local target = arena:get_nearest_brick(self.x, self.y)
+  if not target and arena.boss and not arena.boss.dead then target = arena.boss end
+  if target then
+    local dx, dy = target.x - self.x, target.y - self.y
+    local d = math.sqrt(dx*dx + dy*dy)
+    if d > 4 then
+      self.mortar_vx = self.mortar_vx + (dx/d)*40*dt
+      self.mortar_vy = self.mortar_vy + (dy/d)*40*dt
+    end
+  end
+  self.x = math.clamp(self.x + self.mortar_vx*dt, arena.x1 + self.r_size, arena.x2 - self.r_size)
+  self.y = math.clamp(self.y + self.mortar_vy*dt, arena.y1 + self.r_size, arena.y2 - 20)
+  if self.body then self.body:setPosition(self.x, self.y) end
+
+  self.z_vel = self.z_vel - self.z_g*dt
+  self.z     = math.max(0, self.z + self.z_vel*dt)
+
+  if self.z <= 0 and self.z_vel < 0 then
+    self.mortar_bounces = self.mortar_bounces + 1
+    local mult   = self.speed_mult or 1
+    local radius = 28 + 26*(mult - 1)
+    arena:do_splash_falloff(self.x, self.y, radius, self:current_dmg()*3*mult, self.color)
+    -- Feed the combo meter once per impact so mortar runs don't starve it.
+    local b = arena:get_nearest_brick_within(self.x, self.y, radius)
+    if b and arena.on_brick_bounce then arena:on_brick_bounce(self, b) end
+    explosion1:play{volume = 0.35, pitch = random:float(0.85, 1.0)}
+
+    if self.mortar_bounces >= self.mortar_max then
+      self:land_mortar()
+    else
+      self.z_vel = 240*self.mortar_cf
+    end
+  end
+end
+
+
+-- The charge is consumed: speed_mult resets and the ball drops back into
+-- normal 2D play (falling toward the paddle for the next ramp-up loop).
+function BallHero:land_mortar()
+  self.mortar     = false
+  self.speed_mult = 1.0
+  self.bounces    = 0
+  if self.body then
+    self.body:setActive(true)
+    self.body:setPosition(self.x, self.y)
+  end
+  self:set_velocity(random:float(-30, 30), self.base_speed)
 end

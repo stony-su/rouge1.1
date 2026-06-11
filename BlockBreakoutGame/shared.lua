@@ -55,38 +55,22 @@ function shared_init()
   -- tint and by BallPit:count_same_color_heroes for shade variation.
   character_colors = {
     vagrant     = fg[0],     swordsman   = yellow[0],  wizard      = blue[0],
-    magician    = blue[0],   archer      = green[0],   scout       = red[0],
-    cleric      = green[0],  outlaw      = red[0],     blade       = yellow[0],
-    elementor   = blue[0],   saboteur    = orange[0],  bomber      = orange[0],
-    stormweaver = blue[0],   sage        = purple[0],  squire      = yellow[0],
-    cannoneer   = orange[0], dual_gunner = green[0],   hunter      = green[0],
-    sentry      = green[0],  chronomancer= blue[0],    spellblade  = blue[0],
-    psykeeper   = fg[0],     engineer    = orange[0],  plague_doctor = purple[0],
-    barbarian   = yellow[0], juggernaut  = yellow[0],  lich        = blue[0],
-    cryomancer  = blue[0],   pyromancer  = red[0],     corruptor   = orange[0],
-    beastmaster = red[0],    launcher    = yellow[0],  jester      = red[0],
-    assassin    = purple[0], host        = orange[0],  carver      = green[0],
-    bane        = purple[0], psykino     = fg[0],      barrager    = green[0],
-    highlander  = yellow[0], fairy       = green[0],   priest      = green[0],
-    infestor    = orange[0], flagellant  = fg[0],      arcanist    = blue2[0],
-    illusionist = blue2[0],  artificer   = blue2[0],   witch       = purple[0],
-    silencer    = blue2[0],  vulcanist   = red[0],     warden      = yellow[0],
-    psychic     = fg[0],     miner       = yellow2[0], merchant    = yellow2[0],
-    usurer      = purple[0], gambler     = yellow2[0], thief       = red[0],
+    archer      = green[0],  scout       = red[0],     cleric      = green[0],
+    bomber      = orange[0], stormweaver = blue[0],    cannoneer   = orange[0],
+    spellblade  = blue[0],   engineer    = orange[0],  barbarian   = yellow[0],
+    cryomancer  = blue[0],   pyromancer  = red[0],     jester      = red[0],
+    assassin    = purple[0], psykino     = fg[0],      infestor    = orange[0],
+    witch       = purple[0], gambler     = yellow2[0],
   }
 
-  -- Draft pool: every implemented hero, including all SNKRX archetypes.
+  -- Draft pool: 20 balls, trimmed from the full 57-archetype SNKRX roster so
+  -- every pick has a distinct effect. Includes every paddle loadout's
+  -- starting heroes (paddles.lua start_balls) — those must stay in sync.
   hero_pool = {
-    'vagrant', 'swordsman', 'wizard', 'magician', 'archer', 'scout',
-    'cleric', 'outlaw', 'blade', 'elementor', 'saboteur', 'bomber',
-    'stormweaver', 'sage', 'squire', 'cannoneer', 'dual_gunner', 'hunter',
-    'sentry', 'chronomancer', 'spellblade', 'psykeeper', 'engineer',
-    'plague_doctor', 'barbarian', 'juggernaut', 'lich', 'cryomancer',
-    'pyromancer', 'corruptor', 'beastmaster', 'launcher', 'jester',
-    'assassin', 'host', 'carver', 'bane', 'psykino', 'barrager',
-    'highlander', 'fairy', 'priest', 'infestor', 'flagellant', 'arcanist',
-    'illusionist', 'artificer', 'witch', 'silencer', 'vulcanist', 'warden',
-    'psychic', 'miner', 'merchant', 'usurer', 'gambler', 'thief',
+    'vagrant', 'swordsman', 'wizard', 'archer', 'scout', 'cleric',
+    'bomber', 'stormweaver', 'cannoneer', 'spellblade', 'engineer',
+    'barbarian', 'cryomancer', 'pyromancer', 'jester', 'assassin',
+    'psykino', 'infestor', 'witch', 'gambler',
   }
 end
 

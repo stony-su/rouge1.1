@@ -227,16 +227,37 @@ function EnemyProjectile:update(dt)
   if  math.abs(self.x - arena.paddle.x) < arena.paddle.w/2 + self.r_size
   and p_yhi >= arena.paddle.y - arena.paddle.h/2
   and p_ylo <= arena.paddle.y + arena.paddle.h/2 then
-    -- Hit the paddle directly. Admin godmode swallows the hp loss but still
-    -- plays the impact feedback so the operator can see what would have hit.
-    if not arena.god then
-      arena.player_hp = arena.player_hp - self.dmg
+    local sig = arena.run_mods and arena.run_mods.signature
+    if sig == 'aegis' and not self.unbreakable then
+      -- Aegis loadout: the paddle PARRIES bullets — the shot dies and is
+      -- flipped into a friendly projectile aimed at the nearest brick.
+      -- Unbreakable boss bullets punch through (the boss stays honest).
+      local bx, by = self.x, self.y
+      spawn_burst(arena.effects, bx, by, blue2[0], 6, 70, 140)
+      buff1:play{volume = 0.3, pitch = random:float(1.2, 1.35)}
+      local t = arena:get_nearest_brick(bx, by)
+      local r = t and math.atan2(t.y - by, t.x - bx) or -math.pi/2
+      local reflect_dmg = (arena.run_mods.sig and arena.run_mods.sig.reflect_dmg) or 20
+      arena.t:after(0, function()
+        if arena.main and arena.main.world then
+          Projectile{group = arena.main, x = bx, y = by, r = r,
+                     type = 'arrow', dmg = reflect_dmg, speed = 260, color = blue2[0]}
+        end
+      end)
+      self.dead = true
+    else
+      -- Hit the paddle directly. Admin godmode swallows the hp loss but still
+      -- plays the impact feedback so the operator can see what would have hit.
+      -- Routed through damage_player so the Vampire bar takes hearts-worth.
+      if not arena.god then
+        arena:damage_player(self.dmg)
+      end
+      hit2:play{volume = 0.4, pitch = random:float(1.0, 1.1)}
+      camera:shake(2, 0.15, 90)
+      Flash{group = arena.effects, x = gw/2, y = gh/2, color = red_transparent_weak, duration = 0.08}
+      if arena.player_hp <= 0 then arena:trigger_game_over() end
+      self.dead = true
     end
-    hit2:play{volume = 0.4, pitch = random:float(1.0, 1.1)}
-    camera:shake(2, 0.15, 90)
-    Flash{group = arena.effects, x = gw/2, y = gh/2, color = red_transparent_weak, duration = 0.08}
-    if arena.player_hp <= 0 then arena:trigger_game_over() end
-    self.dead = true
   end
 
   -- Visual state: spin + sampled trail. The trail is what most reliably
@@ -502,7 +523,7 @@ function EnemyProjectile:apply_slow() end
 function EnemyProjectile:apply_burn() end
 
 
--- AllyCritter: spawned by host / infestor / illusionist. A small ball that
+-- AllyCritter: spawned by infestor pets and Hive maggots. A small ball that
 -- flies upward, hits a brick and dies (or expires on a timer). Uses the
 -- 'projectile' physics tag so it only collides with bricks.
 AllyCritter = Object:extend()
@@ -551,6 +572,12 @@ end
 
 function AllyCritter:on_brick_contact(brick)
   if brick.dead then return end
+  -- Hive maggots carry their source hero's element onto the brick they hit.
+  if self.effect == 'burn' and brick.apply_burn then
+    brick:apply_burn(self.dmg*0.5, 2)
+  elseif self.effect == 'slow' and brick.apply_slow then
+    brick:apply_slow(0.6, 1.5)
+  end
   if brick.on_ball_contact then
     brick:on_ball_contact(self)
   elseif brick.take_damage then
@@ -590,8 +617,8 @@ function Boss:init(args)
   self.r_outer = 28
   self.r_inner = 14
 
-  -- HP scales with wave the same way bricks do (see Brick:init) so the
-  -- fight stays meaningful if the player triggers it on a later loop.
+  -- HP scales with wave the same way bricks do (see Brick:init line 81) so
+  -- the fight stays meaningful if the player triggers it on a later loop.
   local wave = (main.current and main.current.wave) or 10
   self.max_hp     = 2400 * (1 + 0.2*wave)
   self.hp         = self.max_hp
@@ -1059,7 +1086,7 @@ function Boss:update(dt)
     speed_factor = speed_factor * self.slow_factor
   end
 
-  -- Burn DoT: same shape as Brick's burn handling.
+  -- Burn DoT: same shape as Brick's burn handling (brick.lua:260).
   if self.burn_timer > 0 then
     self.burn_timer = self.burn_timer - dt
     self:take_damage(self.burn_dps*dt, orange[0], true)
