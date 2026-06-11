@@ -1,8 +1,10 @@
 -- Mobile enemies that aren't bricks.
 --
--- EnemyCritter is a small circular enemy spawned by the swarmer brick
--- variants. It drifts downward and dies in a single hit. If it crosses the
--- red defense line, it breaches like a swarm would (costs the player HP).
+-- EnemyCritter is a small circular enemy that drifts downward and dies in a
+-- single hit; crossing the red defense line breaches like a swarm would
+-- (costs the player HP). NOTE: nothing spawns it anymore (the swarmer brick
+-- and the boss's phase-3 minions were removed) — the class is kept so splash
+-- targeting / live_block_count code that references it stays valid.
 --
 -- EnemyProjectile is a slow downward shot fired by the shooter brick variant.
 -- Hits the paddle for damage. Can be destroyed by a ball.
@@ -686,12 +688,10 @@ function Boss:enter_phase(phase)
   TelegraphRing{group = main.current.effects, x = self.x, y = self.y,
                 radius = 80, color = self.color, duration = 0.6}
 
-  -- Speed up the attack timer slightly on each phase transition. Phase 3
-  -- additionally spawns critter minions on its own cadence.
+  -- Speed up the attack timer slightly on each phase transition.
   if phase == 3 then
     self.t:cancel('boss_atk')
     self.t:every({1.6, 2.4}, function() self:choose_attack() end, 0, nil, 'boss_atk')
-    self.t:every({5, 7}, function() self:spawn_minions() end, 0, nil, 'boss_minions')
   elseif phase == 2 then
     self.t:cancel('boss_atk')
     self.t:every({2.0, 2.9}, function() self:choose_attack() end, 0, nil, 'boss_atk')
@@ -935,23 +935,6 @@ function Boss:attack_homing()
                 life = 7, homing = true, homing_turn = 0.85}
     end
   end)
-end
-
-
-function Boss:spawn_minions()
-  if self.dead then return end
-  local arena = main.current
-  if not (arena.main and arena.main.world) then return end
-  critter1:play{volume = 0.3, pitch = random:float(0.9, 1.05)}
-  for _ = 1, 2 do
-    local cx = self.x + random:float(-16, 16)
-    local cy = self.y + 18
-    arena.t:after(0, function()
-      if arena.main and arena.main.world then
-        EnemyCritter{group = arena.main, x = cx, y = cy, color = self.color}
-      end
-    end)
-  end
 end
 
 

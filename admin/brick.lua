@@ -6,7 +6,7 @@
 -- knockback impulse to the whole formation; individual bricks never drift.
 --
 -- Variants are ported from SNKRX-master/enemies.lua. The "boss" Seeker
--- subtypes (forcer/swarmer/randomizer) and the regular-Seeker flag variants
+-- subtypes (forcer/randomizer) and the regular-Seeker flag variants
 -- (tank/headbutter/shooter/exploder/speed_booster) live in the same
 -- table here.
 
@@ -40,7 +40,6 @@ local VARIANTS = {
   headbutter    = {hp = 55,  xp = 3, color = 'orange',  dmg = 2, behavior = 'headbutter'},
   tank          = {hp = 120, xp = 4, color = 'yellow',  dmg = 2, behavior = nil},
   shooter       = {hp = 45,  xp = 3, color = 'fg',      dmg = 1, behavior = 'shooter'},
-  swarmer       = {hp = 90,  xp = 5, color = 'purple',  dmg = 2, behavior = 'swarmer'},
   forcer        = {hp = 80,  xp = 4, color = 'yellow2', dmg = 2, behavior = 'forcer'},
   randomizer    = {hp = 70,  xp = 4, color = 'blue2',   dmg = 2, behavior = 'randomizer'},
   -- Ranged variants. These lean into the bullet-hell fantasy: aimed shots,
@@ -58,7 +57,9 @@ function Brick.variants() return VARIANTS end
 function Brick:init(args)
   self:init_game_object(args)
   self.variant_name = self.variant or 'seeker'
-  local v = VARIANTS[self.variant_name]
+  -- Unknown variant names (e.g. one removed from the table) fall back to the
+  -- plain seeker instead of crashing mid-wave.
+  local v = VARIANTS[self.variant_name] or VARIANTS.seeker
 
   -- Shape: list of {cx, cy} cell offsets in grid units. Single-cell bricks
   -- default to {{0,0}}; multi-cell shapes (rect 2x2, L, T, etc.) come from
@@ -191,7 +192,7 @@ function Brick:setup_behavior()
   elseif b == 'randomizer' then
     self.t:every({4, 6}, function() self:cast_randomizer() end, 0, nil, 'behavior')
   end
-  -- exploder and swarmer trigger on death, not on timer.
+  -- exploder triggers on death, not on a timer.
 end
 
 
@@ -663,8 +664,8 @@ end
 
 
 -- Small per-type symbol drawn at the brick centre so enemy roles are tellable
--- apart at a glance (colour alone collides -- e.g. orange headbutter vs burster,
--- purple swarmer/spiraler). Each glyph is a single-weight line OUTLINE --
+-- apart at a glance (colour alone collides -- e.g. orange headbutter vs
+-- burster). Each glyph is a single-weight line OUTLINE --
 -- no fills, no dot clusters, no text -- kept faint so it hints at the role
 -- without crowding the play area. The contrast colour flips dark/light with the
 -- body's interior brightness so the outline reads on every variant. Seeker (the
@@ -687,9 +688,6 @@ function Brick:draw_type_icon()
   elseif v == 'speed_booster' then
     graphics.line(x - 3, y - 3, x, y - 0.5, ic, 1); graphics.line(x + 3, y - 3, x, y - 0.5, ic, 1)    -- stacked chevrons = speeds the swarm
     graphics.line(x - 3, y + 0.5, x, y + 3, ic, 1); graphics.line(x + 3, y + 0.5, x, y + 3, ic, 1)
-  elseif v == 'swarmer' then
-    graphics.line(x, y - 3, x, y + 3, ic, 1)                                                          -- spark burst = death swarm
-    graphics.line(x - 2.6, y - 1.5, x + 2.6, y + 1.5, ic, 1); graphics.line(x - 2.6, y + 1.5, x + 2.6, y - 1.5, ic, 1)
   elseif v == 'forcer' then
     graphics.circle(x, y, 2.6, ic, 1)                                                                 -- ring + radial ticks = radial shove
     graphics.line(x, y - 3.4, x, y - 2.2, ic, 1); graphics.line(x, y + 2.2, x, y + 3.4, ic, 1)
@@ -796,11 +794,9 @@ function Brick:die()
   end
   enemy_die1:play{volume = 0.3, pitch = random:float(0.92, 1.08)}
 
-  -- Death triggers for two of the variants.
+  -- Death trigger for the exploder variant.
   if self.behavior == 'exploder' then
     self:cast_explode_on_death()
-  elseif self.behavior == 'swarmer' then
-    self:cast_swarmer_on_death()
   end
 
   -- Drop XP after world step (Box2D is locked mid-collision).
@@ -834,23 +830,4 @@ function Brick:cast_explode_on_death()
       end
     end
   end
-end
-
-
--- Spawn three EnemyCritters that drift toward the paddle.
-function Brick:cast_swarmer_on_death()
-  local arena = main.current
-  critter3:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
-  local x, y, color = self.x, self.y, self.color
-  arena.t:after(0, function()
-    if not (arena.main and arena.main.world) then return end
-    for i = 1, 3 do
-      EnemyCritter{
-        group = arena.main,
-        x = x + random:float(-6, 6),
-        y = y + random:float(-2, 2),
-        color = color,
-      }
-    end
-  end)
 end

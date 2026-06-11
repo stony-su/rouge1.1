@@ -83,16 +83,15 @@ local function wave_config(wave)
   elseif wave <= 6 then
     mix = {{'seeker', 64}, {'speed_booster', 10}, {'exploder', 12}, {'tank', 12}, {'headbutter', 12}}
   elseif wave <= 8 then
-    mix = {{'seeker', 56}, {'exploder', 12}, {'tank', 12}, {'headbutter', 10},
-           {'swarmer', 10}}
+    mix = {{'seeker', 56}, {'exploder', 12}, {'tank', 12}, {'headbutter', 10}}
   elseif wave == 9 then
     -- Pre-boss "warning" wave: by now every ranged variant has been introduced,
     -- so append_ranged layers in the full set -- a taste of what the boss throws.
-    mix = {{'seeker', 38}, {'tank', 10}, {'swarmer', 10}, {'forcer', 8}, {'randomizer', 10}}
+    mix = {{'seeker', 38}, {'tank', 10}, {'forcer', 8}, {'randomizer', 10}}
   else
     -- wave 11+ post-boss tier: hardest melee/utility base; all ranged appended.
     mix = {{'seeker', 45}, {'tank', 12}, {'headbutter', 8},
-           {'swarmer', 12}, {'forcer', 10}, {'randomizer', 8}}
+           {'forcer', 10}, {'randomizer', 8}}
   end
 
   -- Layer ranged attackers on top of the melee/utility base above, introduced
