@@ -19,7 +19,14 @@ BallHero:implement(Physics)
 local HERO_STATS = {
   -- ----- Projectile shooters (behavior = 'shoot_arrow') -----
   vagrant     = {r = 6, base_speed = 160, dmg = 8,  color = 'fg',     behavior = 'shoot_arrow', range = 96,  cd = 0.5,  speed = 220},
-  archer      = {r = 5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'shoot_arrow', range = 160, cd = 0.5,  speed = 260, pierce = 4},
+
+  -- ----- Crossbow bolt (SNKRX archer port; behavior = 'crossbow') -----
+  -- Every 2s, a bolt at the CLOSEST brick in the 160px sensor with infinite
+  -- pierce — it skewers the whole lane and only stops at a wall, sticking in
+  -- as a WallArrow. Level 3: the bolt ricochets off the side/top walls 3
+  -- times first. skin draws the ball as a tower base with a compact
+  -- swiveling crossbow turret mounted on top.
+  archer      = {r = 5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'crossbow', range = 160, cd = 2.0,  speed = 260, skin = 'crossbow'},
 
   -- ----- Chain knife (SNKRX scout port; behavior = 'chain_knife') -----
   -- The knife CHAINS: on each hit it leaps to a random nearby brick it
@@ -68,6 +75,14 @@ local HERO_STATS = {
 
   -- ----- Gambler-style random multi-strike -----
   gambler     = {r = 6, base_speed = 165, dmg = 8, color = 'yellow2', behavior = 'gambler_burst', cd = 2, burst_count = 3, burst_mult = 3.0},
+
+  -- ----- Volcano (SNKRX vulcanist port; behavior = 'volcano') -----
+  -- Every 12s, plants a Volcano at the midpoint between this ball and the
+  -- centre of the enemy mass; it erupts a 72px rotated-square blast once a
+  -- second 4 times (level 3: every 0.5s, 8 times — Lava Burst), then blinks
+  -- out. See Volcano/EruptionArea in effects.lua. skin draws the ball as the
+  -- rune-furnace ring instead of a plain ball.
+  vulcanist   = {r = 6, base_speed = 150, dmg = 14, color = 'red', behavior = 'volcano', cd = 12, area = 72, volcano_rs = 24, skin = 'rune'},
 
   -- ----- On-bounce exceptions: ability triggers per ball-bounce, not a timer.
   wizard      = {r = 5, base_speed = 170, dmg = 7,  color = 'blue',   on_bounce = 'chain_lightning', bounce_cd = 0.3},
@@ -200,6 +215,54 @@ function BallHero:init(args)
       end
       table.insert(self.shuriken_trail, 1, {x = self.x, y = self.y, a = self.spin_a})
       if #self.shuriken_trail > 4 then table.remove(self.shuriken_trail) end
+    end)
+  end
+
+  -- Crossbow-tower skin (archer): the ball stays as the tower base with a
+  -- compact crossbow turret on top. The turret swivels toward the nearest
+  -- brick (aim_want sampled on a short timer, smoothed into aim_a in update),
+  -- the string cocks back as the 2s cooldown refills, and the whole tower
+  -- drags ghost afterimages behind it (see draw_crossbow).
+  if s.skin == 'crossbow' then
+    self.aim_a         = -math.pi/2
+    self.aim_want      = -math.pi/2
+    self.bolt_recoil_t = 0
+    self.bow_trail     = {}
+    self.t:every(0.06, function()
+      if self.stuck or self.returning or self.mortar then
+        self.bow_trail = {}
+        return
+      end
+      table.insert(self.bow_trail, 1, {x = self.x, y = self.y, a = self.aim_a})
+      if #self.bow_trail > 3 then table.remove(self.bow_trail) end
+    end)
+    -- Retarget on a timer, not every frame, to keep the nearest-brick scan
+    -- cheap. While stuck the update forces the turret back to pointing up.
+    self.t:every(0.08, function()
+      local arena = main.current
+      if not arena or self.stuck or self.returning or self.mortar then return end
+      local target = arena.get_nearest_brick and arena:get_nearest_brick(self.x, self.y)
+      if target then self.aim_want = math.atan2(target.y - self.y, target.x - self.x) end
+    end)
+  end
+
+  -- Rune-furnace skin (vulcanist): a ring of volcanic stone whose 8 runes
+  -- ignite one by one as the 12s volcano timer fills, around a molten pupil
+  -- that seethes brighter with charge. ring_a spins lazily (whipped fast for
+  -- a beat on each cast — cast_flash_t); a molten afterimage trail — fading,
+  -- shrinking ghost rings with the spin angle baked in — drags behind it
+  -- (see draw_rune_furnace).
+  if s.skin == 'rune' then
+    self.ring_a       = random:float(0, 2*math.pi)
+    self.cast_flash_t = 0
+    self.rune_trail   = {}
+    self.t:every(0.05, function()
+      if self.stuck or self.returning or self.mortar then
+        self.rune_trail = {}
+        return
+      end
+      table.insert(self.rune_trail, 1, {x = self.x, y = self.y, a = self.ring_a})
+      if #self.rune_trail > 4 then table.remove(self.rune_trail) end
     end)
   end
 
@@ -364,6 +427,32 @@ BEHAVIORS.chain_knife = function(self, s)
     }
     self:shoot_knife(s.range, s.speed or 240, extra)
     self.throw_flick_t = 0.3   -- flicks the shuriken spin (see update/draw)
+  end, 0, nil, 'attack')
+end
+
+
+-- SNKRX archer port: every cd seconds with a brick inside the sensor, loose
+-- a bolt at the CLOSEST one with infinite pierce (see BallHero:shoot_bolt and
+-- the wall_stick handling in projectile.lua). bolt_recoil_t drives the
+-- turret kick + string snap in draw_crossbow.
+BEHAVIORS.crossbow = function(self, s)
+  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+    if self.stuck or self.returning then return end
+    self.bolt_recoil_t = 0.22
+    self.spring:pull(0.2)
+    self:shoot_bolt(s)
+  end, 0, nil, 'attack')
+end
+
+
+-- SNKRX vulcanist port: every cd seconds, plant a Volcano at the midpoint
+-- between this ball and the centre of the enemy mass (see cast_volcano).
+-- SNKRX runs this on a plain 12s loop with no enemy gate; the cooldown's
+-- active-check just stops a cast being wasted while the ball sits stuck on
+-- the paddle — it fires the moment the ball is live again.
+BEHAVIORS.volcano = function(self, s)
+  self.t:cooldown(s.cd, function() return not (self.stuck or self.returning or self.mortar) end, function()
+    self:cast_volcano(s)
   end, 0, nil, 'attack')
 end
 
@@ -707,6 +796,21 @@ function BallHero:shoot_knife(range, speed, extra)
 end
 
 
+-- The archer's crossbow bolt: the exact SNKRX shot — closest brick in the
+-- sensor, pierce 1000 (it never stops on a target), level-3 wall ricochet 3.
+-- wall_stick makes the bolt bounce off / thunk into the arena walls instead
+-- of silently expiring (projectile.lua handles both plus the WallArrow).
+function BallHero:shoot_bolt(s)
+  if self.stuck or self.returning then return end
+  main.current:fire_projectile_at_nearest(self, {
+    type = 'arrow', dmg = self:current_dmg()*PROJECTILE_DMG_MULT,
+    speed = s.speed or 260, range = s.range, color = self.color,
+    pierce = 1000, ricochet = (self.level >= 3) and 3 or 0, wall_stick = true,
+  })
+  archer1:play{pitch = random:float(0.95, 1.05), volume = 0.35}
+end
+
+
 function BallHero:melee_splash(radius, dmg)
   if self.stuck or self.returning then return end
   main.current:do_splash(self.x, self.y, radius, dmg*(self.charge_dmg_mult or 1), self.color)
@@ -729,6 +833,37 @@ function BallHero:do_cleave(s)
     group = arena.effects, x = self.x, y = self.y, r = self.face_a or 0,
     w = s.area or 96, color = self.color, dmg = self:current_dmg(), level = self.level,
   }
+end
+
+
+-- Plant the vulcanist's Volcano (the exact SNKRX cast): target the midpoint
+-- between this ball and the average position of every live enemy (arena
+-- centre when nothing is alive), clamped into the arena so the eruptions
+-- stay on screen. The Volcano itself owns the shake/sounds and the eruption
+-- loop (see effects.lua); damage is read live off this ball every eruption
+-- so charge, ally buffs and the paddle loadout's Dmg stat apply per tick.
+function BallHero:cast_volcano(s)
+  if self.stuck or self.returning or self.mortar then return end
+  local arena = main.current
+  if not (arena and arena.effects) then return end
+  local x, y, n = 0, 0, 0
+  for _, o in ipairs(arena.main.objects) do
+    if not o.dead and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+      x, y, n = x + o.x, y + o.y, n + 1
+    end
+  end
+  if n > 0 then
+    x, y = x/n, y/n
+  else
+    x, y = (arena.x1 + arena.x2)/2, (arena.y1 + arena.y2)/2
+  end
+  x, y = (x + self.x)/2, (y + self.y)/2
+  x = math.clamp(x, arena.x1 + 28, arena.x2 - 28)
+  y = math.clamp(y, arena.y1 + 28, arena.y2 - 28)
+  self.cast_flash_t = 0.4   -- all runes flash + the ring whips fast (draw)
+  Volcano{group = arena.effects, x = x, y = y, color = self.color,
+          parent = self, rs = s.volcano_rs or 24, area = s.area or 72,
+          level = self.level}
 end
 
 
@@ -767,6 +902,31 @@ function BallHero:update(dt)
       speed = 18
     end
     self.spin_a = (self.spin_a or 0) + speed*dt
+  end
+
+  -- Crossbow skin (archer): swivel the turret toward the latest target angle
+  -- (aim_want, sampled on a timer in init) independently of the bouncing
+  -- ball; while stuck it eases back to pointing up, ready for the launch.
+  -- bolt_recoil_t (set on fire) drives the stock kick + string snap in draw.
+  if self.stats.skin == 'crossbow' then
+    if (self.bolt_recoil_t or 0) > 0 then
+      self.bolt_recoil_t = self.bolt_recoil_t - dt
+    end
+    local want = self.stuck and -math.pi/2 or (self.aim_want or -math.pi/2)
+    local diff = math.loop(want - (self.aim_a or 0), 2*math.pi)
+    if diff > math.pi then diff = diff - 2*math.pi end
+    self.aim_a = (self.aim_a or 0) + diff*math.min(1, 10*dt)
+  end
+
+  -- Rune-furnace skin (vulcanist): lazy ring spin, whipped fast for a beat
+  -- each time a volcano is planted (cast_flash_t set in cast_volcano).
+  if self.stats.skin == 'rune' then
+    local speed = 0.8
+    if (self.cast_flash_t or 0) > 0 then
+      self.cast_flash_t = self.cast_flash_t - dt
+      speed = 12
+    end
+    self.ring_a = (self.ring_a or 0) + speed*dt
   end
 
   if self.stuck then
@@ -967,6 +1127,12 @@ function BallHero:draw()
   elseif self.stats.skin == 'shuriken' then
     -- Scout: a spinning four-point throwing star.
     self:draw_shuriken(s)
+  elseif self.stats.skin == 'crossbow' then
+    -- Archer: the ball as a tower base with a crossbow turret on top.
+    self:draw_crossbow(s)
+  elseif self.stats.skin == 'rune' then
+    -- Vulcanist: a rune-ringed furnace around a molten pupil.
+    self:draw_rune_furnace(s)
   else
     graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
@@ -1086,6 +1252,179 @@ function BallHero:draw_shuriken(s)
   graphics.circle(self.x, self.y, rs*0.55*s,
                   Color(self.color.r*0.55, self.color.g*0.55, self.color.b*0.55, 1))
   graphics.circle(self.x - rs*0.25, self.y - rs*0.25, math.max(1, rs*0.2), fg[5])
+end
+
+
+-- The archer's crossbow-tower body: the plain ball stays as the tower base,
+-- with a compact crossbow turret (wood stock, steel limbs, string, loaded
+-- bolt) drawn over it, rotated to aim_a — the turret physically points at
+-- its next victim. The string cocks back and the bolt fades in as the attack
+-- cooldown refills (read straight off the trigger), so a fully drawn string
+-- means the shot is ready; an emerald aura ring brightens with it and pulses
+-- once loaded. On fire (bolt_recoil_t) the stock kicks back with a muzzle
+-- flash while the fresh cooldown naturally relaxes the string. The physics
+-- body underneath is still the same r_size circle, so bounces are unchanged.
+function BallHero:draw_crossbow(s)
+  s = s or 1
+  local rs = self.r_size
+  local a  = self.aim_a or -math.pi/2
+  local c  = self.color
+
+  -- Cock progress 0..1 from the attack cooldown trigger.
+  local prog = 1
+  local tr   = self.t.triggers and self.t.triggers.attack
+  if tr and tr.delay and tr.delay > 0 then
+    prog = math.clamp(tr.timer/(tr.delay*(tr.multiplier or 1)), 0, 1)
+  end
+
+  -- Ghost afterimages of the whole tower (newest first): fading base circle
+  -- plus a thin stock line along the sampled aim.
+  for i, p in ipairs(self.bow_trail or {}) do
+    local alpha = 0.26 - (i - 1)*0.08
+    local k     = 1 - (i - 1)*0.18
+    graphics.circle(p.x, p.y, rs*0.9*k, Color(c.r*0.5, c.g*0.5, c.b*0.5, alpha))
+    graphics.line(p.x - math.cos(p.a)*rs*0.8*k, p.y - math.sin(p.a)*rs*0.8*k,
+                  p.x + math.cos(p.a)*rs*1.1*k, p.y + math.sin(p.a)*rs*1.1*k,
+                  Color(c.r*0.5, c.g*0.5, c.b*0.5, alpha), 1)
+  end
+
+  -- Emerald aura: a ring that brightens as the bolt loads, pulsing at full.
+  local glow = 0.10 + 0.22*prog
+  if prog >= 1 then
+    glow = 0.32 + 0.12*math.sin(love.timer.getTime()*6)
+  end
+  graphics.circle(self.x, self.y, rs*1.55, Color(c.r, c.g, c.b, glow), 1.5)
+
+  -- Tower base: the plain ball body.
+  graphics.circle(self.x, self.y, rs + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*s, c)
+  graphics.circle(self.x - rs*0.3, self.y - rs*0.3, math.max(1, rs*0.35), fg[5])
+
+  -- Crossbow turret, compact enough to sit on the ball (reach ~1.2 r_size).
+  -- Drawn in a frame rotated to the aim; recoil slides everything backward
+  -- along the stock for a beat after firing.
+  graphics.push(self.x, self.y, a, s, s)
+    local kick = 0
+    if (self.bolt_recoil_t or 0) > 0 then
+      kick = -(self.bolt_recoil_t/0.22)*rs*0.45
+    end
+    local x0 = self.x + kick   -- local frame: +x is the aim direction
+    local y0 = self.y
+    local fx = x0 + rs*1.15    -- front of the stock, where the limbs mount
+
+    -- Wood stock with a dark outline, then the steel limbs sweeping back
+    -- from the front mount, drawn as bent two-segment polylines.
+    graphics.rectangle(x0 + rs*0.15, y0, rs*1.9, rs*0.5, 1, 1, Color(0.55, 0.42, 0.28, 1))
+    graphics.rectangle(x0 + rs*0.15, y0, rs*1.9, rs*0.5, 1, 1, bg[-2], 1)
+    graphics.polyline(fg[0], 1.2,
+      fx, y0, fx - rs*0.18, y0 - rs*0.72, fx - rs*0.55, y0 - rs*1.15)
+    graphics.polyline(fg[0], 1.2,
+      fx, y0, fx - rs*0.18, y0 + rs*0.72, fx - rs*0.55, y0 + rs*1.15)
+
+    -- String: from the limb tips back to the nock, which slides rearward
+    -- with the cock progress (relaxed at the front right after firing).
+    local nock_x = fx - rs*(0.18 + 1.05*prog)
+    graphics.line(fx - rs*0.55, y0 - rs*1.15, nock_x, y0, Color(0.92, 0.95, 0.9, 0.9), 1)
+    graphics.line(fx - rs*0.55, y0 + rs*1.15, nock_x, y0, Color(0.92, 0.95, 0.9, 0.9), 1)
+
+    -- The bolt fades in on the rail as it loads; bright tip dot when ready.
+    if prog > 0.1 then
+      local tip_x = nock_x + rs*(0.9 + 0.75*prog)
+      graphics.line(nock_x, y0, tip_x, y0, Color(c.r, c.g, c.b, 0.25 + 0.75*prog), 1.5)
+      if prog >= 1 then
+        graphics.circle(tip_x, y0, math.max(1, rs*0.18), fg[5])
+      end
+    end
+
+    -- Muzzle flash right after loosing the bolt.
+    if (self.bolt_recoil_t or 0) > 0 then
+      local k = self.bolt_recoil_t/0.22
+      graphics.circle(fx + rs*0.5, y0, rs*0.5*k, Color(1, 1, 1, 0.7*k))
+    end
+  graphics.pop()
+end
+
+
+-- The vulcanist's rune-furnace body: a ring of dark volcanic stone with 8
+-- runes that ignite one by one as the volcano cooldown refills (read off the
+-- attack trigger — all 8 lit means the next volcano is ready), around a
+-- molten pupil that seethes brighter with charge. On cast (cast_flash_t) the
+-- runes all flash white while the ring whips around fast, and an expanding
+-- ember ring marks the moment. A molten afterimage trail drags behind it
+-- while it flies — fading, shrinking ghost rings with ember runes, the
+-- oldest dissolving into a rising smoke puff. The physics body underneath
+-- is still the same r_size circle, so bounces are unchanged.
+function BallHero:draw_rune_furnace(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+
+  -- Charge progress 0..1 from the attack cooldown trigger.
+  local prog = 1
+  local tr   = self.t.triggers and self.t.triggers.attack
+  if tr and tr.delay and tr.delay > 0 then
+    prog = math.clamp(tr.timer/(tr.delay*(tr.multiplier or 1)), 0, 1)
+  end
+
+  -- Molten afterimages (newest first): fading, shrinking ghost copies of the
+  -- furnace — ember glow disc, ghost stone ring, four dim runes at the
+  -- sampled spin angle — with the oldest dissolving into a smoke puff.
+  local trail = self.rune_trail or {}
+  for i, p in ipairs(trail) do
+    local k     = 1 - (i - 1)*0.18
+    local alpha = 0.3 - (i - 1)*0.07
+    graphics.circle(p.x, p.y, rs*1.05*k, Color(1, 0.6, 0.25, alpha*0.4))
+    graphics.circle(p.x, p.y, rs*0.95*k, Color(c.r*0.55, c.g*0.4, c.b*0.4, alpha),
+                    math.max(1, rs*0.35*k))
+    for j = 0, 3 do
+      local a = (p.a or 0) + j*math.pi/2
+      graphics.line(p.x + math.cos(a)*rs*0.72*k, p.y + math.sin(a)*rs*0.72*k,
+                    p.x + math.cos(a)*rs*1.15*k, p.y + math.sin(a)*rs*1.15*k,
+                    Color(1, 0.55, 0.2, alpha), 1.3)
+    end
+    if i == #trail then
+      graphics.circle(p.x, p.y - rs*0.8, math.max(1, rs*0.4*k),
+                      Color(0.45, 0.4, 0.38, 0.18))
+    end
+  end
+
+  -- Heat aura, swelling with charge; soft pulse at full.
+  local glow = 0.08 + 0.2*prog
+  if prog >= 1 then glow = 0.26 + 0.1*math.sin(love.timer.getTime()*5) end
+  graphics.circle(self.x, self.y, rs*1.7, Color(c.r, c.g, c.b, glow))
+
+  -- Stone ring + 8 runes around it. Lit runes count up with the charge and
+  -- all flash white for a beat when the volcano goes down.
+  graphics.circle(self.x, self.y, rs*0.95*s, Color(0.3, 0.24, 0.26, 1), rs*0.45)
+  local lit = math.floor(prog*8 + 0.0001)
+  for i = 0, 7 do
+    local a = (self.ring_a or 0) + i*math.pi/4
+    local col
+    if (self.cast_flash_t or 0) > 0 then
+      col = fg[0]
+    elseif i < lit then
+      col = orange[0]
+    else
+      col = Color(0.42, 0.33, 0.34, 1)
+    end
+    graphics.line(self.x + math.cos(a)*rs*0.72, self.y + math.sin(a)*rs*0.72,
+                  self.x + math.cos(a)*rs*1.18*s, self.y + math.sin(a)*rs*1.18*s,
+                  col, 1.6)
+  end
+
+  -- Molten pupil: hero-red core with an inner glow that seethes with charge.
+  graphics.circle(self.x, self.y, rs*0.5 + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*0.5*s, c)
+  graphics.circle(self.x + rs*0.08, self.y - rs*0.08, rs*0.28*s,
+                  Color(1, 0.72, 0.3, 0.35 + 0.6*prog))
+  graphics.circle(self.x - rs*0.15, self.y - rs*0.18, math.max(1, rs*0.14), fg[5])
+
+  -- Cast flash: an expanding, fading ember ring as the volcano is planted.
+  if (self.cast_flash_t or 0) > 0 then
+    local k = math.clamp(self.cast_flash_t/0.4, 0, 1)
+    graphics.circle(self.x, self.y, rs*(1.4 + (1 - k)*1.6),
+                    Color(1, 0.72, 0.3, 0.7*k), 2)
+  end
 end
 
 

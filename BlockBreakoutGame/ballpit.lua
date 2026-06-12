@@ -1815,7 +1815,7 @@ function BallPit:hero_ability_blurb(c)
   local blurbs = {
     -- Projectile shooters
     vagrant      = 'arrow shot',
-    archer       = 'pierce arrow',
+    archer       = 'skewer bolt',
 
     -- Knives
     scout        = 'chaining knife',
@@ -1856,6 +1856,9 @@ function BallPit:hero_ability_blurb(c)
 
     -- Misc
     gambler      = 'lucky strikes',
+
+    -- Volcano
+    vulcanist    = 'plants volcano',
 
     -- On-bounce specials
     wizard       = 'chain on hit',
@@ -1976,6 +1979,7 @@ function BallPit:fire_projectile_at_nearest(hero, opts)
         ricochet = opts.ricochet or 0,
         chain  = opts.chain or 0,
         chain_dmg_ramp = opts.chain_dmg_ramp,
+        wall_stick = opts.wall_stick,
         color  = color,
       }
     end

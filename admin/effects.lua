@@ -596,3 +596,177 @@ function CleaveArea:draw()
   graphics.rectangle((x1+x2)/2, (y1+y2)/2, x2-x1, y2-y1, nil, nil, self.color_transparent)
   graphics.pop()
 end
+
+
+
+
+-- A spent archer bolt stuck in the wall (SNKRX WallArrow port): a short
+-- coloured shaft flashes white on impact, sits in the wall for a moment,
+-- then blinks out. Pure visual — spawned by projectile.lua's wall_stick
+-- handling when a bolt runs out of ricochets at a wall.
+WallArrow = Object:extend()
+WallArrow:implement(GameObject)
+function WallArrow:init(args)
+  self:init_game_object(args)
+  self.r       = self.r or 0
+  self.flash_t = 0.25
+  self.t:after({0.8, 2}, function()
+    self.t:every_immediate(0.05, function() self.hidden = not self.hidden end, 7, function() self.dead = true end)
+  end)
+end
+
+function WallArrow:update(dt)
+  self:update_game_object(dt)
+  if self.flash_t > 0 then self.flash_t = self.flash_t - dt end
+end
+
+function WallArrow:draw()
+  if self.hidden then return end
+  graphics.push(self.x, self.y, self.r)
+  graphics.rectangle(self.x, self.y, 10, 3, 1, 1, (self.flash_t > 0) and fg[0] or self.color)
+  graphics.pop()
+end
+
+
+
+
+-- The volcano's eruption blast (SNKRX Area port, flat damage): a rotated
+-- square that hits everything inside ONCE at spawn for the full damage —
+-- no per-target scaling; that's the swordsman's CleaveArea above. Visual is
+-- the same SNKRX snap: white corner brackets + faint fill flip to the owner
+-- colour after 0.2s, then blink away.
+EruptionArea = Object:extend()
+EruptionArea:implement(GameObject)
+function EruptionArea:init(args)
+  self:init_game_object(args)
+  self.r       = self.r or 0
+  self.dmg     = self.dmg or 10
+  local full_w = self.w or 72    -- visual square side; the hit square is 1.5x
+
+  local arena = main.current
+  local half  = full_w*1.5/2
+  local cos_r, sin_r = math.cos(self.r), math.sin(self.r)
+  if arena and arena.main then
+    for _, o in ipairs(arena.main.objects) do
+      if not o.dead and o.take_damage
+      and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+        local dx, dy = o.x - self.x, o.y - self.y
+        local lx =  dx*cos_r + dy*sin_r
+        local ly = -dx*sin_r + dy*cos_r
+        if math.abs(lx) <= half and math.abs(ly) <= half then
+          o:take_damage(self.dmg, self.color)
+          HitParticle{group = self.group, x = o.x, y = o.y, color = self.color}
+          HitParticle{group = self.group, x = o.x, y = o.y, color = o.color}
+        end
+      end
+    end
+  end
+
+  -- SNKRX Area visual: snap out white, flip to the owner colour, blink away.
+  local body_color = self.color
+  self.color = fg[0]
+  self.color_transparent = Color(body_color.r, body_color.g, body_color.b, 0.08)
+  self.w = 0
+  self.hidden = false
+  self.t:tween(0.05, self, {w = full_w}, math.cubic_in_out, function() self.spring:pull(0.15) end)
+  self.t:after(0.2, function()
+    self.color = body_color
+    self.t:every_immediate(0.05, function() self.hidden = not self.hidden end, 7, function() self.dead = true end)
+  end)
+end
+
+function EruptionArea:update(dt)
+  self:update_game_object(dt)
+end
+
+function EruptionArea:draw()
+  if self.hidden then return end
+  graphics.push(self.x, self.y, self.r, self.spring.x, self.spring.x)
+  local w = self.w/2
+  local w10 = self.w/10
+  local x1, y1 = self.x - w, self.y - w
+  local x2, y2 = self.x + w, self.y + w
+  local lw = math.remap(w, 32, 256, 2, 4)
+  graphics.polyline(self.color, lw, x1, y1 + w10, x1, y1, x1 + w10, y1)
+  graphics.polyline(self.color, lw, x2 - w10, y1, x2, y1, x2, y1 + w10)
+  graphics.polyline(self.color, lw, x2 - w10, y2, x2, y2, x2, y2 - w10)
+  graphics.polyline(self.color, lw, x1, y2 - w10, x1, y2, x1 + w10, y2)
+  graphics.rectangle((x1+x2)/2, (y1+y2)/2, x2-x1, y2-y1, nil, nil, self.color_transparent)
+  graphics.pop()
+end
+
+
+
+
+-- The vulcanist's Volcano (SNKRX port): plants at the cast point with a big
+-- shake + earth/fire blast, then erupts an EruptionArea once a second 4
+-- times (level 3: every 0.5s, 8 times — the Lava Burst passive), each with
+-- its own shake and earth/fire rumble, and blinks out after 4s. Damage is
+-- read live off the parent ball at every eruption so charge/ally/loadout
+-- buffs apply per tick. Pure effect — unlike SNKRX it has no physics body
+-- (swarm movement here is spring-driven, so nothing would bounce off it).
+Volcano = Object:extend()
+Volcano:implement(GameObject)
+function Volcano:init(args)
+  self:init_game_object(args)
+  self.level   = self.level or 1
+  self.area    = self.area or 72
+  self.rs_full = self.rs or 24
+
+  -- Crown rotation: the four rim arcs drift at a random angular speed.
+  self.vr  = 0
+  self.dvr = random:float(-math.pi/4, math.pi/4)
+
+  -- Snap-in: white -> owner colour, radius 0 -> full (the SNKRX Area snap).
+  self.body_color        = self.color
+  self.color             = fg[0]
+  self.color_transparent = Color(self.body_color.r, self.body_color.g, self.body_color.b, 0.08)
+  self.rs     = 0
+  self.hidden = false
+  self.t:tween(0.05, self, {rs = self.rs_full}, math.cubic_in_out, function() self.spring:pull(0.15) end)
+  self.t:after(0.2, function() self.color = self.body_color end)
+
+  camera:shake(6, 1)
+  earth1:play{pitch = random:float(0.95, 1.05), volume = 0.5}
+  fire1:play{pitch = random:float(0.95, 1.05), volume = 0.5}
+
+  -- The eruption loop, on the exact SNKRX cadence.
+  self.t:every(self.level >= 3 and 0.5 or 1, function()
+    camera:shake(4, 0.5)
+    _G[random:table{'earth1', 'earth2', 'earth3'}]:play{pitch = random:float(0.95, 1.05), volume = 0.25}
+    _G[random:table{'fire1', 'fire2', 'fire3'}]:play{pitch = random:float(0.95, 1.05), volume = 0.25}
+    local dmg = self.dmg or 10
+    if self.parent and not self.parent.dead and self.parent.current_dmg then
+      dmg = self.parent:current_dmg()
+    end
+    EruptionArea{group = self.group, x = self.x, y = self.y, w = self.area,
+                 r = random:float(0, 2*math.pi), color = self.body_color, dmg = dmg}
+  end, self.level >= 3 and 8 or 4)
+
+  self.t:after(4, function()
+    self.t:every_immediate(0.05, function() self.hidden = not self.hidden end, 7, function() self.dead = true end)
+  end)
+end
+
+function Volcano:update(dt)
+  self:update_game_object(dt)
+  self.vr = self.vr + self.dvr*dt
+end
+
+function Volcano:draw()
+  if self.hidden then return end
+  -- The cone: an upward triangle (push by -pi/2 because the engine's
+  -- triangles point right at angle 0) — same 13.5-wide outline as SNKRX.
+  graphics.push(self.x, self.y, -math.pi/2, self.spring.x, self.spring.x)
+    graphics.triangle_equilateral(self.x, self.y, 13.5, self.color, 3)
+  graphics.pop()
+  -- The crown: faint disc + four slowly drifting arc segments at the rim.
+  graphics.push(self.x, self.y, self.vr, self.spring.x, self.spring.x)
+    graphics.circle(self.x, self.y, self.rs, self.color_transparent)
+    for i = 1, 4 do
+      graphics.arc('open', self.x, self.y, self.rs,
+                   (i - 1)*math.pi/2 + math.pi/4 - math.pi/8,
+                   (i - 1)*math.pi/2 + math.pi/4 + math.pi/8, self.color, 2)
+    end
+  graphics.pop()
+end

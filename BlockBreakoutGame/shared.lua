@@ -60,17 +60,17 @@ function shared_init()
     spellblade  = blue[0],   engineer    = orange[0],  barbarian   = yellow[0],
     cryomancer  = blue[0],   pyromancer  = red[0],     jester      = red[0],
     assassin    = purple[0], psykino     = fg[0],      infestor    = orange[0],
-    witch       = purple[0], gambler     = yellow2[0],
+    witch       = purple[0], gambler     = yellow2[0],  vulcanist   = red[0],
   }
 
-  -- Draft pool: 20 balls, trimmed from the full 57-archetype SNKRX roster so
+  -- Draft pool: 21 balls, trimmed from the full 57-archetype SNKRX roster so
   -- every pick has a distinct effect. Includes every paddle loadout's
   -- starting heroes (paddles.lua start_balls) — those must stay in sync.
   hero_pool = {
     'vagrant', 'swordsman', 'wizard', 'archer', 'scout', 'cleric',
     'bomber', 'stormweaver', 'cannoneer', 'spellblade', 'engineer',
     'barbarian', 'cryomancer', 'pyromancer', 'jester', 'assassin',
-    'psykino', 'infestor', 'witch', 'gambler',
+    'psykino', 'infestor', 'witch', 'gambler', 'vulcanist',
   }
 end
 

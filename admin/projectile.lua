@@ -2,6 +2,9 @@
 -- It travels in a straight line, optionally pierces, ricochets, or CHAINS
 -- (the SNKRX scout port: leaps to a random nearby target it hasn't hit yet,
 -- speeding up — and optionally ramping damage — on every hop).
+-- wall_stick (the SNKRX archer port): projectiles don't collide with walls in
+-- the physics matrix, so update() bounces the bolt off the arena bounds while
+-- it has ricochet charges left and otherwise thunks it in as a WallArrow.
 
 Projectile = Object:extend()
 Projectile:implement(GameObject)
@@ -17,7 +20,9 @@ function Projectile:init(args)
   self.chain    = self.chain or 0
   self.color    = self.color or fg[0]
   self.type     = self.type or 'arrow'
-  self.life     = self.life or 1.5
+  -- Wall-sticking bolts live long enough to cross the arena and spend their
+  -- ricochets; they end at a wall (or the open pit), not on a timer.
+  self.life     = self.life or (self.wall_stick and 6 or 1.5)
   self.hits     = {}
 
   self:set_as_circle(2, 'dynamic', 'projectile')
@@ -46,8 +51,34 @@ function Projectile:update(dt)
   local vx, vy = self:get_velocity()
   if vx ~= 0 or vy ~= 0 then self:set_angle(math.atan2(vy, vx)) end
 
-  -- Out of arena = die.
   local arena = main.current
+
+  -- SNKRX archer wall behavior: with ricochet charges the bolt reflects off
+  -- the side/top walls; spent, it sticks in as a WallArrow and dies. The
+  -- bottom stays open (the pit) — bolts that exit there just fly off.
+  if self.wall_stick then
+    local nx, ny = 0, 0
+    if     self.x <= arena.x1 + 2 and vx < 0 then nx = 1
+    elseif self.x >= arena.x2 - 2 and vx > 0 then nx = -1
+    elseif self.y <= arena.y1 + 2 and vy < 0 then ny = 1 end
+    if nx ~= 0 or ny ~= 0 then
+      _G[random:table{'arrow_hit_wall1', 'arrow_hit_wall2'}]:play{pitch = random:float(0.9, 1.1), volume = 0.2}
+      if self.ricochet > 0 then
+        self.ricochet = self.ricochet - 1
+        if nx ~= 0 then vx = -vx end
+        if ny ~= 0 then vy = -vy end
+        self:set_velocity(vx, vy)
+        self.r = math.atan2(vy, vx)
+      else
+        self.dead = true
+        WallArrow{group = arena.effects, x = self.x, y = self.y,
+                  r = math.atan2(vy, vx), color = self.color}
+      end
+      return
+    end
+  end
+
+  -- Out of arena = die.
   if self.x < arena.x1 - 20 or self.x > arena.x2 + 20 or self.y < arena.y1 - 20 or self.y > arena.y2 + 20 then
     self.dead = true
   end
@@ -74,6 +105,13 @@ function Projectile:on_hit_brick(brick)
 
   if self.pierce > 0 then
     self.pierce = self.pierce - 1
+    -- SNKRX pierce feedback: flash + particles + thunk on every target the
+    -- projectile punches through, not just the one that stops it.
+    local arena = main.current
+    spawn_burst(arena.effects, self.x, self.y, fg[0], 3, 50, 110)
+    HitParticle{group = arena.effects, x = self.x, y = self.y, color = self.color}
+    HitParticle{group = arena.effects, x = self.x, y = self.y, color = brick.color}
+    hit2:play{pitch = random:float(0.95, 1.05), volume = 0.35}
     return
   end
 
