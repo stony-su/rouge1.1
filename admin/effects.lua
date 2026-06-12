@@ -512,3 +512,87 @@ function spawn_bounce_sparks(group, x, y, normal_angle, color)
     }
   end
 end
+
+
+-- CleaveArea: the swordsman's Cleave, ported from SNKRX's Area (player.lua).
+-- A rotated square that hits everything inside ONCE at spawn — total damage
+-- grows +15% per target hit (the Cleave), doubled at level 3 (SNKRX's
+-- max-level passive). The visual is the SNKRX original: white corner
+-- brackets + a faint fill snap out in 0.05s, flip to the hero colour after
+-- 0.2s, then blink away. Lives in the effects group — pure visual after the
+-- instant hit, no physics body.
+CleaveArea = Object:extend()
+CleaveArea:implement(GameObject)
+function CleaveArea:init(args)
+  self:init_game_object(args)
+  self.r     = self.r or 0
+  self.dmg   = self.dmg or 10
+  self.level = self.level or 1
+  local full_w = self.w or 96    -- visual square side; the hit square is 1.5x
+
+  -- Hit test: every live target whose centre falls inside the rotated square
+  -- of side 1.5*w (the same 1.5x ratio as SNKRX's Rectangle hit shape).
+  -- Unlike do_splash this includes the Boss and critters — the cleave is the
+  -- swordsman's whole offense, so it has to work on everything.
+  local arena = main.current
+  local half  = full_w*1.5/2
+  local cos_r, sin_r = math.cos(self.r), math.sin(self.r)
+  local targets = {}
+  if arena and arena.main then
+    for _, o in ipairs(arena.main.objects) do
+      if not o.dead and o.take_damage
+      and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+        local dx, dy = o.x - self.x, o.y - self.y
+        local lx =  dx*cos_r + dy*sin_r
+        local ly = -dx*sin_r + dy*cos_r
+        if math.abs(lx) <= half and math.abs(ly) <= half then
+          targets[#targets + 1] = o
+        end
+      end
+    end
+  end
+
+  if #targets > 0 then
+    local total = self.dmg*(1 + 0.15*#targets)
+    if self.level >= 3 then total = total*2 end
+    for _, o in ipairs(targets) do
+      o:take_damage(total, self.color)
+      HitParticle{group = self.group, x = o.x, y = o.y, color = self.color}
+      HitParticle{group = self.group, x = o.x, y = o.y, color = o.color}
+    end
+    -- One impact sound per cleave — per-target stacking gets loud fast.
+    hit2:play{pitch = random:float(0.95, 1.05), volume = 0.35}
+  end
+
+  -- SNKRX Area visual: snap out white, flip to the hero colour, blink away.
+  local body_color = self.color
+  self.color = fg[0]
+  self.color_transparent = Color(body_color.r, body_color.g, body_color.b, 0.08)
+  self.w = 0
+  self.hidden = false
+  self.t:tween(0.05, self, {w = full_w}, math.cubic_in_out, function() self.spring:pull(0.15) end)
+  self.t:after(0.2, function()
+    self.color = body_color
+    self.t:every_immediate(0.05, function() self.hidden = not self.hidden end, 7, function() self.dead = true end)
+  end)
+end
+
+function CleaveArea:update(dt)
+  self:update_game_object(dt)
+end
+
+function CleaveArea:draw()
+  if self.hidden then return end
+  graphics.push(self.x, self.y, self.r, self.spring.x, self.spring.x)
+  local w = self.w/2
+  local w10 = self.w/10
+  local x1, y1 = self.x - w, self.y - w
+  local x2, y2 = self.x + w, self.y + w
+  local lw = math.remap(w, 32, 256, 2, 4)
+  graphics.polyline(self.color, lw, x1, y1 + w10, x1, y1, x1 + w10, y1)
+  graphics.polyline(self.color, lw, x2 - w10, y1, x2, y1, x2, y1 + w10)
+  graphics.polyline(self.color, lw, x2 - w10, y2, x2, y2, x2, y2 - w10)
+  graphics.polyline(self.color, lw, x1, y2 - w10, x1, y2, x1 + w10, y2)
+  graphics.rectangle((x1+x2)/2, (y1+y2)/2, x2-x1, y2-y1, nil, nil, self.color_transparent)
+  graphics.pop()
+end

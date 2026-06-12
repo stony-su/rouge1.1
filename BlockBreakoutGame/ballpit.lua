@@ -1824,8 +1824,10 @@ function BallPit:hero_ability_blurb(c)
     -- Special projectiles
     spellblade   = 'random shot',
 
+    -- Cleave
+    swordsman    = 'cleave +15%/hit',
+
     -- Melee splash
-    swordsman    = 'splash strike',
     barbarian    = 'heavy splash',
 
     -- Healers

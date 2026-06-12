@@ -28,8 +28,13 @@ local HERO_STATS = {
   -- ----- Random-direction shooter -----
   spellblade  = {r = 6, base_speed = 160, dmg = 7,  color = 'blue',   behavior = 'random_shot', cd = 0.7, speed = 180},
 
+  -- ----- Cleave (SNKRX swordsman port; behavior = 'cleave') -----
+  -- area = the visual square side; the hit square is 1.5x that (see
+  -- CleaveArea in effects.lua). skin switches the draw to the crescent-slash
+  -- body instead of the plain ball.
+  swordsman   = {r = 7, base_speed = 150, dmg = 14, color = 'yellow', behavior = 'cleave', range = 48, cd = 3.0, area = 96, skin = 'crescent'},
+
   -- ----- Melee splash (behavior = 'melee_splash') -----
-  swordsman   = {r = 7, base_speed = 150, dmg = 14, color = 'yellow', behavior = 'melee_splash', range = 48,  cd = 3.0, splash = 96},
   barbarian   = {r = 8, base_speed = 140, dmg = 16, color = 'yellow', behavior = 'melee_splash', range = 48,  cd = 8.0, splash = 96},
 
   -- ----- Healing (behavior = 'heal') -----
@@ -158,6 +163,23 @@ function BallHero:init(args)
   self.charge_time      = 0
   self.charge_max_time  = 2.0
   self.charge_dmg_mult  = 1.0
+
+  -- Crescent-slash skin (swordsman): facing angle (banks into the travel
+  -- direction, see update), post-cleave slash-ring timer, and a tiny sampled
+  -- position history that draws as fading arc afterimages (draw_crescent).
+  if s.skin == 'crescent' then
+    self.face_a         = -math.pi/2
+    self.cleave_flash_t = 0
+    self.cres_trail     = {}
+    self.t:every(0.06, function()
+      if self.stuck or self.returning or self.mortar then
+        self.cres_trail = {}
+        return
+      end
+      table.insert(self.cres_trail, 1, {x = self.x, y = self.y, a = self.face_a})
+      if #self.cres_trail > 2 then table.remove(self.cres_trail) end
+    end)
+  end
 
   self:set_as_circle(self.r_size, 'dynamic', 'ball')
   self.body:setBullet(true)
@@ -348,6 +370,16 @@ BEHAVIORS.melee_splash = function(self, s)
     if s.knockback then
       main.current:knockback_area(self.x, self.y, s.splash, s.knockback)
     end
+  end, 0, nil, 'attack')
+end
+
+
+-- SNKRX swordsman port: every cd seconds with a brick in range, Cleave — a
+-- rotated-square strike whose damage grows +15% per target hit (see
+-- CleaveArea in effects.lua and BallHero:do_cleave below).
+BEHAVIORS.cleave = function(self, s)
+  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+    self:do_cleave(s)
   end, 0, nil, 'attack')
 end
 
@@ -643,10 +675,49 @@ function BallHero:melee_splash(radius, dmg)
 end
 
 
+-- Fire the swordsman's Cleave: shake + woosh + the CleaveArea strike (the
+-- exact SNKRX attack — see effects.lua). Damage routes through current_dmg
+-- so charge, ally buffs and the paddle loadout's Dmg stat all apply.
+function BallHero:do_cleave(s)
+  if self.stuck or self.returning or self.mortar then return end
+  local arena = main.current
+  if not arena then return end
+  camera:shake(2, 0.5)
+  self.spring:pull(0.3)
+  self.cleave_flash_t = 0.25   -- whips the crescent into a full slash ring
+  _G[random:table{'swordsman1', 'swordsman2'}]:play{pitch = random:float(0.9, 1.1), volume = 0.75}
+  CleaveArea{
+    group = arena.effects, x = self.x, y = self.y, r = self.face_a or 0,
+    w = s.area or 96, color = self.color, dmg = self:current_dmg(), level = self.level,
+  }
+end
+
+
 function BallHero:update(dt)
   self:update_game_object(dt)
 
   local arena = main.current
+
+  -- Crescent skin (swordsman): bank the slash arc into the travel direction
+  -- with a smooth turn; while stuck it eases back to pointing up, ready for
+  -- the launch. cleave_flash_t drives the full slash-ring flash in draw.
+  if self.face_a then
+    if (self.cleave_flash_t or 0) > 0 then
+      self.cleave_flash_t = self.cleave_flash_t - dt
+    end
+    local want
+    if self.stuck then
+      want = -math.pi/2
+    elseif not self.returning and not self.mortar and self.body then
+      local vx, vy = self:get_velocity()
+      if vx and (vx*vx + vy*vy) > 1 then want = math.atan2(vy, vx) end
+    end
+    if want then
+      local diff = math.loop(want - self.face_a, 2*math.pi)
+      if diff > math.pi then diff = diff - 2*math.pi end
+      self.face_a = self.face_a + diff*math.min(1, 12*dt)
+    end
+  end
 
   if self.stuck then
     self:update_stuck(dt)
@@ -840,9 +911,14 @@ function BallHero:draw()
 
   self.spring:pull(0)
   local s = self.spring.x
-  graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
-  graphics.circle(self.x, self.y, self.r_size*s, self.color)
-  graphics.circle(self.x - self.r_size*0.3, self.y - self.r_size*0.3, math.max(1, self.r_size*0.35), fg[5])
+  if self.stats.skin == 'crescent' then
+    -- Swordsman: a banked crescent slash instead of the plain ball body.
+    self:draw_crescent(s)
+  else
+    graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
+    graphics.circle(self.x, self.y, self.r_size*s, self.color)
+    graphics.circle(self.x - self.r_size*0.3, self.y - self.r_size*0.3, math.max(1, self.r_size*0.35), fg[5])
+  end
 
   if main.current.show_hero_labels then
     graphics.print_centered(self.character:sub(1, 3), pixul_font, self.x, self.y - self.r_size - 6, 0, 1, 1, 0, 0, fg[0])
@@ -869,6 +945,40 @@ function BallHero:draw()
   -- Only the lead stuck ball renders its charge ring, so a paddle full of
   -- caught balls doesn't drown the player in overlapping rings.
   if self.stuck and main.current:lead_stuck_ball() == self then self:draw_charge() end
+end
+
+
+-- The swordsman's crescent-slash body: a frozen sword slash banked into its
+-- travel direction, shedding fading arc afterimages behind it. Replaces the
+-- plain ball circles in draw; the physics body underneath is still the same
+-- r_size circle, so bounces are unchanged. The facing angle lives in update;
+-- on cleave (cleave_flash_t) the crescent whips a full 360-degree slash ring.
+function BallHero:draw_crescent(s)
+  s = s or 1
+  local rs = self.r_size
+  local a  = self.face_a or -math.pi/2
+  local c  = self.color
+
+  -- Fading afterimages at the recently sampled positions (newest first).
+  for i, p in ipairs(self.cres_trail or {}) do
+    local alpha = (i == 1) and 0.3 or 0.14
+    graphics.arc('open', p.x, p.y, rs*0.95, p.a - math.pi*0.45, p.a + math.pi*0.45,
+                 Color(c.r, c.g, c.b, alpha), rs*0.7)
+  end
+
+  -- Main crescent: a thick coloured arc opening backward, with a thin steel
+  -- edge just outside it and a bright tip dot at the leading point.
+  graphics.arc('open', self.x, self.y, rs*0.95*s, a - math.pi*0.45, a + math.pi*0.45, c, rs*0.85)
+  graphics.arc('open', self.x, self.y, rs*1.4*s, a - math.pi*0.38, a + math.pi*0.38, fg[0], 1.5)
+  graphics.circle(self.x + math.cos(a)*rs*0.5, self.y + math.sin(a)*rs*0.5,
+                  math.max(1, rs*0.22), fg[5])
+
+  -- Cleave flash: an expanding, fading slash ring.
+  if (self.cleave_flash_t or 0) > 0 then
+    local k = math.clamp(self.cleave_flash_t/0.25, 0, 1)
+    graphics.circle(self.x, self.y, rs*(1.6 + (1 - k)*1.4),
+                    Color(c.r, c.g, c.b, 0.7*k), 2)
+  end
 end
 
 
