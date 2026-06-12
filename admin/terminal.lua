@@ -186,6 +186,7 @@ function Terminal:register_commands()
     t:log("  powerups                list powerup kinds")
     t:log("  powerup <kind>          apply a powerup effect directly")
     t:log("  dropp <kind>            spawn a powerup orb above paddle")
+    t:log("  paddles [reset]         unlock all paddles (reset = re-lock)")
     t:log("  cls                     clear log")
   end
 
@@ -351,6 +352,28 @@ function Terminal:register_commands()
       end
     end)
     t:log("dropped " .. kind .. " (tier " .. Powerup.KINDS[kind].tier .. ")")
+  end
+
+  -- Unlock every paddle loadout in the persistent shop state, saved to disk
+  -- immediately (the post-death shop reads state.paddles_owned — see
+  -- paddles.lua). `paddles reset` re-locks everything but Standard so the
+  -- unlock/buy flow itself can be playtested again.
+  C.paddles = function(t, args)
+    PADDLES.ensure_state()
+    if args[1] == 'reset' then
+      state.paddles_owned   = {standard = true}
+      state.selected_paddle = 'standard'
+      system.save_state()
+      t:log("paddles reset — only standard owned, standard equipped")
+      return
+    end
+    local n = 0
+    for _, id in ipairs(PADDLES.order) do
+      if not state.paddles_owned[id] then n = n + 1 end
+      state.paddles_owned[id] = true
+    end
+    system.save_state()
+    t:log("unlocked " .. n .. " new paddle(s) — all " .. #PADDLES.order .. " owned (saved)")
   end
 
   C.cls = function(t, args) t.lines = {} end

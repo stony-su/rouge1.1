@@ -21,8 +21,13 @@ local HERO_STATS = {
   vagrant     = {r = 6, base_speed = 160, dmg = 8,  color = 'fg',     behavior = 'shoot_arrow', range = 96,  cd = 0.5,  speed = 220},
   archer      = {r = 5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'shoot_arrow', range = 160, cd = 0.5,  speed = 260, pierce = 4},
 
+  -- ----- Chain knife (SNKRX scout port; behavior = 'chain_knife') -----
+  -- The knife CHAINS: on each hit it leaps to a random nearby brick it
+  -- hasn't hit, +25% speed per hop. Level 3: 6 chains and +25% damage per
+  -- hop on top. skin switches the draw to the spinning bandit shuriken.
+  scout       = {r = 5, base_speed = 180, dmg = 6,  color = 'red',    behavior = 'chain_knife', range = 64, cd = 2.0, speed = 240, chain = 3, skin = 'shuriken'},
+
   -- ----- Knife shooters (behavior = 'shoot_knife') -----
-  scout       = {r = 5, base_speed = 180, dmg = 6,  color = 'red',    behavior = 'shoot_knife', range = 64,  cd = 0.5, speed = 240, ricochet = 3},
   assassin    = {r = 5, base_speed = 200, dmg = 12, color = 'purple', behavior = 'shoot_knife', range = 64,  cd = 0.5, speed = 280, pierce = 4},
 
   -- ----- Random-direction shooter -----
@@ -181,6 +186,23 @@ function BallHero:init(args)
     end)
   end
 
+  -- Bandit-shuriken skin (scout): spin angle, post-throw flick timer, and a
+  -- ninja shadow-trail — recently sampled positions drawn as fading,
+  -- shrinking ghost stars behind the body (see draw_shuriken).
+  if s.skin == 'shuriken' then
+    self.spin_a         = random:float(0, 2*math.pi)
+    self.throw_flick_t  = 0
+    self.shuriken_trail = {}
+    self.t:every(0.045, function()
+      if self.stuck or self.returning or self.mortar then
+        self.shuriken_trail = {}
+        return
+      end
+      table.insert(self.shuriken_trail, 1, {x = self.x, y = self.y, a = self.spin_a})
+      if #self.shuriken_trail > 4 then table.remove(self.shuriken_trail) end
+    end)
+  end
+
   self:set_as_circle(self.r_size, 'dynamic', 'ball')
   self.body:setBullet(true)
   self:set_fixed_rotation(true)
@@ -326,6 +348,22 @@ BEHAVIORS.shoot_knife = function(self, s)
     if s.pierce   then extra.pierce   = s.pierce end
     if s.ricochet then extra.ricochet = s.ricochet end
     self:shoot_knife(s.range, s.speed or 240, extra)
+  end, 0, nil, 'attack')
+end
+
+
+-- SNKRX scout port: throw a knife at the closest brick in range that chains
+-- between random nearby targets (see Projectile:on_hit_brick). Level 3
+-- doubles the chain count and adds the per-hop damage ramp.
+BEHAVIORS.chain_knife = function(self, s)
+  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+    if self.stuck or self.returning then return end
+    local extra = {
+      chain          = (self.level >= 3) and 6 or (s.chain or 3),
+      chain_dmg_ramp = (self.level >= 3) or nil,
+    }
+    self:shoot_knife(s.range, s.speed or 240, extra)
+    self.throw_flick_t = 0.3   -- flicks the shuriken spin (see update/draw)
   end, 0, nil, 'attack')
 end
 
@@ -664,7 +702,8 @@ function BallHero:shoot_knife(range, speed, extra)
   local opts = {type = 'knife', dmg = self:current_dmg()*PROJECTILE_DMG_MULT, speed = speed, range = range, color = self.color}
   if extra then for k, v in pairs(extra) do opts[k] = v end end
   main.current:fire_projectile_at_nearest(self, opts)
-  scout1:play{volume = 0.22, pitch = random:float(0.95, 1.05)}
+  -- SNKRX plays one of two throw sounds at random for every knife thrower.
+  _G[random:table{'scout1', 'scout2'}]:play{pitch = random:float(0.95, 1.05), volume = 0.35}
 end
 
 
@@ -717,6 +756,17 @@ function BallHero:update(dt)
       if diff > math.pi then diff = diff - 2*math.pi end
       self.face_a = self.face_a + diff*math.min(1, 12*dt)
     end
+  end
+
+  -- Shuriken skin (scout): lazy idle spin that flicks fast for a beat each
+  -- time a knife is thrown (throw_flick_t set in BEHAVIORS.chain_knife).
+  if self.stats.skin == 'shuriken' then
+    local speed = 2.5
+    if (self.throw_flick_t or 0) > 0 then
+      self.throw_flick_t = self.throw_flick_t - dt
+      speed = 18
+    end
+    self.spin_a = (self.spin_a or 0) + speed*dt
   end
 
   if self.stuck then
@@ -914,6 +964,9 @@ function BallHero:draw()
   if self.stats.skin == 'crescent' then
     -- Swordsman: a banked crescent slash instead of the plain ball body.
     self:draw_crescent(s)
+  elseif self.stats.skin == 'shuriken' then
+    -- Scout: a spinning four-point throwing star.
+    self:draw_shuriken(s)
   else
     graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
@@ -979,6 +1032,60 @@ function BallHero:draw_crescent(s)
     graphics.circle(self.x, self.y, rs*(1.6 + (1 - k)*1.4),
                     Color(c.r, c.g, c.b, 0.7*k), 2)
   end
+end
+
+
+-- Draw one four-point star as FOUR CONVEX KITES (centre -> notch -> tip ->
+-- notch). LOVE's polygon fill only renders convex polygons — a single
+-- concave 8-vertex star comes out mangled. Shared by the scout's body and
+-- its ninja shadow-trail ghosts; the spin angle is baked into the vertices.
+function BallHero:draw_star(x, y, angle, ro, ri, color)
+  for i = 0, 3 do
+    local a  = angle + i*math.pi/2
+    local al = a - math.pi/4
+    local ar = a + math.pi/4
+    graphics.polygon({
+      x, y,
+      x + math.cos(al)*ri, y + math.sin(al)*ri,
+      x + math.cos(a)*ro,  y + math.sin(a)*ro,
+      x + math.cos(ar)*ri, y + math.sin(ar)*ri,
+    }, color)
+  end
+end
+
+
+-- The scout's bandit-shuriken body: a four-point throwing star with steel
+-- tips spinning around a dark hub, dragging a ninja shadow-trail — fading,
+-- shrinking ghost stars at its recently sampled positions. Replaces the
+-- plain ball circles in draw; the physics body underneath is still the same
+-- r_size circle. Spin angle lives in update (lazy idle spin, fast flick on
+-- each knife throw).
+function BallHero:draw_shuriken(s)
+  s = s or 1
+  local rs = self.r_size
+  local ro = rs*2.0*s    -- outer point reach
+  local ri = rs*0.75*s   -- inner notch radius
+  local c  = self.color
+
+  -- Ninja shadow-trail (newest first): darker, smaller, ghostlier copies.
+  for i, p in ipairs(self.shuriken_trail or {}) do
+    local k = 1 - (i - 1)*0.22
+    local ghost = Color(c.r*0.45, c.g*0.45, c.b*0.45, 0.34 - (i - 1)*0.08)
+    self:draw_star(p.x, p.y, p.a, ro*0.85*k, ri*0.85*k, ghost)
+  end
+
+  -- Star body + steel tip caps + dark hub.
+  local a0 = self.spin_a or 0
+  self:draw_star(self.x, self.y, a0, ro, ri, c)
+  for i = 0, 3 do
+    local a = a0 + i*math.pi/2
+    graphics.line(self.x + math.cos(a)*ro*0.62, self.y + math.sin(a)*ro*0.62,
+                  self.x + math.cos(a)*ro*0.95, self.y + math.sin(a)*ro*0.95, fg[0], 1.5)
+  end
+  graphics.circle(self.x, self.y, rs*0.6 + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*0.55*s,
+                  Color(self.color.r*0.55, self.color.g*0.55, self.color.b*0.55, 1))
+  graphics.circle(self.x - rs*0.25, self.y - rs*0.25, math.max(1, rs*0.2), fg[5])
 end
 
 

@@ -2019,7 +2019,7 @@ function BallPit:hero_ability_blurb(c)
     archer       = 'pierce arrow',
 
     -- Knives
-    scout        = 'knife x3 bounce',
+    scout        = 'chaining knife',
     assassin     = 'fast pierce',
 
     -- Special projectiles
@@ -2175,6 +2175,8 @@ function BallPit:fire_projectile_at_nearest(hero, opts)
         speed  = opts.speed,
         pierce = opts.pierce or 0,
         ricochet = opts.ricochet or 0,
+        chain  = opts.chain or 0,
+        chain_dmg_ramp = opts.chain_dmg_ramp,
         color  = color,
       }
     end

@@ -1,5 +1,7 @@
 -- Lightweight projectile fired by certain hero abilities (vagrant, archer, scout).
--- It travels in a straight line, optionally pierces and ricochets.
+-- It travels in a straight line, optionally pierces, ricochets, or CHAINS
+-- (the SNKRX scout port: leaps to a random nearby target it hasn't hit yet,
+-- speeding up — and optionally ramping damage — on every hop).
 
 Projectile = Object:extend()
 Projectile:implement(GameObject)
@@ -12,6 +14,7 @@ function Projectile:init(args)
   self.speed    = self.speed or 220
   self.pierce   = self.pierce or 0
   self.ricochet = self.ricochet or 0
+  self.chain    = self.chain or 0
   self.color    = self.color or fg[0]
   self.type     = self.type or 'arrow'
   self.life     = self.life or 1.5
@@ -71,6 +74,35 @@ function Projectile:on_hit_brick(brick)
 
   if self.pierce > 0 then
     self.pierce = self.pierce - 1
+    return
+  end
+
+  -- SNKRX scout chain: leap to a RANDOM brick within 48px that this knife
+  -- hasn't hit yet, gaining +25% speed per hop (and +25% damage per hop when
+  -- chain_dmg_ramp is set — the scout's level-3 passive). If nothing is in
+  -- leap range the knife flies on and may still chain off whatever it meets.
+  if self.chain > 0 then
+    self.chain = self.chain - 1
+    local arena = main.current
+    spawn_burst(arena.effects, self.x, self.y, fg[0], 3, 50, 110)
+    HitParticle{group = arena.effects, x = self.x, y = self.y, color = self.color}
+    HitParticle{group = arena.effects, x = self.x, y = self.y, color = brick.color}
+    -- SNKRX plays the impact sound on every chain hit, found target or not.
+    hit2:play{pitch = random:float(0.95, 1.05), volume = 0.35}
+    local candidates = {}
+    for _, o in ipairs(arena.main.objects) do
+      if o:is(Brick) and not o.dead and not self.hits[o.id]
+      and math.distance(self.x, self.y, o.x, o.y) <= 48 then
+        candidates[#candidates + 1] = o
+      end
+    end
+    if #candidates > 0 then
+      local target = candidates[random:int(1, #candidates)]
+      self.speed = self.speed*1.25
+      if self.chain_dmg_ramp then self.dmg = self.dmg*1.25 end
+      local ang = math.atan2(target.y - self.y, target.x - self.x)
+      self:set_velocity(math.cos(ang)*self.speed, math.sin(ang)*self.speed)
+    end
     return
   end
 
