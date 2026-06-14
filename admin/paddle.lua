@@ -15,9 +15,11 @@ Paddle:implement(GameObject)
 Paddle:implement(Physics)
 
 -- Vertical dodge band: how far above the spawn y the paddle can climb.
--- ~80px gives enough room to weave between bullets without reaching into
--- the brick-fall zone in the upper arena.
-local DODGE_BAND_UP   = 80
+-- 120px (was 80) pushes the red defense line higher, giving the paddle more
+-- room to weave between bullets; the breach boundary moves up with it (keep
+-- BallPit:breach_line_y's no-paddle fallback in sync: band + 14px spawn
+-- offset).
+local DODGE_BAND_UP   = 120
 local DODGE_BAND_DOWN = 2
 
 function Paddle:init(args)

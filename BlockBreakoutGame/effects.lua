@@ -706,6 +706,8 @@ function Volcano:init(args)
     if self.parent and not self.parent.dead and self.parent.current_dmg then
       dmg = self.parent:current_dmg()
     end
+    -- dmg_mult carries the ranged pace-tuning bonus (see ball_hero.lua).
+    dmg = dmg*(self.dmg_mult or 1)
     EruptionArea{group = self.group, x = self.x, y = self.y, w = self.area,
                  r = random:float(0, 2*math.pi), color = self.body_color, dmg = dmg}
   end, self.level >= 3 and 8 or 4)

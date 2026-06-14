@@ -1615,7 +1615,9 @@ end
 -- swarm and critter breach checks) -- and what draw_hud renders as the red
 -- dotted line. Falls back to a fixed offset if the paddle isn't built yet.
 function BallPit:breach_line_y()
-  return (self.paddle and self.paddle.top_reach) or (self.y2 - 94)
+  -- Fallback = dodge band (120, see paddle.lua DODGE_BAND_UP) + 14px spawn
+  -- offset, matching paddle.top_reach.
+  return (self.paddle and self.paddle.top_reach) or (self.y2 - 134)
 end
 
 

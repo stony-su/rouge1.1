@@ -10,6 +10,24 @@ BallHero:implement(GameObject)
 BallHero:implement(Physics)
 
 
+-- Global pace tuning:
+--   * Balls launch at a third of their old speed (BASE_SPEED_MULT); the
+--     paddle-bounce speed streak — doubled, see speed_mult_step in init —
+--     is the way back up.
+--   * The RANGED auto-attacks (the timer behaviors that damage from afar:
+--     every projectile shooter plus the vulcanist's volcano) fire 4x slower
+--     (RANGED_CD_MULT, applied to cd in init) but hit 2.5x harder
+--     (RANGED_DMG_MULT, applied at the attack sites), so each shot is a
+--     bigger moment in the slowed-down game. Melee splash/cleave, support
+--     casts and the on-bounce contact abilities are untouched.
+local BASE_SPEED_MULT  = 0.33
+local RANGED_CD_MULT   = 4.0
+local RANGED_DMG_MULT  = 2.5
+local RANGED_BEHAVIORS = {
+  shoot_arrow = true, crossbow = true, chain_knife = true,
+  shoot_knife = true, random_shot = true, volcano = true,
+}
+
 -- Per-character stats. r/base_speed/dmg/color are ball properties; the rest
 -- depend on `behavior`, which keys into the BEHAVIORS dispatch table below.
 -- Stats are adapted from SNKRX-master/player.lua: range mirrors that hero's
@@ -130,6 +148,14 @@ function BallHero:init(args)
     if copy.bounce_cd then copy.bounce_cd = copy.bounce_cd*mods.sig.cd_mult end
     s = copy
   end
+  -- Ranged auto-attacks fire RANGED_CD_MULT slower across the board (see the
+  -- pace-tuning block above HERO_STATS). Same shallow-copy discipline.
+  if RANGED_BEHAVIORS[s.behavior] and s.cd then
+    local copy = {}
+    for k, v in pairs(s) do copy[k] = v end
+    copy.cd = copy.cd*RANGED_CD_MULT
+    s = copy
+  end
   self.stats        = s
   self.r_size       = s.r
   -- Multiple heroes can share the same base color (e.g. wizard/spellblade/
@@ -146,7 +172,8 @@ function BallHero:init(args)
   -- cadence when the canvas is taller. At gh=270 the factor is 1.0 (no
   -- change), so existing tuning is preserved on the default resolution.
   -- The loadout's Ball stat multiplies on top.
-  self.base_speed   = s.base_speed * ((gh - 42)/228) * (mods.ball or 1)
+  -- BASE_SPEED_MULT is the global slow-launch cut (pace tuning, see top).
+  self.base_speed   = s.base_speed * BASE_SPEED_MULT * ((gh - 42)/228) * (mods.ball or 1)
   self.returning      = false  -- ball fell into the pit and is being pulled back to the paddle
   self.stuck          = false  -- ball is glued to the paddle awaiting an aimed launch
   self.stuck_offset_x = 0
@@ -156,9 +183,10 @@ function BallHero:init(args)
   -- gets stuck after a miss (or on initial launch).
   self.speed_mult       = 1.0
   self.speed_mult_max   = 4.0     -- was 3.0 (orig 2.5)
-  -- Per-bounce ramp increment (+25% at baseline). The loadout's Charge stat
-  -- scales the increment: Aegis 0.2 -> x1.05/bounce, Pinball 1.8 -> x1.45.
-  self.speed_mult_step  = 1 + 0.25*(mods.charge or 1)
+  -- Per-bounce ramp increment (+50% at baseline — doubled as part of the
+  -- slow-launch pace tuning, see BASE_SPEED_MULT at top). The loadout's
+  -- Charge stat scales it: Aegis 0.2 -> x1.10/bounce, Pinball 1.8 -> x1.90.
+  self.speed_mult_step  = 1 + 0.5*(mods.charge or 1)
 
   -- ULTRAKILL-style chain counter. Increments on every brick bounce; resets
   -- when the ball is caught by the paddle or falls into the pit. Multiplies
@@ -468,7 +496,7 @@ BEHAVIORS.random_shot = function(self, s)
       Projectile{
         group  = arena.main, x = self.x, y = self.y, r = ang,
         type   = 'arrow', speed = s.speed or 180, color = self.color,
-        dmg    = self:current_dmg()*3.5,
+        dmg    = self:current_dmg()*3.5*RANGED_DMG_MULT,
       }
     end)
     archer1:play{volume = 0.2, pitch = random:float(0.95, 1.05)}
@@ -765,8 +793,9 @@ end
 
 -- Convenience wrappers for the different projectile flavors.
 -- Per-shot damage multiplier sits here (PROJECTILE_DMG_MULT) so the buff
--- doesn't bleed into contact damage on bounces.
-local PROJECTILE_DMG_MULT = 3.5
+-- doesn't bleed into contact damage on bounces. RANGED_DMG_MULT layers the
+-- pace-tuning bonus on top: shots are 4x rarer, so each hits 2.5x harder.
+local PROJECTILE_DMG_MULT = 3.5*RANGED_DMG_MULT
 
 -- Effective damage this ball deals right now (base × any active charge bonus
 -- × any active ally damage buff from stormweaver/warden).
@@ -863,7 +892,7 @@ function BallHero:cast_volcano(s)
   self.cast_flash_t = 0.4   -- all runes flash + the ring whips fast (draw)
   Volcano{group = arena.effects, x = x, y = y, color = self.color,
           parent = self, rs = s.volcano_rs or 24, area = s.area or 72,
-          level = self.level}
+          level = self.level, dmg_mult = RANGED_DMG_MULT}
 end
 
 

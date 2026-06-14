@@ -13,6 +13,13 @@ Swarm = Object:extend()
 Swarm:implement(GameObject)
 
 
+-- Global drift slowdown (pace tuning, paired with the slow ball launch in
+-- ball_hero.lua): every swarm descends at half the speed the wave config
+-- asks for. Applied once in init so per-wave drift values, boss spawns and
+-- the speed_booster brick's x1.5 row boost all scale with it automatically.
+local DRIFT_SPEED_MULT = 0.5
+
+
 -- Shape catalogue. Each entry lists {col, row} cell offsets relative to its
 -- own top-left and a `weight` controlling how often the placer picks it from
 -- among the shapes that fit at a given grid spot. 1×1 is overwhelmingly
@@ -149,7 +156,7 @@ function Swarm:init(args)
   self.y_top       = self.y or 24
   self.spacing_x   = self.spacing_x or 22
   self.spacing_y   = self.spacing_y or 14
-  self.drift_speed = self.drift or 4
+  self.drift_speed = (self.drift or 4)*DRIFT_SPEED_MULT
   local picker     = self.variant_picker or function() return 'seeker' end
   local layout     = self.cells_layout or {{dx = 0, dy = 0}}
 

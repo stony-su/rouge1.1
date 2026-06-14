@@ -892,7 +892,7 @@ function BallHero:cast_volcano(s)
   self.cast_flash_t = 0.4   -- all runes flash + the ring whips fast (draw)
   Volcano{group = arena.effects, x = x, y = y, color = self.color,
           parent = self, rs = s.volcano_rs or 24, area = s.area or 72,
-          level = self.level}
+          level = self.level, dmg_mult = RANGED_DMG_MULT}
 end
 
 
