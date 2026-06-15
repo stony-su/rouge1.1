@@ -52,8 +52,14 @@ local HERO_STATS = {
   -- hop on top. skin switches the draw to the spinning bandit shuriken.
   scout       = {r = 5, base_speed = 180, dmg = 6,  color = 'red',    behavior = 'chain_knife', range = 64, cd = 2.0, speed = 240, chain = 3, skin = 'shuriken'},
 
-  -- ----- Knife shooters (behavior = 'shoot_knife') -----
-  assassin    = {r = 5, base_speed = 200, dmg = 12, color = 'purple', behavior = 'shoot_knife', range = 64,  cd = 0.5, speed = 280, pierce = 4},
+  -- ----- Assassin (SNKRX assassin port; behavior = 'assassinate') -----
+  -- SNKRX player.lua:587 -- every cd seconds with a brick in the 64px sensor,
+  -- hurl a knife at the CLOSEST one with pierce 1000 so it skewers the whole
+  -- lane. Every brick it touches BLEEDS (player.lua:2356): a bleed_dur-second
+  -- DoT worth dmg/2 normally, 4x dmg on a crit. The rogue "assassination" crit
+  -- (crit_chance%, +10% per level) also doubles the strike. skin = 'shadow' is
+  -- the Shadowstalker look (smoke trail, breathing aura, blink-lunge slash).
+  assassin    = {r = 5, base_speed = 200, dmg = 12, color = 'purple', behavior = 'assassinate', range = 64, cd = 2.0, speed = 320, pierce = 1000, crit_chance = 25, bleed_dur = 3, skin = 'shadow'},
 
   -- ----- Random-direction shooter -----
   spellblade  = {r = 6, base_speed = 160, dmg = 7,  color = 'blue',   behavior = 'random_shot', cd = 0.7, speed = 180},
@@ -294,6 +300,36 @@ function BallHero:init(args)
     end)
   end
 
+  -- Shadowstalker skin (assassin): the inky smoke-clone trail, the breathing
+  -- shadow aura and the per-throw strike state. shadow_t is the idle "breathe"
+  -- clock (see update/draw); assassin_strike_t + strike_a drive the blink-lunge
+  -- cross-slash, armed in shoot_assassin_knife. shadow_trail samples recent
+  -- positions for the ghost clones, and each sample peels off a rising wisp.
+  if s.skin == 'shadow' then
+    self.shadow_t          = random:float(0, 2*math.pi)
+    self.assassin_strike_t = 0
+    self.strike_a          = -math.pi/2
+    self.shadow_trail      = {}
+    self.t:every(0.04, function()
+      if self.stuck or self.returning or self.mortar then
+        self.shadow_trail = {}
+        return
+      end
+      table.insert(self.shadow_trail, 1, {x = self.x, y = self.y})
+      if #self.shadow_trail > 6 then table.remove(self.shadow_trail) end
+      if random:bool(60) then
+        SmokePuff{
+          group = main.current.effects,
+          x = self.x + random:float(-1.5, 1.5), y = self.y,
+          color = Color(self.color.r*0.5, self.color.g*0.4, self.color.b*0.6, 1),
+          rs = self.r_size*0.55, alpha = 0.30,
+          vx = random:float(-6, 6), vy = random:float(-22, -12),
+          duration = random:float(0.4, 0.7),
+        }
+      end
+    end)
+  end
+
   self:set_as_circle(self.r_size, 'dynamic', 'ball')
   self.body:setBullet(true)
   self:set_fixed_rotation(true)
@@ -439,6 +475,25 @@ BEHAVIORS.shoot_knife = function(self, s)
     if s.pierce   then extra.pierce   = s.pierce end
     if s.ricochet then extra.ricochet = s.ricochet end
     self:shoot_knife(s.range, s.speed or 240, extra)
+  end, 0, nil, 'attack')
+end
+
+
+-- SNKRX assassin port (player.lua:587 + :2356). Every cd seconds with a brick
+-- in the sensor, hurl a pierce-1000 knife at the CLOSEST one; on hit it makes
+-- the target BLEED for bleed_dur seconds (dmg/2 normally, 4x dmg on a crit).
+-- The rogue "assassination" crit (crit_chance%, +10% per level) also doubles
+-- the strike's direct damage. The Shadowstalker juice is armed inside
+-- shoot_assassin_knife. NOTE: this behavior is deliberately NOT in
+-- RANGED_BEHAVIORS -- its cd is already the SNKRX 2s, and it applies the ranged
+-- damage multiplier itself (via PROJECTILE_DMG_MULT in shoot_assassin_knife).
+BEHAVIORS.assassinate = function(self, s)
+  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+    if self.stuck or self.returning then return end
+    local crit_chance = (s.crit_chance or 25) + 10*(self.level - 1)
+    local crit        = random:bool(crit_chance)
+    local bleed_total = (crit and 4 or 0.5)*self:current_dmg()
+    self:shoot_assassin_knife(s, crit, bleed_total)
   end, 0, nil, 'attack')
 end
 
@@ -825,6 +880,40 @@ function BallHero:shoot_knife(range, speed, extra)
 end
 
 
+-- The assassin's bleed-knife (SNKRX assassin port). Unlike shoot_knife it
+-- builds the Projectile directly so it can carry the crit flag and the bleed
+-- payload (fire_projectile_at_nearest forwards neither). Targets the nearest
+-- brick in range; pierce 1000 skewers the whole lane and every brick it punches
+-- through starts bleeding (see projectile.lua / Brick:apply_bleed). Also arms
+-- the Shadowstalker blink-lunge cross-slash (strike_a / assassin_strike_t).
+function BallHero:shoot_assassin_knife(s, crit, bleed_total)
+  if self.stuck or self.returning then return end
+  local arena = main.current
+  if not (arena and arena.main and arena.main.world) then return end
+  local target = arena:get_nearest_brick_within(self.x, self.y, s.range)
+  if not target then return end
+  local hx, hy = self.x, self.y
+  local r      = math.atan2(target.y - hy, target.x - hx)
+  self.strike_a          = r
+  self.assassin_strike_t = 0.26
+  self.assassin_crit     = crit
+  local dmg    = self:current_dmg()*PROJECTILE_DMG_MULT*(crit and 2 or 1)
+  local color  = self.color
+  local main_g = arena.main
+  arena.t:after(0, function()
+    if main_g and main_g.world then
+      Projectile{
+        group = main_g, x = hx, y = hy, r = r,
+        type = 'knife', dmg = dmg, speed = s.speed or 320,
+        pierce = s.pierce or 1000, color = color,
+        crit = crit, bleed = bleed_total, bleed_dur = s.bleed_dur or 3,
+      }
+    end
+  end)
+  _G[random:table{'scout1', 'scout2'}]:play{pitch = random:float(0.95, 1.05), volume = 0.35}
+end
+
+
 -- The archer's crossbow bolt: the exact SNKRX shot — closest brick in the
 -- sensor, pierce 1000 (it never stops on a target), level-3 wall ricochet 3.
 -- wall_stick makes the bolt bounce off / thunk into the arena walls instead
@@ -956,6 +1045,15 @@ function BallHero:update(dt)
       speed = 12
     end
     self.ring_a = (self.ring_a or 0) + speed*dt
+  end
+
+  -- Shadowstalker skin (assassin): advance the idle aura "breathe" clock and
+  -- decay the per-throw strike flash (blink-lunge cross-slash; see draw_shadow).
+  if self.stats.skin == 'shadow' then
+    self.shadow_t = (self.shadow_t or 0) + dt
+    if (self.assassin_strike_t or 0) > 0 then
+      self.assassin_strike_t = self.assassin_strike_t - dt
+    end
   end
 
   if self.stuck then
@@ -1162,6 +1260,10 @@ function BallHero:draw()
   elseif self.stats.skin == 'rune' then
     -- Vulcanist: a rune-ringed furnace around a molten pupil.
     self:draw_rune_furnace(s)
+  elseif self.stats.skin == 'shadow' then
+    -- Assassin: a dark body wrapped in a breathing shadow aura, shedding inky
+    -- smoke-clone afterimages; blink-lunges with a cross-slash on each throw.
+    self:draw_shadow(s)
   else
     graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
@@ -1453,6 +1555,66 @@ function BallHero:draw_rune_furnace(s)
     local k = math.clamp(self.cast_flash_t/0.4, 0, 1)
     graphics.circle(self.x, self.y, rs*(1.4 + (1 - k)*1.6),
                     Color(1, 0.72, 0.3, 0.7*k), 2)
+  end
+end
+
+
+-- The assassin's Shadowstalker body. The plain ball is wrapped in a soft
+-- dark-purple shadow aura that "breathes" (slow sine on radius + alpha), trails
+-- inky ghost-clones of itself that fade and drift up, and -- for a beat after
+-- every knife throw (assassin_strike_t) -- blink-flickers, lunges toward the
+-- victim (strike_a) and flashes a bright cross-slash (gold + wider on a crit).
+-- The physics body underneath is the same r_size circle; bounces are unchanged.
+function BallHero:draw_shadow(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local bt = self.shadow_t or 0
+
+  -- Inky smoke-clone afterimages (newest first): darker, ghostlier copies that
+  -- rise and shrink with age so the ball reads as trailing smoke.
+  for i, p in ipairs(self.shadow_trail or {}) do
+    local k     = 1 - (i - 1)*0.16
+    local rise  = (i - 1)*1.1
+    local ghost = Color(c.r*0.4, c.g*0.35, c.b*0.5, 0.30 - (i - 1)*0.045)
+    graphics.circle(p.x, p.y - rise, rs*0.92*k*s, ghost)
+  end
+
+  -- A strike flash 0..1 over the 0.26s after a throw; crits flare harder.
+  local strike = math.clamp((self.assassin_strike_t or 0)/0.26, 0, 1)
+
+  -- Breathing shadow aura: two soft concentric dark discs whose radius + alpha
+  -- pulse slowly (the idle "breathe"). A strike briefly brightens the aura.
+  local breathe = 0.5 + 0.5*math.sin(bt*2.2)
+  local flare   = strike*(self.assassin_crit and 0.5 or 0.28)
+  local aura_a  = 0.10 + 0.06*breathe + flare
+  graphics.circle(self.x, self.y, rs*(2.4 + 0.35*breathe), Color(c.r*0.45, c.g*0.30, c.b*0.55, aura_a*0.6))
+  graphics.circle(self.x, self.y, rs*(1.7 + 0.25*breathe), Color(c.r*0.70, c.g*0.45, c.b*0.80, aura_a))
+
+  -- Blink-lunge: for the beat after a throw the body jumps toward the victim
+  -- and flickers (alternating visible/dim), reading as a teleport-strike.
+  local lunge = strike*rs*1.6
+  local a     = self.strike_a or -math.pi/2
+  local bx    = self.x + math.cos(a)*lunge
+  local by    = self.y + math.sin(a)*lunge
+  local blink = (strike > 0 and (math.floor(bt*40) % 2 == 0)) and 0.45 or 1
+
+  -- Body.
+  graphics.circle(bx, by, rs + 0.5, bg[-2])
+  graphics.circle(bx, by, rs*s, Color(c.r, c.g, c.b, blink))
+  graphics.circle(bx - rs*0.3, by - rs*0.3, math.max(1, rs*0.35), Color(fg[5].r, fg[5].g, fg[5].b, blink))
+
+  -- Cross-slash: a bright X centered on the body, oriented to the strike, that
+  -- snaps out then vanishes. Brighter, wider and gold on a crit.
+  if strike > 0 then
+    local len = rs*(2.2 + (self.assassin_crit and 1.4 or 0.7))*(0.5 + strike)
+    local sc  = self.assassin_crit and Color(1, 0.9, 0.5, strike) or Color(1, 1, 1, strike*0.9)
+    local w   = self.assassin_crit and 2 or 1.5
+    for _, off in ipairs({math.pi/5, -math.pi/5}) do
+      local sa = a + off
+      graphics.line(bx - math.cos(sa)*len, by - math.sin(sa)*len,
+                    bx + math.cos(sa)*len, by + math.sin(sa)*len, sc, w)
+    end
   end
 end
 

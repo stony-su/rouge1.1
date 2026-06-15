@@ -303,6 +303,34 @@ function BallTrail:draw()
 end
 
 
+-- SmokePuff: a soft wisp that drifts (usually upward), GROWS and fades out over
+-- its lifetime. Used by the assassin's Shadowstalker trail so the ball sheds
+-- inky smoke that dissipates as it rises. Decelerates as it climbs.
+SmokePuff = Object:extend()
+SmokePuff:implement(GameObject)
+function SmokePuff:init(args)
+  self:init_game_object(args)
+  self.color    = self.color or Color(0.10, 0.07, 0.14, 1)
+  self.rs       = self.rs or 3
+  self.alpha    = self.alpha or 0.4
+  self.vx       = self.vx or 0
+  self.vy       = self.vy or -18
+  self.duration = self.duration or 0.5
+  self.t:tween(self.duration, self, {alpha = 0, rs = self.rs*2.2}, math.linear, function() self.dead = true end)
+end
+
+function SmokePuff:update(dt)
+  self:update_game_object(dt)
+  self.x  = self.x + self.vx*dt
+  self.y  = self.y + self.vy*dt
+  self.vy = self.vy*(1 - 0.6*dt)   -- ease the rise so it billows then settles
+end
+
+function SmokePuff:draw()
+  graphics.circle(self.x, self.y, self.rs, Color(self.color.r, self.color.g, self.color.b, self.alpha))
+end
+
+
 -- A brick-bounce "spark" — three tiny particles at the impact point, plus a
 -- short scale-flash on the bouncing object.
 function spawn_bounce_sparks(group, x, y, normal_angle, color)

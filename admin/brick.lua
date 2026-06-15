@@ -104,6 +104,9 @@ function Brick:init(args)
   self.burn_timer  = 0
   self.burn_dps    = 0
   self.scorched    = false   -- set on first burn: missing HP renders as ash eating down from the top
+  self.bleed_timer = 0       -- assassin bleed: a scaled, EXPIRING DoT (unlike the scorch above)
+  self.bleed_dps   = 0
+  self.bleed_color = nil
 
   -- One kinematic body, one BRICK_W×BRICK_H fixture per cell. The fixture
   -- userdata all point at the same brick id, so collision callbacks route to
@@ -480,6 +483,23 @@ function Brick:update(dt)
     end
   end
 
+  -- Assassin bleed: a scaled DoT that EXPIRES (unlike the burn-to-death scorch
+  -- above). Ticks bleed_dps each second and weeps a few dark droplets downward.
+  if self.bleed_timer > 0 then
+    self.bleed_timer = self.bleed_timer - dt
+    self:take_damage(self.bleed_dps*dt, self.bleed_color or purple[0], true)
+    if random:bool(10) then
+      HitParticle{
+        group = main.current.effects,
+        x = self.x + random:float(-self.w/3, self.w/3),
+        y = self.y + random:float(-self.h/4, self.h/4),
+        color = self.bleed_color or purple[0],
+        v = random:float(12, 22), r = math.pi/2 + random:float(-0.3, 0.3),
+        w = 1.5, duration = random:float(0.3, 0.5),
+      }
+    end
+  end
+
   -- Curse: vulnerability mark applied by launcher/jester/etc. Ticks down,
   -- reverts the damage multiplier to 1 when expired.
   if self.curse_timer and self.curse_timer > 0 then
@@ -778,6 +798,17 @@ function Brick:apply_burn(dps, duration)
   self.burn_dps   = self.max_hp*0.2
   self.burn_timer = math.huge
   self.scorched   = true
+end
+
+
+-- Assassin bleed: a scaled, EXPIRING damage-over-time (unlike apply_burn's
+-- burn-to-death scorch). dps is the per-second tick; refreshes to the strongest
+-- dps and longest timer so repeated knife hits keep it topped up rather than
+-- stacking unboundedly. Used by the assassin's pierce-knife (projectile.lua).
+function Brick:apply_bleed(dps, duration, color)
+  self.bleed_dps   = math.max(self.bleed_dps or 0, dps or 0)
+  self.bleed_timer = math.max(self.bleed_timer or 0, duration or 3)
+  self.bleed_color = color or self.bleed_color or purple[0]
 end
 
 

@@ -20,6 +20,12 @@ function Projectile:init(args)
   self.chain    = self.chain or 0
   self.color    = self.color or fg[0]
   self.type     = self.type or 'arrow'
+  -- Assassin extras: crit doubles the strike (already baked into dmg by the
+  -- caller) and adds a burst on hit; bleed is the TOTAL DoT applied to every
+  -- brick the knife pierces, spread over bleed_dur (see on_hit_brick).
+  self.crit      = self.crit or false
+  self.bleed     = self.bleed or 0
+  self.bleed_dur = self.bleed_dur or 3
   -- Wall-sticking bolts live long enough to cross the arena and spend their
   -- ricochets; they end at a wall (or the open pit), not on a timer.
   self.life     = self.life or (self.wall_stick and 6 or 1.5)
@@ -102,6 +108,16 @@ function Projectile:on_hit_brick(brick)
   if self.hits[brick.id] then return end
   self.hits[brick.id] = true
   brick:take_damage(self.dmg, self.color)
+
+  -- Assassin on-hit: the struck brick starts bleeding, and a crit sprays extra
+  -- particles. bleed is the TOTAL over bleed_dur, so pass it through as dps.
+  -- Guarded so it no-ops on enemy types that don't implement apply_bleed.
+  if self.bleed > 0 and brick.apply_bleed then
+    brick:apply_bleed(self.bleed/self.bleed_dur, self.bleed_dur, self.color)
+  end
+  if self.crit then
+    spawn_burst(main.current.effects, self.x, self.y, self.color, 5, 70, 150)
+  end
 
   if self.pierce > 0 then
     self.pierce = self.pierce - 1
