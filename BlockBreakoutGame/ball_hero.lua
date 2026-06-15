@@ -61,8 +61,14 @@ local HERO_STATS = {
   -- the Shadowstalker look (smoke trail, breathing aura, blink-lunge slash).
   assassin    = {r = 5, base_speed = 200, dmg = 12, color = 'purple', behavior = 'assassinate', range = 64, cd = 2.0, speed = 320, pierce = 1000, crit_chance = 25, bleed_dur = 3, skin = 'shadow'},
 
-  -- ----- Random-direction shooter -----
-  spellblade  = {r = 6, base_speed = 160, dmg = 7,  color = 'blue',   behavior = 'random_shot', cd = 0.7, speed = 180},
+  -- ----- Spellblade (SNKRX spellblade port; behavior = 'blade_storm') -----
+  -- SNKRX player.lua:400 + :2013 -- a spinning blade-shard fired in a RANDOM
+  -- direction with pierce 1000; the projectile's heading SPINS (orbit_vr starts
+  -- fast and decays) so it curls outward in a tight spiral that opens up. Ball
+  -- Pit fires it as a CONSTANT stream (tiny cd) instead of SNKRX's 2s tick, for
+  -- a perpetual blade-nova. skin = 'spellblade' is an arcane core orbited by
+  -- blade-shards; SPELLBLADE_DMG_MULT keeps per-shot damage modest (see below).
+  spellblade  = {r = 6, base_speed = 160, dmg = 7, color = 'blue', behavior = 'blade_storm', cd = 0.1, range = 9999, speed = 200, orbit_vr = 6, skin = 'spellblade'},
 
   -- ----- Cleave (SNKRX swordsman port; behavior = 'cleave') -----
   -- area = the visual square side; the hit square is 1.5x that (see
@@ -330,6 +336,26 @@ function BallHero:init(args)
     end)
   end
 
+  -- Spellblade skin: an arcane core orbited by blade-shards (orbit_a), a slow
+  -- arcane pulse (spell_t), and a fire-flash (spell_flash_t) that whips the
+  -- shards on each cast. It also sheds a unique arcane-glyph aftertrail --
+  -- small spinning glyphs that fade (see ArcaneSpark in effects.lua).
+  if s.skin == 'spellblade' then
+    self.orbit_a       = random:float(0, 2*math.pi)
+    self.spell_t       = random:float(0, 6.28)
+    self.spell_flash_t = 0
+    self.t:every(0.05, function()
+      if self.stuck or self.returning or self.mortar then return end
+      ArcaneSpark{
+        group = main.current.effects,
+        x = self.x + random:float(-1, 1), y = self.y + random:float(-1, 1),
+        color = self.color, rs = random:float(2, 3.5),
+        alpha = 0.7, spin = random:float(-9, 9),
+        duration = random:float(0.3, 0.5),
+      }
+    end)
+  end
+
   self:set_as_circle(self.r_size, 'dynamic', 'ball')
   self.body:setBullet(true)
   self:set_fixed_rotation(true)
@@ -555,6 +581,20 @@ BEHAVIORS.random_shot = function(self, s)
       }
     end)
     archer1:play{volume = 0.2, pitch = random:float(0.95, 1.05)}
+  end, 0, nil, 'attack')
+end
+
+
+-- SNKRX spellblade port (player.lua:400 + :2013). Constant stream of spiraling,
+-- all-piercing blade-shards fired in random directions -- a perpetual blade
+-- nova. NOT in RANGED_BEHAVIORS: its tiny cd is the whole point, and it applies
+-- its own (small) damage multiplier in shoot_blade. range = 9999 means it fires
+-- whenever any brick is on the field; spell_flash_t whips the orbiting shards.
+BEHAVIORS.blade_storm = function(self, s)
+  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+    if self.stuck or self.returning then return end
+    self:shoot_blade(s)
+    if self.stats.skin == 'spellblade' then self.spell_flash_t = 0.15 end
   end, 0, nil, 'attack')
 end
 
@@ -851,6 +891,10 @@ end
 -- doesn't bleed into contact damage on bounces. RANGED_DMG_MULT layers the
 -- pace-tuning bonus on top: shots are 4x rarer, so each hits 2.5x harder.
 local PROJECTILE_DMG_MULT = 3.5*RANGED_DMG_MULT
+-- Spellblade fires a CONSTANT stream of piercing blades, so each shot is only a
+-- fraction of a normal ranged hit (sheer volume + pierce make up the DPS, and
+-- random spread wastes many shots). This is the spellblade's main balance knob.
+local SPELLBLADE_DMG_MULT = 0.6*RANGED_DMG_MULT
 
 -- Effective damage this ball deals right now (base × any active charge bonus
 -- × any active ally damage buff from stormweaver/warden).
@@ -911,6 +955,36 @@ function BallHero:shoot_assassin_knife(s, crit, bleed_total)
     end
   end)
   _G[random:table{'scout1', 'scout2'}]:play{pitch = random:float(0.95, 1.05), volume = 0.35}
+end
+
+
+-- The spellblade's spiraling blade-shard (SNKRX spellblade port, player.lua:400
+-- + :2013). Fired in a RANDOM direction with pierce 1000; the projectile's
+-- heading spins (orbit_vr, randomized cw/ccw) so it curls outward in a spiral
+-- that opens up as the spin decays (see projectile.lua). Called as a constant
+-- stream by BEHAVIORS.blade_storm; per-shot damage is intentionally small
+-- (SPELLBLADE_DMG_MULT) since it fires ~10x a second and pierces everything.
+function BallHero:shoot_blade(s)
+  if self.stuck or self.returning then return end
+  local arena = main.current
+  if not (arena and arena.main and arena.main.world) then return end
+  local ang    = random:float(0, 2*math.pi)
+  local dir    = random:bool(50) and 1 or -1
+  local x, y   = self.x, self.y
+  local dmg    = self:current_dmg()*SPELLBLADE_DMG_MULT
+  local color  = self.color
+  local main_g = arena.main
+  arena.t:after(0, function()
+    if main_g and main_g.world then
+      Projectile{
+        group = main_g, x = x, y = y, r = ang,
+        type = 'spellblade', dmg = dmg, speed = s.speed or 200,
+        pierce = 1000, color = color, orbit_vr = dir*(s.orbit_vr or 6),
+      }
+    end
+  end)
+  -- The cast is near-constant, so keep its chime sparse and quiet.
+  if random:bool(18) then wizard1:play{volume = 0.1, pitch = random:float(1.0, 1.2)} end
 end
 
 
@@ -1054,6 +1128,18 @@ function BallHero:update(dt)
     if (self.assassin_strike_t or 0) > 0 then
       self.assassin_strike_t = self.assassin_strike_t - dt
     end
+  end
+
+  -- Spellblade skin: spin the orbiting blade-shards and advance the arcane
+  -- pulse; the shards whip fast for a beat after each cast (spell_flash_t).
+  if self.stats.skin == 'spellblade' then
+    self.spell_t = (self.spell_t or 0) + dt
+    local ospeed = 3.0
+    if (self.spell_flash_t or 0) > 0 then
+      self.spell_flash_t = self.spell_flash_t - dt
+      ospeed = 15
+    end
+    self.orbit_a = (self.orbit_a or 0) + ospeed*dt
   end
 
   if self.stuck then
@@ -1264,6 +1350,9 @@ function BallHero:draw()
     -- Assassin: a dark body wrapped in a breathing shadow aura, shedding inky
     -- smoke-clone afterimages; blink-lunges with a cross-slash on each throw.
     self:draw_shadow(s)
+  elseif self.stats.skin == 'spellblade' then
+    -- Spellblade: a bright arcane core orbited by spinning blade-shards.
+    self:draw_spellblade(s)
   else
     graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
@@ -1598,6 +1687,45 @@ function BallHero:draw_shadow(s)
                     bx + math.cos(sa)*len, by + math.sin(sa)*len, sc, w)
     end
   end
+end
+
+
+-- The spellblade's body: a bright arcane core wrapped in a soft pulsing aura,
+-- with three blade-shards orbiting it (orbit_a, whipped on each cast). It reads
+-- as a little blade-mage orb; the shards telegraph the spiraling blades it
+-- flings. The physics body underneath is the same r_size circle, so bounces
+-- are unchanged.
+function BallHero:draw_spellblade(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local a  = self.orbit_a or 0
+  local pulse = 0.5 + 0.5*math.sin((self.spell_t or 0)*3)
+  local flash = math.clamp((self.spell_flash_t or 0)/0.15, 0, 1)
+
+  -- Soft arcane aura that pulses (and flares on a cast).
+  graphics.circle(self.x, self.y, rs*(2.0 + 0.25*pulse) + flash*2,
+                  Color(c.r, c.g, c.b, 0.10 + 0.06*pulse + flash*0.15))
+
+  -- Three orbiting blade-shards: a short blade drawn tangent to the orbit, with
+  -- a bright tip. They sweep faster for a beat right after a cast.
+  for i = 0, 2 do
+    local ba   = a + i*2*math.pi/3
+    local orad = rs*1.7
+    local bx   = self.x + math.cos(ba)*orad
+    local by   = self.y + math.sin(ba)*orad
+    local ta   = ba + math.pi/2      -- tangent: the blade points along the orbit
+    local bl   = 3 + flash*1.5
+    graphics.line(bx - math.cos(ta)*bl, by - math.sin(ta)*bl,
+                  bx + math.cos(ta)*bl, by + math.sin(ta)*bl, c, 1.5)
+    graphics.circle(bx, by, 1.2, fg[5])
+  end
+
+  -- Core ball + white-hot arcane center.
+  graphics.circle(self.x, self.y, rs + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*s, c)
+  graphics.circle(self.x, self.y, rs*0.45, Color(1, 1, 1, 0.6 + 0.25*pulse))
+  graphics.circle(self.x - rs*0.3, self.y - rs*0.3, math.max(1, rs*0.3), fg[5])
 end
 
 

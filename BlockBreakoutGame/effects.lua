@@ -331,6 +331,37 @@ function SmokePuff:draw()
 end
 
 
+-- ArcaneSpark: a small spinning blade-glyph (a 4-point cross) that shrinks and
+-- fades. Used by the spellblade's aftertrail so the ball leaves a ribbon of
+-- arcane glyphs instead of a plain disc.
+ArcaneSpark = Object:extend()
+ArcaneSpark:implement(GameObject)
+function ArcaneSpark:init(args)
+  self:init_game_object(args)
+  self.color    = self.color or blue[0]
+  self.rs       = self.rs or 3
+  self.alpha    = self.alpha or 0.7
+  self.a        = self.a or random:float(0, 2*math.pi)
+  self.spin     = self.spin or random:float(-8, 8)
+  self.duration = self.duration or 0.4
+  self.t:tween(self.duration, self, {alpha = 0, rs = 0}, math.linear, function() self.dead = true end)
+end
+
+function ArcaneSpark:update(dt)
+  self:update_game_object(dt)
+  self.a = self.a + self.spin*dt
+end
+
+function ArcaneSpark:draw()
+  local c = Color(self.color.r, self.color.g, self.color.b, self.alpha)
+  for _, off in ipairs({0, math.pi/2}) do
+    local sa = self.a + off
+    graphics.line(self.x - math.cos(sa)*self.rs, self.y - math.sin(sa)*self.rs,
+                  self.x + math.cos(sa)*self.rs, self.y + math.sin(sa)*self.rs, c, 1)
+  end
+end
+
+
 -- A brick-bounce "spark" — three tiny particles at the impact point, plus a
 -- short scale-flash on the bouncing object.
 function spawn_bounce_sparks(group, x, y, normal_angle, color)

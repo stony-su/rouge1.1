@@ -26,6 +26,17 @@ function Projectile:init(args)
   self.crit      = self.crit or false
   self.bleed     = self.bleed or 0
   self.bleed_dur = self.bleed_dur or 3
+  -- Spellblade spiral: orbit_vr is the angular velocity of the heading (rad/s);
+  -- the velocity vector rotates by orbit_vr each second while orbit_vr decays,
+  -- so the blade curls outward in a spiral that opens up (SNKRX spellblade).
+  -- spin / btrail drive the spinning-blade draw and its curved afterimage trail.
+  self.orbit_vr = self.orbit_vr or 0
+  self.spin     = 0
+  if self.type == 'spellblade' then
+    self.spin_speed = 20*(self.orbit_vr >= 0 and 1 or -1)
+    self.btrail     = {}
+    self._tr_t      = 0
+  end
   -- Wall-sticking bolts live long enough to cross the arena and spend their
   -- ricochets; they end at a wall (or the open pit), not on a timer.
   self.life     = self.life or (self.wall_stick and 6 or 1.5)
@@ -56,6 +67,26 @@ function Projectile:update(dt)
   -- Keep angle aligned with motion.
   local vx, vy = self:get_velocity()
   if vx ~= 0 or vy ~= 0 then self:set_angle(math.atan2(vy, vx)) end
+
+  -- Spellblade spiral: rotate the heading by orbit_vr each frame (decaying), so
+  -- the blade curls outward then straightens. Also spin the blade for the draw
+  -- and sample a short position history for the curved afterimage trail.
+  if self.type == 'spellblade' then
+    if self.orbit_vr ~= 0 then
+      local sp  = math.sqrt(vx*vx + vy*vy)
+      local ang = math.atan2(vy, vx) + self.orbit_vr*dt
+      self:set_velocity(math.cos(ang)*sp, math.sin(ang)*sp)
+      self.orbit_vr = self.orbit_vr*(1 - 2.5*dt)
+      if math.abs(self.orbit_vr) < 0.05 then self.orbit_vr = 0 end
+    end
+    self.spin  = self.spin + (self.spin_speed or 20)*dt
+    self._tr_t = (self._tr_t or 0) + dt
+    if self._tr_t >= 0.02 then
+      self._tr_t = 0
+      table.insert(self.btrail, 1, {x = self.x, y = self.y})
+      if #self.btrail > 6 then table.remove(self.btrail) end
+    end
+  end
 
   local arena = main.current
 
@@ -92,6 +123,10 @@ end
 
 
 function Projectile:draw()
+  if self.type == 'spellblade' then
+    self:draw_spellblade_shard()
+    return
+  end
   local r = self:get_angle() or 0
   graphics.push(self.x, self.y, r)
     if self.type == 'arrow' then
@@ -101,6 +136,31 @@ function Projectile:draw()
       graphics.rectangle(self.x, self.y, 6, 2, nil, nil, self.color)
     end
   graphics.pop()
+end
+
+
+-- The spellblade shard: a spinning arcane blade with a white-hot core and a
+-- curved afterimage trail tracing its spiral path. Drawn in world space (the
+-- trail samples are world positions) and spinning on its own angle (self.spin),
+-- independent of the travel direction so the spiral reads clearly.
+function Projectile:draw_spellblade_shard()
+  local c = self.color
+  -- Curved trail (newest first): fading dots along the spiral path.
+  for i, p in ipairs(self.btrail or {}) do
+    local k = 1 - (i - 1)*0.15
+    graphics.circle(p.x, p.y, 2.4*k, Color(c.r, c.g, c.b, 0.5 - (i - 1)*0.075))
+  end
+  -- Soft glow.
+  graphics.circle(self.x, self.y, 4.5, Color(c.r, c.g, c.b, 0.28))
+  -- A 4-point blade: one long axis (the blade) and one short (the crossguard).
+  local a  = self.spin or 0
+  local pa = a + math.pi/2
+  graphics.line(self.x - math.cos(a)*6.5, self.y - math.sin(a)*6.5,
+                self.x + math.cos(a)*6.5, self.y + math.sin(a)*6.5, c, 2)
+  graphics.line(self.x - math.cos(pa)*3, self.y - math.sin(pa)*3,
+                self.x + math.cos(pa)*3, self.y + math.sin(pa)*3, c, 1.5)
+  -- White-hot core.
+  graphics.circle(self.x, self.y, 2, Color(1, 1, 1, 0.9))
 end
 
 
@@ -121,9 +181,15 @@ function Projectile:on_hit_brick(brick)
 
   if self.pierce > 0 then
     self.pierce = self.pierce - 1
+    local arena = main.current
+    if self.type == 'spellblade' then
+      -- Light, quiet feedback -- the spellblade pierces constantly, so avoid
+      -- particle/sound spam: one arcane spark, no per-hit chime.
+      HitParticle{group = arena.effects, x = self.x, y = self.y, color = self.color}
+      return
+    end
     -- SNKRX pierce feedback: flash + particles + thunk on every target the
     -- projectile punches through, not just the one that stops it.
-    local arena = main.current
     spawn_burst(arena.effects, self.x, self.y, fg[0], 3, 50, 110)
     HitParticle{group = arena.effects, x = self.x, y = self.y, color = self.color}
     HitParticle{group = arena.effects, x = self.x, y = self.y, color = brick.color}
