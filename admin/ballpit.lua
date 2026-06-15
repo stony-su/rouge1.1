@@ -689,6 +689,7 @@ function BallPit:reset_run()
   self.main    = Group():set_as_physics_world(32, 0, 0, {'paddle', 'ball', 'brick', 'wall', 'xp', 'projectile', 'powerup'})
   self.swarms  = Group():no_camera()  -- controllers, no physics, no camera transform needed
   self.effects = Group()
+  self.floor   = Group()   -- on-ground layer drawn UNDER main, so things like the cleric's heal sigil sit beneath the paddle/balls
   self.ui      = Group():no_camera()
 
   -- Collision matrix.
@@ -1372,6 +1373,7 @@ function BallPit:update(dt)
     self.main:update(sdt)
     self.swarms:update(sdt)
     self.effects:update(sdt)
+    self.floor:update(sdt)
     self.ui:update(sdt)
 
     -- Powerup buffs are time-based; tick them with the same sub-step dt so
@@ -1421,6 +1423,7 @@ end
 
 
 function BallPit:draw()
+  self.floor:draw()
   self.main:draw()
   self.effects:draw()
   if self.frozen then self:draw_frost_overlay() end

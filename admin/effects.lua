@@ -362,6 +362,203 @@ function ArcaneSpark:draw()
 end
 
 
+-- SporeMote: a tiny spore/pollen mote puffed off the cleric and blown outward,
+-- decelerating and fading to nothing -- a fine drift of fading particles rather
+-- than tumbling shapes. Also puffs off bricks the Consecrated Ground burns.
+SporeMote = Object:extend()
+SporeMote:implement(GameObject)
+function SporeMote:init(args)
+  self:init_game_object(args)
+  self.color    = self.color or green[0]
+  self.vx       = self.vx or random:float(-24, 24)
+  self.vy       = self.vy or random:float(-24, 24)
+  self.rs       = self.rs or random:float(0.8, 1.7)
+  self.alpha    = self.alpha or random:float(0.45, 0.8)
+  self.duration = self.duration or random:float(0.4, 0.8)
+  self.t:tween(self.duration, self, {alpha = 0}, math.linear, function() self.dead = true end)
+end
+
+function SporeMote:update(dt)
+  self:update_game_object(dt)
+  self.x  = self.x + self.vx*dt
+  self.y  = self.y + self.vy*dt
+  self.vx = self.vx*(1 - 2.4*dt)   -- the puff disperses + slows
+  self.vy = self.vy*(1 - 2.4*dt)
+end
+
+function SporeMote:draw()
+  graphics.circle(self.x, self.y, self.rs, Color(self.color.r, self.color.g, self.color.b, self.alpha))
+end
+
+
+-- ConsecratedGround: the cleric's healing sigil (Consecrated Ground rework). A
+-- verdant ring planted at the paddle -- while the paddle sits inside it the
+-- player regenerates 1 HP per heal_interval, and bricks caught in the ring take
+-- steady holy damage (dmg per second). Fades in, holds for `duration`, fades
+-- out. Themed to match the Lifebloom cleric: soft fill, slow rotating rings,
+-- a wreath of leaves orbiting the rim.
+ConsecratedGround = Object:extend()
+ConsecratedGround:implement(GameObject)
+function ConsecratedGround:init(args)
+  self:init_game_object(args)
+  self.rs            = self.rs or 64
+  self.color         = self.color or green[0]
+  self.mode          = self.mode or 'heal'      -- 'heal' (pink, regen) | 'damage' (red, blades)
+  self.duration      = self.duration or 6
+  self.dmg           = self.dmg or 3            -- damage per SECOND to enemies inside
+  self.heal_interval = self.heal_interval or 2.0
+  self.heal_t        = 0
+  self.dmg_t         = 0
+  self.spin_a        = random:float(0, 2*math.pi)
+  self.pulse         = 0
+  self.alpha         = 0
+  self.t:tween(0.3, self, {alpha = 1}, math.cubic_in_out)
+  self.t:after(self.duration - 0.45, function()
+    self.t:tween(0.45, self, {alpha = 0}, math.linear, function() self.dead = true end)
+  end)
+end
+
+function ConsecratedGround:update(dt)
+  self:update_game_object(dt)
+  self.spin_a = self.spin_a + 1.5*dt   -- spins the pink flower at the sigil's heart
+  self.pulse  = self.pulse + dt
+  local arena = main.current
+  if not arena then return end
+
+  if self.mode == 'damage' then
+    -- Razor blades: enemies are sliced only when a spinning petal sweeps over
+    -- them, within the petals' reach (matches the flower, NOT the full ring).
+    -- Each cut sits on a short per-target cooldown so it reads as discrete
+    -- slices rather than a uniform burn pool.
+    self.slice_cd = self.slice_cd or {}
+    for id, t in pairs(self.slice_cd) do
+      local nt = t - dt
+      if nt <= 0 then self.slice_cd[id] = nil else self.slice_cd[id] = nt end
+    end
+    local reach     = self.rs*0.58       -- ~ the outer petals' tip reach
+    local sector    = 2*math.pi/8        -- 8 outer blades (matches draw)
+    local slice_dmg = self.dmg*0.6
+    if arena.main then
+      for _, o in ipairs(arena.main.objects) do
+        if not o.dead and o.take_damage and o.id
+        and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+          if not self.slice_cd[o.id]
+          and math.distance(self.x, self.y, o.x, o.y) <= reach then
+            -- offset to the nearest blade's angle; a hit only lands when a blade
+            -- is actually sweeping over the target (the gaps between blades miss).
+            local rel = (math.atan2(o.y - self.y, o.x - self.x) - self.spin_a) % sector
+            if rel > sector/2 then rel = rel - sector end
+            if math.abs(rel) <= 0.30 then
+              o:take_damage(slice_dmg, red[0], true)
+              self.slice_cd[o.id] = 0.45
+              spawn_burst(arena.effects, o.x, o.y, red[0], 3, 60, 150)
+            end
+          end
+        end
+      end
+    end
+    return
+  end
+
+  -- Heal mode: a gentle consecrated burn over the whole ring, then regen.
+  self.dmg_t = self.dmg_t + dt
+  if self.dmg_t >= 0.2 then
+    local tick = self.dmg*self.dmg_t
+    self.dmg_t = 0
+    if arena.main then
+      for _, o in ipairs(arena.main.objects) do
+        if not o.dead and o.take_damage
+        and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+          if math.distance(self.x, self.y, o.x, o.y) <= self.rs then
+            o:take_damage(tick, self.color, true)
+            if random:bool(8) then
+              SporeMote{group = arena.effects, x = o.x + random:float(-4, 4), y = o.y,
+                        color = self.color, vx = random:float(-18, 18), vy = random:float(-26, -6),
+                        rs = random:float(0.8, 1.6), duration = random:float(0.4, 0.7)}
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- Regen the player while the paddle sits in the heal sigil.
+  local p = arena.paddle
+  if p and math.distance(self.x, self.y, p.x, p.y) <= self.rs then
+    self.heal_t = self.heal_t + dt
+    if self.heal_t >= self.heal_interval then
+      self.heal_t = self.heal_t - self.heal_interval
+      local healed = arena.heal_hearts and arena:heal_hearts(1) or 0
+      if healed > 0 then
+        heal1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
+        FloatingText{group = arena.effects, x = p.x, y = p.y - 16, text = '+1 HP', color = green[0]}
+      end
+    end
+  else
+    self.heal_t = 0   -- must stay inside to keep the regen building
+  end
+end
+
+-- One curled flower petal as a strip of convex quads (LOVE fills convex only),
+-- for the spinning flower at the heart of the sigil. cx,cy = centre; a = base
+-- angle; L = length; W = max width; hook = tip curl.
+local function sigil_flower_petal(cx, cy, a, L, W, hook, col)
+  local SEG = 6
+  local ca, sa = math.cos(a), math.sin(a)
+  local lx, ly, rx, ry = {}, {}, {}, {}
+  for i = 0, SEG do
+    local u = i/SEG
+    local mx, my = u*L, hook*L*u*u
+    local tx, ty = L, hook*L*2*u
+    local tl = math.sqrt(tx*tx + ty*ty); tx, ty = tx/tl, ty/tl
+    local nx, ny = -ty, tx
+    local w = (math.sin(u*math.pi))^0.8 * W*0.5
+    local axx, ayy = mx + nx*w, my + ny*w
+    local bxx, byy = mx - nx*w, my - ny*w
+    lx[i+1] = cx + axx*ca - ayy*sa; ly[i+1] = cy + axx*sa + ayy*ca
+    rx[i+1] = cx + bxx*ca - byy*sa; ry[i+1] = cy + bxx*sa + byy*ca
+  end
+  for i = 1, SEG do
+    graphics.polygon({lx[i], ly[i], rx[i], ry[i], rx[i+1], ry[i+1], lx[i+1], ly[i+1]}, col)
+  end
+end
+
+
+function ConsecratedGround:draw()
+  local A = self.alpha
+  local dmg_mode = (self.mode == 'damage')
+  local ring   = dmg_mode and red[0] or self.color
+  local petal  = dmg_mode and Color(0.95, 0.24, 0.30, 0.85*A) or Color(0.96, 0.46, 0.72, 0.85*A)
+  local petalL = dmg_mode and Color(1.00, 0.50, 0.50, 0.90*A) or Color(1.00, 0.72, 0.86, 0.90*A)
+  local breathe = 0.85 + 0.15*math.sin(self.pulse*3)
+
+  if dmg_mode then
+    -- Damage sigil is JUST the spinning razor flower -- its blades ARE the
+    -- hitbox (~rs*0.58). A faint edge ring marks the reach; no big burn pool.
+    local edge = self.rs*0.58
+    graphics.circle(self.x, self.y, edge, Color(ring.r, ring.g, ring.b, 0.08*A))
+    graphics.circle(self.x, self.y, edge, Color(ring.r, ring.g, ring.b, 0.35*A), 1)
+  else
+    -- Heal sigil: soft fill + the full ring over the whole heal area.
+    local r = self.rs*breathe
+    graphics.circle(self.x, self.y, r, Color(ring.r, ring.g, ring.b, 0.10*A))
+    graphics.circle(self.x, self.y, r, Color(ring.r, ring.g, ring.b, 0.5*A), 2)
+    graphics.circle(self.x, self.y, self.rs*0.85, Color(ring.r, ring.g, ring.b, 0.22*A), 1)
+  end
+
+  -- The spinning flower (heal = pink petals; damage = red razor blades).
+  local spin = self.spin_a
+  for i = 0, 7 do
+    sigil_flower_petal(self.x, self.y, spin + i*math.pi/4, self.rs*0.52, self.rs*0.34, 0.22, petal)
+  end
+  for i = 0, 5 do
+    sigil_flower_petal(self.x, self.y, -spin*0.8 + (i + 0.5)*math.pi/3, self.rs*0.30, self.rs*0.22, 0.18, petalL)
+  end
+  graphics.circle(self.x, self.y, self.rs*0.13, Color(0.96, 0.9, 0.55, 0.95*A))
+  graphics.circle(self.x, self.y, self.rs*0.07, Color(1, 1, 1, 0.8*A))
+end
+
+
 -- WaterWave: a sweeping wall of water that surges from `y_start` (bottom of
 -- the arena) up to `y_end` (top), shoving every swarm it touches upward as
 -- it goes, then disperses with a foam-spray burst instead of blinking out.
@@ -657,6 +854,99 @@ function CleaveArea:draw()
 end
 
 
+
+
+-- HexSlamArea: the barbarian's Hammer Slam -- the swordsman's CleaveArea scaled
+-- up and reshaped into a big HEXAGON shockwave. Hits everything inside ONCE at
+-- spawn (+15% total damage per target, x2 at level 3, exactly like the Cleave),
+-- then a thick hex outline + faint fill snaps out, a shockwave ring expands and
+-- dust kicks up, and it blinks away. self.w is the hexagon's circumradius; the
+-- hit test is a true regular-hexagon point test (3 edge-normal projections).
+HexSlamArea = Object:extend()
+HexSlamArea:implement(GameObject)
+function HexSlamArea:init(args)
+  self:init_game_object(args)
+  -- Start at a varied angle and spin as it snaps out, so no two slams look the
+  -- same and the hexagon reads as a whirling shockwave rather than a static
+  -- stamp. The instant hit below uses this spawn angle; the spin is visual.
+  self.r     = (self.r or 0) + random:float(0, math.pi/3)
+  self.spin  = (random:bool(50) and 1 or -1)*random:float(4, 7)
+  self.dmg   = self.dmg or 10
+  self.level = self.level or 1
+  local full_w = self.w or 110   -- hexagon circumradius (vertex distance)
+
+  -- Hit test: a point is inside a regular hexagon if its projection onto each
+  -- of the 3 edge-normals is within the apothem (R*cos(30deg)).
+  local arena   = main.current
+  local apothem = full_w*math.cos(math.pi/6)
+  local targets = {}
+  if arena and arena.main then
+    for _, o in ipairs(arena.main.objects) do
+      if not o.dead and o.take_damage
+      and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+        local dx, dy = o.x - self.x, o.y - self.y
+        local inside = true
+        for k = 0, 2 do
+          local na = self.r + math.pi/6 + k*math.pi/3
+          if math.abs(dx*math.cos(na) + dy*math.sin(na)) > apothem then
+            inside = false
+            break
+          end
+        end
+        if inside then targets[#targets + 1] = o end
+      end
+    end
+  end
+
+  if #targets > 0 then
+    local total = self.dmg*(1 + 0.15*#targets)
+    if self.level >= 3 then total = total*2 end
+    for _, o in ipairs(targets) do
+      o:take_damage(total, self.color)
+      HitParticle{group = self.group, x = o.x, y = o.y, color = self.color}
+      HitParticle{group = self.group, x = o.x, y = o.y, color = o.color}
+    end
+    -- One heavy, low-pitched impact per slam.
+    hit2:play{pitch = random:float(0.7, 0.85), volume = 0.5}
+  end
+
+  -- Slam juice (regardless of hits): an expanding shockwave ring + a kick of
+  -- dust at the impact point.
+  TelegraphRing{group = self.group, x = self.x, y = self.y, radius = full_w*1.15, color = self.color, duration = 0.3}
+  spawn_burst(self.group, self.x, self.y, fg[0], 8, 90, 210)
+
+  -- SNKRX Area visual: snap out white, flip to the hero colour, blink away.
+  local body_color = self.color
+  self.color = fg[0]
+  self.color_transparent = Color(body_color.r, body_color.g, body_color.b, 0.10)
+  self.w = 0
+  self.hidden = false
+  self.t:tween(0.06, self, {w = full_w}, math.cubic_in_out, function() self.spring:pull(0.2) end)
+  self.t:after(0.22, function()
+    self.color = body_color
+    self.t:every_immediate(0.05, function() self.hidden = not self.hidden end, 7, function() self.dead = true end)
+  end)
+end
+
+function HexSlamArea:update(dt)
+  self:update_game_object(dt)
+  self.r = self.r + (self.spin or 0)*dt   -- whirl the hexagon as it expands/fades
+end
+
+function HexSlamArea:draw()
+  if self.hidden then return end
+  graphics.push(self.x, self.y, self.r, self.spring.x, self.spring.x)
+  local verts = {}
+  for k = 0, 5 do
+    local a = k*math.pi/3
+    verts[#verts + 1] = self.x + math.cos(a)*self.w
+    verts[#verts + 1] = self.y + math.sin(a)*self.w
+  end
+  local lw = math.remap(self.w, 32, 256, 3, 6)
+  graphics.polygon(verts, self.color_transparent)
+  graphics.polygon(verts, self.color, lw)
+  graphics.pop()
+end
 
 
 -- A spent archer bolt stuck in the wall (SNKRX WallArrow port): a short

@@ -77,10 +77,21 @@ local HERO_STATS = {
   swordsman   = {r = 7, base_speed = 150, dmg = 14, color = 'yellow', behavior = 'cleave', range = 48, cd = 3.0, area = 96, skin = 'crescent'},
 
   -- ----- Melee splash (behavior = 'melee_splash') -----
-  barbarian   = {r = 8, base_speed = 140, dmg = 16, color = 'yellow', behavior = 'melee_splash', range = 48,  cd = 8.0, splash = 96},
+  -- ----- Barbarian (SNKRX barbarian port; behavior = 'hammer_slam') -----
+  -- SNKRX player.lua:460 -- the barbarian shares the swordsman's Area attack
+  -- (self:attack(96)) but slower and with a stun. Here it's reshaped into a
+  -- HAMMER SLAM: the same Cleave logic (hit-once, +15% total dmg per target,
+  -- x2 at level 3) but VERY BIG and drawn as a HEXAGON shockwave instead of a
+  -- square slash (see HexSlamArea in effects.lua). skin = 'hammer' is a heavy
+  -- maul-head orb that recoils on each slam. area = hexagon circumradius.
+  barbarian   = {r = 8, base_speed = 140, dmg = 16, color = 'yellow', behavior = 'hammer_slam', range = 96, cd = 5.0, area = 110, skin = 'hammer'},
 
-  -- ----- Healing (behavior = 'heal') -----
-  cleric      = {r = 6, base_speed = 145, dmg = 4,  color = 'green',  behavior = 'heal', heal_cd = 8,  heal_amt = 1},
+  -- ----- Consecrated Ground (cleric rework; behavior = 'consecrate') -----
+  -- Every cd seconds the cleric plants a verdant healing sigil at the paddle:
+  -- while the paddle sits inside it the player regenerates 1 HP per heal_interval,
+  -- and bricks caught in the ring take steady holy damage (holy_mult x dmg per
+  -- second). skin = 'lifebloom' is a leaf-wreathed bud that blooms on each cast.
+  cleric      = {r = 6, base_speed = 145, dmg = 4, color = 'green', behavior = 'consecrate', cd = 7, ground_rs = 64, ground_duration = 6, heal_interval = 2.0, holy_mult = 0.6, blade_mult = 1.5, skin = 'lifebloom'},
 
   -- ----- Curse / vulnerability (behavior = 'curse') -----
   jester      = {r = 6, base_speed = 165, dmg = 8,  color = 'red',    behavior = 'curse', range = 96, cd = 6, curse_radius = 128, curse_targets = 6,  curse_mult = 1.4, curse_duration = 6},
@@ -353,6 +364,37 @@ function BallHero:init(args)
         alpha = 0.7, spin = random:float(-9, 9),
         duration = random:float(0.3, 0.5),
       }
+    end)
+  end
+
+  -- Hammer skin (barbarian): the maul head tumbles as it flies -- start each one
+  -- at a random angle so multiple barbarians don't spin in lockstep (see update
+  -- for the spin, draw_hammer for the body).
+  if s.skin == 'hammer' then
+    self.hammer_a = random:float(0, 2*math.pi)
+  end
+
+  -- Lifebloom skin (cleric): a living flower. bloom_pulse drives the perpetual
+  -- breathe-open, bloom_t bursts a full bloom on each cast (do_consecrate),
+  -- orbit_a slowly turns the petals + seed crown. It sheds a fine SPORE trail --
+  -- tiny particles puffed off and blown outward, fading (see SporeMote).
+  if s.skin == 'lifebloom' then
+    self.orbit_a     = random:float(0, 2*math.pi)
+    self.bloom_t     = 0
+    self.bloom_pulse = random:float(0, 6.28)
+    self.t:every(0.06, function()
+      if self.stuck or self.returning or self.mortar then return end
+      for _ = 1, 2 do
+        local ang = random:float(0, 2*math.pi)
+        local sp  = random:float(10, 42)
+        SporeMote{
+          group = main.current.effects,
+          x = self.x + random:float(-2, 2), y = self.y + random:float(-2, 2),
+          color = self.color, vx = math.cos(ang)*sp, vy = math.sin(ang)*sp,
+          rs = random:float(0.8, 1.7), alpha = random:float(0.45, 0.8),
+          duration = random:float(0.4, 0.8),
+        }
+      end
     end)
   end
 
@@ -634,6 +676,15 @@ BEHAVIORS.cleave = function(self, s)
 end
 
 
+-- The barbarian's Hammer Slam: the swordsman's Cleave logic, but bigger, slower
+-- and reshaped as a hexagon shockwave (see BallHero:do_hammer_slam below).
+BEHAVIORS.hammer_slam = function(self, s)
+  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+    self:do_hammer_slam(s)
+  end, 0, nil, 'attack')
+end
+
+
 BEHAVIORS.random_splash = function(self, s)
   self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
     if self.stuck or self.returning then return end
@@ -663,6 +714,57 @@ BEHAVIORS.heal = function(self, s)
         text = '+' .. s.heal_amt .. ' HP', color = green[0]}
     end
   end, 0, nil, 'heal')
+end
+
+
+-- Cleric rework: every cd seconds, plant a Consecrated Ground sigil at the
+-- paddle -- a verdant zone that regenerates the player while the paddle sits in
+-- it and burns bricks caught inside (see do_consecrate + ConsecratedGround in
+-- effects.lua). Runs on a plain timer (a heal zone needs no target); skips while
+-- the ball is stuck/returning so a fresh-launched cleric doesn't waste a cast.
+BEHAVIORS.consecrate = function(self, s)
+  self.t:every(s.cd, function()
+    if self.stuck or self.returning then return end
+    self:do_consecrate(s)
+  end, 0, nil, 'heal')
+end
+
+
+-- Plant the cleric's Consecrated Ground sigil at the paddle. The sigil owns the
+-- regen + holy-damage ticks (see effects.lua); dmg is read live so charge / ally
+-- buffs / loadout Dmg all apply to the holy burn. Also blooms the body (bloom_t).
+function BallHero:do_consecrate(s)
+  if self.stuck or self.returning or self.mortar then return end
+  local arena = main.current
+  if not (arena and arena.floor and arena.paddle) then return end
+  self.bloom_t = 1.0   -- triggers the full flower-bloom burst (see draw_lifebloom)
+  local rs = s.ground_rs or 64
+
+  if random:bool(50) then
+    -- Heal half: a pink flower planted at the paddle (paddle side of the red
+    -- defense line) that regenerates HP while the paddle sits in it. Lives in
+    -- the FLOOR layer so the paddle / balls draw on top of it.
+    ConsecratedGround{
+      group = arena.floor, x = arena.paddle.x, y = arena.paddle.y,
+      rs = rs, duration = s.ground_duration or 6, heal_interval = s.heal_interval or 2.0,
+      mode = 'heal', color = self.color, dmg = self:current_dmg()*(s.holy_mult or 0.6),
+    }
+  else
+    -- Damage half: a red flower planted among the enemies (enemy side of the
+    -- red line); its spinning blades deal damage. Drawn in effects so the red
+    -- bloom reads clearly on top of the swarm.
+    local line_y = (arena.breach_line_y and arena:breach_line_y()) or (arena.y1 + (arena.y2 - arena.y1)*0.5)
+    local b  = arena.get_random_brick_within and arena:get_random_brick_within((arena.x1 + arena.x2)/2, (arena.y1 + line_y)/2, 9999)
+    local tx = b and b.x or random:float(arena.x1 + rs, arena.x2 - rs)
+    local ty = b and b.y or random:float(arena.y1 + rs, line_y - rs)
+    ty = math.clamp(ty, arena.y1 + rs*0.5, line_y - rs*0.5)
+    ConsecratedGround{
+      group = arena.effects, x = tx, y = ty,
+      rs = rs, duration = s.ground_duration or 6,
+      mode = 'damage', color = self.color, dmg = self:current_dmg()*(s.blade_mult or 1.5),
+    }
+  end
+  heal1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
 end
 
 
@@ -1028,6 +1130,25 @@ function BallHero:do_cleave(s)
 end
 
 
+-- Fire the barbarian's Hammer Slam: a heavy version of do_cleave -- a big screen
+-- shake, deep recoil, low-pitched swing, and a HexSlamArea (the Cleave strike
+-- scaled up and reshaped into a hexagon shockwave; see effects.lua). Damage
+-- routes through current_dmg so charge / ally buffs / loadout Dmg all apply.
+function BallHero:do_hammer_slam(s)
+  if self.stuck or self.returning or self.mortar then return end
+  local arena = main.current
+  if not arena then return end
+  camera:shake(5, 0.45)
+  self.spring:pull(0.5)
+  self.slam_flash_t = 0.3   -- drives the maul-head recoil + impact aura in draw_hammer
+  _G[random:table{'swordsman1', 'swordsman2'}]:play{pitch = random:float(0.7, 0.85), volume = 0.9}
+  HexSlamArea{
+    group = arena.effects, x = self.x, y = self.y, r = 0,
+    w = s.area or 110, color = self.color, dmg = self:current_dmg(), level = self.level,
+  }
+end
+
+
 -- Plant the vulcanist's Volcano (the exact SNKRX cast): target the midpoint
 -- between this ball and the average position of every live enemy (arena
 -- centre when nothing is alive), clamped into the arena so the eruptions
@@ -1140,6 +1261,26 @@ function BallHero:update(dt)
       ospeed = 15
     end
     self.orbit_a = (self.orbit_a or 0) + ospeed*dt
+  end
+
+  -- Hammer skin (barbarian): tumble the maul head (a slow heavy spin, whipped
+  -- fast for a beat on each slam) and decay the slam flash (set in
+  -- do_hammer_slam) that drives the pop + impact aura in draw_hammer.
+  if self.stats.skin == 'hammer' then
+    local hspeed = 2.5
+    if (self.slam_flash_t or 0) > 0 then
+      self.slam_flash_t = self.slam_flash_t - dt
+      hspeed = 16
+    end
+    self.hammer_a = (self.hammer_a or 0) + hspeed*dt
+  end
+
+  -- Lifebloom skin (cleric): spin the wreath of leaves, advance the breathing
+  -- pulse, and decay the bloom flash (set in do_consecrate).
+  if self.stats.skin == 'lifebloom' then
+    self.orbit_a     = (self.orbit_a or 0) + 1.1*dt
+    self.bloom_pulse = (self.bloom_pulse or 0) + dt
+    if (self.bloom_t or 0) > 0 then self.bloom_t = self.bloom_t - dt end
   end
 
   if self.stuck then
@@ -1353,6 +1494,12 @@ function BallHero:draw()
   elseif self.stats.skin == 'spellblade' then
     -- Spellblade: a bright arcane core orbited by spinning blade-shards.
     self:draw_spellblade(s)
+  elseif self.stats.skin == 'hammer' then
+    -- Barbarian: a heavy maul-head orb that pops + flares on each slam.
+    self:draw_hammer(s)
+  elseif self.stats.skin == 'lifebloom' then
+    -- Cleric: a leaf-wreathed bud over a soft aura; blooms on each cast.
+    self:draw_lifebloom(s)
   else
     graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
@@ -1726,6 +1873,121 @@ function BallHero:draw_spellblade(s)
   graphics.circle(self.x, self.y, rs*s, c)
   graphics.circle(self.x, self.y, rs*0.45, Color(1, 1, 1, 0.6 + 0.25*pulse))
   graphics.circle(self.x - rs*0.3, self.y - rs*0.3, math.max(1, rs*0.3), fg[5])
+end
+
+
+-- The barbarian's body: a heavy double-headed maul that TUMBLES as it flies (a
+-- slow iron tumble, whipped fast on each slam) -- a dark iron crossbar through a
+-- glowing core with bright striking faces at both ends, so the spin reads at a
+-- glance. On a Hammer Slam (slam_flash_t) it squash-pops bigger + flares an aura.
+function BallHero:draw_hammer(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local a  = self.hammer_a or 0
+  local slam  = math.clamp((self.slam_flash_t or 0)/0.3, 0, 1)
+  local scale = s*(1 + slam*0.3)
+
+  -- Heavy impact aura on the slam.
+  if slam > 0 then
+    graphics.circle(self.x, self.y, rs*(1.8 + slam*1.4), Color(c.r, c.g, c.b, 0.20*slam))
+  end
+
+  -- Body orb (the maul-head core).
+  graphics.circle(self.x, self.y, rs*scale + 1, bg[-2])
+  graphics.circle(self.x, self.y, rs*scale, c)
+
+  -- The heavy iron crossbar through the head, tumbling on `a`, with bright
+  -- striking faces at both ends so the rotation is obvious.
+  graphics.push(self.x, self.y, a, scale, scale)
+    graphics.rectangle(self.x, self.y, rs*2.7, rs*0.8, 1, 1, Color(c.r*0.4, c.g*0.4, c.b*0.4, 1))
+    graphics.rectangle(self.x - rs*1.2, self.y, rs*0.5, rs*1.3, 1, 1, fg[5])
+    graphics.rectangle(self.x + rs*1.2, self.y, rs*0.5, rs*1.3, 1, 1, fg[5])
+  graphics.pop()
+
+  -- Bright core.
+  graphics.circle(self.x, self.y, math.max(1, rs*0.35), fg[5])
+end
+
+
+-- Builds + fills one curled flower petal as a strip of convex quads (so the
+-- hooked, overall-concave shape still renders under LOVE's convex-only polygon
+-- fill). cx,cy = flower centre; a = petal base angle; L = length; W = max width;
+-- hook = how hard the tip curls back sideways as it opens.
+local function draw_flower_petal(cx, cy, a, L, W, hook, col)
+  local SEG = 6
+  local ca, sa = math.cos(a), math.sin(a)
+  local lpx, lpy, rpx, rpy = {}, {}, {}, {}
+  for i = 0, SEG do
+    local u = i/SEG
+    local mx, my = u*L, hook*L*u*u                 -- hooked centre-line
+    local tx, ty = L, hook*L*2*u                   -- tangent
+    local tl = math.sqrt(tx*tx + ty*ty); tx, ty = tx/tl, ty/tl
+    local nx, ny = -ty, tx                         -- normal
+    local w = (math.sin(u*math.pi))^0.8 * W*0.5    -- width taper (0 at base + tip)
+    local axx, ayy = mx + nx*w, my + ny*w
+    local bxx, byy = mx - nx*w, my - ny*w
+    lpx[i+1] = cx + axx*ca - ayy*sa; lpy[i+1] = cy + axx*sa + ayy*ca
+    rpx[i+1] = cx + bxx*ca - byy*sa; rpy[i+1] = cy + bxx*sa + byy*ca
+  end
+  for i = 1, SEG do
+    graphics.polygon({lpx[i], lpy[i], rpx[i], rpy[i],
+                      rpx[i+1], rpy[i+1], lpx[i+1], lpy[i+1]}, col)
+  end
+end
+
+
+-- The cleric's Lifebloom body: a living flower. A ring of petals perpetually
+-- breathes open -- curling their tips back as they spread -- around a green
+-- heart with a gold seed-crown, over a soft mossy aura, and BURSTS into a full
+-- bloom + pulse ring each time it casts Consecrated Ground (bloom_t). No
+-- orbiting bits; the bloom itself is the motion. Physics body is unchanged.
+function BallHero:draw_lifebloom(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local leaf = Color(math.min(1, c.r*1.2 + 0.12), math.min(1, c.g*1.12 + 0.1), math.min(1, c.b*0.9), 1)
+
+  -- Bloom amount: a gentle perpetual breathe-open, spiked to a full burst on a
+  -- cast (cast = a 0->1->0 swell over the ~1s after bloom_t is set to 1).
+  local breathe = 0.5 + 0.5*math.sin((self.bloom_pulse or 0)*1.4)
+  local cast = math.sin(math.clamp(1 - (self.bloom_t or 0), 0, 1)*math.pi)
+  local open = math.max(0.30 + breathe*0.32, cast)
+
+  -- Soft mossy aura that breathes + flares on a bloom. [the pulse]
+  graphics.circle(self.x, self.y, rs*(1.9 + 0.25*breathe) + open*10,
+                  Color(c.r, c.g, c.b, 0.10 + 0.05*breathe + cast*0.16))
+
+  -- Cast pulse ring: a bright ring that expands + fades on each full bloom.
+  if cast > 0.01 then
+    graphics.circle(self.x, self.y, rs + 6 + (1 - cast)*30, Color(leaf.r, leaf.g, leaf.b, cast*0.6), 2)
+  end
+
+  -- Petals: a wreath that unfurls and curls its tips back as `open` rises.
+  local N = 7
+  local L = rs*(0.7 + open*2.1)
+  local W = rs*1.05
+  local hook = 0.28 + open*0.55
+  local spin = (self.orbit_a or 0)*0.35
+  local pcol = Color(leaf.r, leaf.g, leaf.b, 0.45 + cast*0.3)
+  for i = 0, N - 1 do
+    draw_flower_petal(self.x, self.y, spin + i*2*math.pi/N, L, W, hook, pcol)
+  end
+
+  -- Body orb (the flower's heart) + bud.
+  graphics.circle(self.x, self.y, rs*s + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*s, c)
+  graphics.circle(self.x, self.y, rs*0.5*s, leaf)
+
+  -- Seed crown: little gold seeds that spread out of the heart as it opens.
+  local sn = 7
+  for i = 0, sn - 1 do
+    local sa2 = i*2*math.pi/sn + (self.orbit_a or 0)*0.6
+    local sr  = open*rs*0.55
+    graphics.circle(self.x + math.cos(sa2)*sr, self.y + math.sin(sa2)*sr, 1.3,
+                    Color(0.96, 0.9, 0.55, 0.5 + cast*0.5))
+  end
+  graphics.circle(self.x, self.y, math.max(1, rs*0.22), Color(0.96, 0.92, 0.6, 0.95))
 end
 
 
