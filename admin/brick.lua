@@ -108,6 +108,15 @@ function Brick:init(args)
   self.bleed_dps   = 0
   self.bleed_color = nil
 
+  -- Jester "Pandemonium" hex (SNKRX jester, player.lua:534 / enemies.lua:990): a
+  -- mark that does NO damage on its own -- when a hexed brick DIES it bursts into
+  -- a cross of 4 knives (see Brick:die). Cleared when the timer runs out.
+  self.jester_cursed      = false
+  self.jester_curse_timer = 0
+  self.jester_dmg         = 0
+  self.jester_lvl3        = false
+  self.jester_color       = nil
+
   -- One kinematic body, one BRICK_W×BRICK_H fixture per cell. The fixture
   -- userdata all point at the same brick id, so collision callbacks route to
   -- a single on_ball_contact regardless of which cell the ball touched.
@@ -509,6 +518,13 @@ function Brick:update(dt)
     end
   end
 
+  -- Jester hex: counts down and lifts when it expires (the brick has to die
+  -- WHILE hexed to burst into knives).
+  if self.jester_cursed and self.jester_curse_timer > 0 then
+    self.jester_curse_timer = self.jester_curse_timer - dt
+    if self.jester_curse_timer <= 0 then self.jester_cursed = false end
+  end
+
   -- Position is owned by the row; row breach checks are handled there.
 end
 
@@ -680,6 +696,23 @@ function Brick:draw()
     local c     = Color(self.curse_color.r, self.curse_color.g, self.curse_color.b, 0.35*pulse)
     graphics.circle(self.x, self.y, self.w*0.7, c, 1.5)
   end
+
+  -- Jester hex mark: four harlequin diamond pips orbiting the brick, so the
+  -- player can read at a glance which enemies will burst into knives on death.
+  if self.jester_cursed then
+    local c    = self.jester_color or red[0]
+    local t    = love.timer.getTime()
+    local a0   = t*2.2
+    local rad  = self.w*0.62
+    local pip  = 1.4 + 0.4*math.sin(t*6)
+    local col  = Color(c.r, c.g, c.b, 0.85)
+    for i = 0, 3 do
+      local a  = a0 + i*math.pi/2
+      local px = self.x + math.cos(a)*rad
+      local py = self.y + math.sin(a)*rad
+      graphics.polygon({px, py - pip, px + pip, py, px, py + pip, px - pip, py}, col)
+    end
+  end
 end
 
 
@@ -788,6 +821,19 @@ function Brick:apply_curse(color, mult, duration)
 end
 
 
+-- Jester "Pandemonium" hex (SNKRX jester: player.lua:534 -> enemies.lua:990).
+-- A pure mark -- it deals NO damage by itself. The payload (a cross of 4 knives
+-- worth `knife_dmg`, homing + piercing at level 3) is stored here and fired from
+-- Brick:die when the hexed brick is killed, so kills chain into more kills.
+function Brick:apply_jester_curse(knife_dmg, duration, lvl3, color)
+  self.jester_cursed      = true
+  self.jester_curse_timer = math.max(self.jester_curse_timer or 0, duration or 6)
+  self.jester_dmg         = math.max(self.jester_dmg or 0, knife_dmg or 0)
+  self.jester_lvl3        = self.jester_lvl3 or lvl3 or false
+  self.jester_color       = color or red[0]
+end
+
+
 -- Once a brick catches fire it burns until it DIES: the burn never expires
 -- (timer set to inf; the per-frame countdown in update can't drain it), and
 -- the DoT is a flat 20% of MAX HP per second -- any burning brick is dead in
@@ -828,6 +874,31 @@ function Brick:die()
   -- Death trigger for the exploder variant.
   if self.behavior == 'exploder' then
     self:cast_explode_on_death()
+  end
+
+  -- Jester "Pandemonium" (SNKRX jester, enemies.lua:630): a hexed brick bursts
+  -- into a cross of 4 knives on death. At level 3 they home and pierce twice, so
+  -- one kill can ripple through the whole hexed swarm -- pure chaos. Deferred via
+  -- arena.t:after(0) because the Box2D world is LOCKED inside the collision
+  -- callback that killed us (same reason the XP drop below is deferred).
+  if self.jester_cursed and self.jester_dmg > 0 then
+    local jx, jy      = self.x, self.y
+    local jdmg, jlvl3 = self.jester_dmg, self.jester_lvl3
+    local jcolor      = self.jester_color or red[0]
+    arena.t:after(0, function()
+      if not (arena.main and arena.main.world) then return end
+      TelegraphRing{group = arena.effects, x = jx, y = jy, radius = 10, color = jcolor, duration = 0.18}
+      spawn_burst(arena.effects, jx, jy, jcolor, 6, 60, 150)
+      for _ = 1, 8 do JesterMote{group = arena.effects, x = jx, y = jy, color = jcolor} end
+      _G[random:table{'scout1', 'scout2'}]:play{pitch = random:float(0.95, 1.05), volume = 0.3}
+      local r = random:float(0, 2*math.pi)   -- random cross orientation per burst
+      for _ = 1, 4 do
+        Projectile{group = arena.main, x = jx + 8*math.cos(r), y = jy + 8*math.sin(r),
+                   r = r, speed = 250, dmg = jdmg, color = jcolor, type = 'knife',
+                   pierce = jlvl3 and 2 or 0, homing = jlvl3}
+        r = r + math.pi/2
+      end
+    end)
   end
 
   -- Drop XP after world step (Box2D is locked mid-collision).

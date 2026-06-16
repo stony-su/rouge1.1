@@ -391,6 +391,50 @@ function SporeMote:draw()
 end
 
 
+-- JesterMote: a scrap of harlequin confetti shed by the jester. A small spinning
+-- diamond pip flung outward that tumbles, flutters down on a little gravity, and
+-- fades. The jester sheds a steady drizzle of these as its trail, and bursts a
+-- ring of them on each curse cast and on every knife-burst death.
+JesterMote = Object:extend()
+JesterMote:implement(GameObject)
+function JesterMote:init(args)
+  self:init_game_object(args)
+  self.color    = self.color or red[0]
+  self.vx       = self.vx or random:float(-40, 40)
+  self.vy       = self.vy or random:float(-50, 10)
+  self.rs       = self.rs or random:float(1.4, 2.6)
+  self.alpha    = self.alpha or random:float(0.55, 0.9)
+  self.a        = self.a or random:float(0, 2*math.pi)
+  self.spin     = self.spin or random:float(-14, 14)
+  self.duration = self.duration or random:float(0.4, 0.85)
+  self.t:tween(self.duration, self, {alpha = 0, rs = 0}, math.linear, function() self.dead = true end)
+end
+
+function JesterMote:update(dt)
+  self:update_game_object(dt)
+  self.x  = self.x + self.vx*dt
+  self.y  = self.y + self.vy*dt
+  self.vx = self.vx*(1 - 2.0*dt)            -- air drag
+  self.vy = self.vy*(1 - 2.0*dt) + 80*dt    -- ...and a little gravity, so it flutters down
+  self.a  = self.a + self.spin*dt
+end
+
+function JesterMote:draw()
+  local c      = Color(self.color.r, self.color.g, self.color.b, self.alpha)
+  local ca, sa = math.cos(self.a), math.sin(self.a)
+  local r      = self.rs
+  -- A diamond pip: four points rotated by self.a.
+  local px = {0, r, 0, -r}
+  local py = {-r, 0, r, 0}
+  local v  = {}
+  for i = 1, 4 do
+    v[#v+1] = self.x + px[i]*ca - py[i]*sa
+    v[#v+1] = self.y + px[i]*sa + py[i]*ca
+  end
+  graphics.polygon(v, c)
+end
+
+
 -- ConsecratedGround: the cleric's healing sigil (Consecrated Ground rework). A
 -- verdant ring planted at the paddle -- while the paddle sits inside it the
 -- player regenerates 1 HP per heal_interval, and bricks caught in the ring take

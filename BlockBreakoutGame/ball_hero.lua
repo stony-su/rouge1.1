@@ -93,8 +93,16 @@ local HERO_STATS = {
   -- second). skin = 'lifebloom' is a leaf-wreathed bud that blooms on each cast.
   cleric      = {r = 6, base_speed = 145, dmg = 4, color = 'green', behavior = 'consecrate', cd = 7, ground_rs = 64, ground_duration = 6, heal_interval = 2.0, holy_mult = 0.6, blade_mult = 1.5, skin = 'lifebloom'},
 
-  -- ----- Curse / vulnerability (behavior = 'curse') -----
-  jester      = {r = 6, base_speed = 165, dmg = 8,  color = 'red',    behavior = 'curse', range = 96, cd = 6, curse_radius = 128, curse_targets = 6,  curse_mult = 1.4, curse_duration = 6},
+  -- ----- Jester "Pandemonium" (SNKRX jester port; behavior = 'pandemonium') -----
+  -- SNKRX player.lua:525 -- every cd seconds with a brick in the 96px attack
+  -- sensor, HEX up to curse_targets bricks inside the 128px wide sensor for
+  -- curse_duration. The hex deals NO damage itself; instead a hexed brick that
+  -- DIES bursts into a cross of 4 knives (Brick:die), and at level 3
+  -- ("Pandemonium") those knives HOME and PIERCE twice -- so one kill can ripple
+  -- through the whole hexed swarm. knife_mult scales each knife off current_dmg.
+  -- The jester ball itself is FAST and restless, weaving a chaotic, bouncy path
+  -- and shedding harlequin confetti (skin = 'jester').
+  jester      = {r = 6, base_speed = 190, dmg = 8,  color = 'red',    behavior = 'pandemonium', range = 96, cd = 6, curse_radius = 128, curse_targets = 6, curse_duration = 6, knife_mult = 2.5, knife_speed = 250, skin = 'jester'},
 
   -- ----- Damage-over-time clouds (behavior = 'dot_cloud') -----
   witch       = {r = 6, base_speed = 155, dmg = 6, color = 'purple', behavior = 'dot_cloud', range = 96, cd = 4,  cloud_radius = 48, cloud_duration = 14, dps_mult = 0.5},
@@ -398,6 +406,41 @@ function BallHero:init(args)
     end)
   end
 
+  -- Jester "Harlequin" skin: a bouncy motley orb in a spinning diamond-checker,
+  -- crowned with a two-horned fool's cap whose bell tips wobble as it weaves. It
+  -- sheds a steady drizzle of confetti (its trail) and a shimmering two-tone aura.
+  --   jester_t        idle clock (bob + aura shimmer)
+  --   cap_sway/_v     a damped pendulum so the bells lag the body's motion + jingle
+  --   jester_weave_*  bends the flight path into a chaotic weave (see update)
+  --   jester_cast_t   cap/body flash for a beat after each hex cast
+  --   checker_a       slow spin of the harlequin motif
+  --   jester_trail    sampled positions drawn as fading ghost-orbs
+  if s.skin == 'jester' then
+    self.jester_t            = random:float(0, 2*math.pi)
+    self.cap_sway            = 0
+    self.cap_sway_v          = 0
+    self.jester_weave_base   = 3.0
+    self.jester_weave_amp    = self.jester_weave_base
+    self.jester_weave_t      = random:float(0, 2*math.pi)
+    self.jester_cast_t       = 0
+    self.checker_a           = random:float(0, 2*math.pi)
+    self._jester_last_bounces = 0
+    self.jester_trail        = {}
+    self.t:every(0.05, function()
+      if self.stuck or self.returning or self.mortar then
+        self.jester_trail = {}
+        return
+      end
+      table.insert(self.jester_trail, 1, {x = self.x, y = self.y})
+      if #self.jester_trail > 5 then table.remove(self.jester_trail) end
+      if random:bool(45) then
+        JesterMote{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y,
+                   color = self.color, vx = random:float(-20, 20), vy = random:float(-30, -6),
+                   rs = random:float(1.0, 2.0), alpha = random:float(0.4, 0.7)}
+      end
+    end)
+  end
+
   self:set_as_circle(self.r_size, 'dynamic', 'ball')
   self.body:setBullet(true)
   self:set_fixed_rotation(true)
@@ -406,6 +449,22 @@ function BallHero:init(args)
   self:set_damping(0)
   self:set_angular_damping(0)
   self:set_mass(0.5)
+
+  -- Pinball Lobber physics: balls obey gravity and travel slowly so they're
+  -- easy to flip; low restitution + some friction makes them settle and roll
+  -- off the flippers instead of pinging. (Bricks/walls keep their own higher
+  -- restitution, so bricks still read as bumpers.) See pinball_update.
+  if self:is_pinball() then
+    local g = mods.sig or {}
+    self.pb_gravity   = g.gravity   or 170
+    self.pb_speed_cap = g.speed_cap or 620
+    self:set_restitution(g.restitution or 0.12)
+    self:set_friction(0.5)
+    -- Real rolling: let the ball spin so it ROLLS down the angled bats toward
+    -- the drain instead of statically sticking (a fixed-rotation ball sticks
+    -- once surface friction exceeds the bat's slope).
+    self:set_fixed_rotation(false)
+  end
 
   -- Per-bounce ability cooldown for the on-bounce exceptions that need it
   -- (wizard, pyromancer). Used to limit fire rate when bouncing rapidly.
@@ -501,9 +560,81 @@ function BallHero:maybe_spawn_trail()
 end
 
 
+-- True for balls in a Pinball Lobber run — they use a different physics model
+-- (gravity + a slow speed cap, they roll off the flippers, and they are
+-- re-served from above on a drain instead of caught). See pinball_update /
+-- pinball_serve and Paddle:flip_launch.
+function BallHero:is_pinball()
+  return self.run_mods and self.run_mods.signature == 'flippers'
+end
+
+
+-- Pinball Lobber per-frame physics: gravity pulls the ball down toward the
+-- flippers and a soft speed cap keeps it slow and catchable. Used in place of
+-- normalize_speed (which would force a constant speed and fight gravity).
+function BallHero:pinball_update(dt)
+  local vx, vy = self:get_velocity()
+  if not vx then return end
+  vy = vy + (self.pb_gravity or 170)*dt
+  local cap = self.pb_speed_cap or 620
+  local sp  = math.sqrt(vx*vx + vy*vy)
+  if sp > cap then local k = cap/sp; vx, vy = vx*k, vy*k; sp = cap end
+  self:set_velocity(vx, vy)
+  -- Drive the speed-streak visuals off the ball's real speed, so a hard,
+  -- well-placed flip glows and a slow drifting ball stays plain.
+  self.speed_mult = math.clamp(sp/150, 1, self.speed_mult_max or 4)
+end
+
+
+-- The Lobber never catches a ball. A drained (or freshly-added) ball is
+-- re-served by being DROPPED in from above the paddle, so the flippers have to
+-- knock it back into play — there is no stick / aim / charge step.
+function BallHero:pinball_serve()
+  local arena = main.current
+  if not (arena and arena.paddle) then return end
+  self.returning       = false
+  self.stuck           = false
+  self.serving         = true   -- hand off to update_serving (a dragged respawn)
+  self.speed_mult      = 1.0
+  self.charge_dmg_mult = 1.0
+  self.bounces         = 0
+  if self.body then self.body:setActive(true) end
+  self:set_piercing(arena.pierce_active == true)
+  self.serve_off_x = random:float(-34, 34)
+  self.serve_y     = math.clamp(arena.paddle.y - 200,
+                                arena.y1 + self.r_size + 2, arena.paddle.y - 60)
+  pop1:play{volume = 0.25, pitch = random:float(0.95, 1.1)}
+end
+
+
+-- Drag a drained ball back into play instead of teleporting it: a homing
+-- "tractor" hauls it from the pit up to a serve point above the paddle, then
+-- releases it into free-fall for the flippers to deal with. The target tracks
+-- the paddle, so it always arrives above the current flipper position.
+function BallHero:update_serving(dt)
+  local arena = main.current
+  if not (arena and arena.paddle) then return end
+  local tx = math.clamp(arena.paddle.x + (self.serve_off_x or 0),
+                        arena.x1 + self.r_size + 2, arena.x2 - self.r_size - 2)
+  local ty = self.serve_y or (arena.paddle.y - 200)
+  local dx, dy = tx - self.x, ty - self.y
+  local d = math.sqrt(dx*dx + dy*dy)
+  if d < 5 then
+    self.serving = false
+    self:set_velocity(random:float(-24, 24), 30)   -- let go into gravity
+    self.spring:pull(0.2)
+    return
+  end
+  local pull = math.min(820, 140 + d*4)
+  self:set_velocity(dx/d*pull, dy/d*pull)
+end
+
+
 function BallHero:launch_from_paddle()
   local arena = main.current
   if not arena or not arena.paddle then return end
+  -- Pinball Lobber: served from above the flippers, never launched off the paddle.
+  if self:is_pinball() then self:pinball_serve() return end
   local px = arena.paddle.x
   local py = arena.paddle.y - arena.paddle.h/2 - self.r_size - 1
   self:set_position(px, py)
@@ -783,6 +914,44 @@ BEHAVIORS.curse = function(self, s)
       arena_zap_line(arena, self.x, self.y, b.x, b.y, self.color)
     end
     buff1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
+  end, 0, nil, 'attack')
+end
+
+
+-- Jester "Pandemonium" (SNKRX jester port; player.lua:525). Every s.cd seconds,
+-- gated by a brick inside the s.range attack sensor (can_attack), HEX up to
+-- s.curse_targets bricks inside the s.curse_radius wide sensor. The hex is a pure
+-- mark -- it deals no damage on its own; a hexed brick that dies bursts into a
+-- cross of 4 knives (see Brick:die / Brick:apply_jester_curse). At level 3 those
+-- knives home + pierce twice, so kills chain. The knife damage is baked in here
+-- as current_dmg * knife_mult so the explosion (in brick.lua) needs no hero ref.
+BEHAVIORS.pandemonium = function(self, s)
+  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+    if self.stuck or self.returning then return end
+    local arena  = main.current
+    local bricks = arena:get_bricks_within(self.x, self.y, s.curse_radius or 128)
+    table.shuffle(bricks)
+    local n = math.min(s.curse_targets or 6, #bricks)
+    if n <= 0 then return end
+    local lvl3 = self.level >= 3
+    local kdmg = self:current_dmg() * (s.knife_mult or 2.5)
+    for i = 1, n do
+      local b = bricks[i]
+      if b.apply_jester_curse then
+        b:apply_jester_curse(kdmg, s.curse_duration or 6, lvl3, self.color)
+        arena_zap_line(arena, self.x, self.y, b.x, b.y, self.color)
+      end
+    end
+    -- Cast juice: a mischievous squash, a chaotic weave flourish, a cap-flash and
+    -- a ring of confetti so the hex reads as a gleeful flourish.
+    self.spring:pull(0.45)
+    self.jester_cast_t    = 0.3
+    self.jester_weave_amp = (self.jester_weave_base or 3.0)*3
+    for _ = 1, 14 do
+      JesterMote{group = arena.effects, x = self.x, y = self.y, color = self.color,
+                 vx = random:float(-70, 70), vy = random:float(-80, 20)}
+    end
+    buff1:play{volume = 0.35, pitch = random:float(0.95, 1.1)}
   end, 0, nil, 'attack')
 end
 
@@ -1283,6 +1452,35 @@ function BallHero:update(dt)
     if (self.bloom_t or 0) > 0 then self.bloom_t = self.bloom_t - dt end
   end
 
+  -- Jester skin: advance the idle clock, decay the cast flash, spin the checker,
+  -- run the bell pendulum (so the cap's bells lag + jingle with motion), and react
+  -- to bounces with a confetti pop + a weave flourish so every bounce feels
+  -- springy. (The path-weave itself is applied below, in the active-motion block.)
+  if self.stats.skin == 'jester' then
+    self.jester_t  = (self.jester_t or 0) + dt
+    self.checker_a = (self.checker_a or 0) + 0.8*dt
+    if (self.jester_cast_t or 0) > 0 then self.jester_cast_t = self.jester_cast_t - dt end
+    -- Bell pendulum: a damped spring driven by horizontal speed, so the bells
+    -- swing out as the body weaves and keep jingling after it turns.
+    local vx = 0
+    if self.body then vx = self:get_velocity() or 0 end
+    local drive = -vx*0.0016
+    self.cap_sway_v = (self.cap_sway_v or 0) + (90*(drive - (self.cap_sway or 0)) - 7*(self.cap_sway_v or 0))*dt
+    self.cap_sway   = (self.cap_sway or 0) + self.cap_sway_v*dt
+    -- Bounce reaction: a pop of confetti + a bell jingle + a brief weave flourish.
+    if (self.bounces or 0) ~= (self._jester_last_bounces or 0) then
+      self._jester_last_bounces = self.bounces or 0
+      self.cap_sway_v       = self.cap_sway_v + random:float(-6, 6)
+      self.jester_weave_amp = math.max(self.jester_weave_amp or 0, (self.jester_weave_base or 3)*2)
+      if main.current and not self.stuck and not self.returning then
+        for _ = 1, 3 do
+          JesterMote{group = main.current.effects, x = self.x, y = self.y, color = self.color,
+                     rs = random:float(1.0, 2.0), alpha = random:float(0.4, 0.7)}
+        end
+      end
+    end
+  end
+
   if self.stuck then
     self:update_stuck(dt)
     return
@@ -1293,6 +1491,13 @@ function BallHero:update(dt)
     return
   end
 
+  -- Pinball Lobber: a drained ball is being dragged back up to its serve point
+  -- above the paddle (then released into free-fall) — see pinball_serve.
+  if self.serving then
+    self:update_serving(dt)
+    return
+  end
+
   -- Cannon loadout: the ball is out of plane on its mortar arc; physics is
   -- off and we integrate x/y/z manually until it has spent its impacts.
   if self.mortar then
@@ -1300,7 +1505,28 @@ function BallHero:update(dt)
     return
   end
 
-  self:normalize_speed()
+  if self:is_pinball() then
+    self:pinball_update(dt)
+  else
+    self:normalize_speed()
+  end
+
+  -- Jester weave: bend the heading side to side so the ball weaves a restless,
+  -- chaotic path -- its signature movement. Only the DIRECTION oscillates, and
+  -- sin integrates to ~0 over a period, so there's no net spin and normalize_speed
+  -- (magnitude only) never fights it. The amplitude flares on each hex cast / bounce
+  -- then eases back to the resting weave.
+  if self.stats.skin == 'jester' and self.body then
+    self.jester_weave_t   = (self.jester_weave_t or 0) + 9*dt
+    self.jester_weave_amp = (self.jester_weave_base or 3.0)
+                          + ((self.jester_weave_amp or 3.0) - (self.jester_weave_base or 3.0))*(1 - math.min(1, 3*dt))
+    local vx, vy = self:get_velocity()
+    if vx and (vx ~= 0 or vy ~= 0) then
+      local sp = math.sqrt(vx*vx + vy*vy)
+      local na = math.atan2(vy, vx) + self.jester_weave_amp*math.sin(self.jester_weave_t)*dt
+      self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+    end
+  end
 
   -- Boomerang loadout: after any wall hit the ball curls back toward the
   -- paddle, damaging whatever it crosses on the way home. Velocity is only
@@ -1337,16 +1563,22 @@ end
 
 
 -- Disable physics and lerp the ball back to a point just above the paddle.
+-- The Pinball Lobber has no catch flow: it re-serves the ball from above the
+-- flippers (pinball_serve) and keeps physics live instead.
 function BallHero:start_return()
-  self.returning = true
-  self.boomerang_home = nil
-  if self.body then self.body:setActive(false) end
   -- ULTRAKILL: missing the paddle dings the combo meter. Wipe the per-ball
   -- chain counter too so the next launch starts fresh.
   local arena = main.current
   if arena and arena.on_ball_missed then arena:on_ball_missed(self) end
   self.bounces  = 0
   self:set_piercing(false)
+  if self:is_pinball() then
+    self:pinball_serve()
+    return
+  end
+  self.returning = true
+  self.boomerang_home = nil
+  if self.body then self.body:setActive(false) end
 end
 
 
@@ -1500,6 +1732,10 @@ function BallHero:draw()
   elseif self.stats.skin == 'lifebloom' then
     -- Cleric: a leaf-wreathed bud over a soft aura; blooms on each cast.
     self:draw_lifebloom(s)
+  elseif self.stats.skin == 'jester' then
+    -- Jester: a bouncy harlequin orb in a spinning diamond-checker, crowned with
+    -- a bell-tipped fool's cap; shimmering motley aura, confetti, cap-flash on cast.
+    self:draw_jester(s)
   else
     graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
@@ -1834,6 +2070,86 @@ function BallHero:draw_shadow(s)
                     bx + math.cos(sa)*len, by + math.sin(sa)*len, sc, w)
     end
   end
+end
+
+
+-- The jester's "Harlequin" body: a bouncy motley orb. A spinning ring of
+-- alternating bright/body-hue diamonds (the harlequin checker) sits over a deep
+-- shade base, crowned by a two-horned fool's cap whose bell tips swing on a
+-- pendulum (cap_sway) and flash white on each hex cast (jester_cast_t). It bobs
+-- on the idle clock, shimmers a two-tone aura, drags fading ghost-orbs and wears
+-- a little grin. The physics body underneath is the same r_size circle.
+function BallHero:draw_jester(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local t  = self.jester_t or 0
+  local cast = math.clamp((self.jester_cast_t or 0)/0.3, 0, 1)
+
+  -- Two-tone motley palette: a bright harlequin tint and a deep shade of the hue.
+  local light = Color(math.min(1, c.r*1.5 + 0.25), math.min(1, c.g*1.5 + 0.25), math.min(1, c.b*1.5 + 0.25), 1)
+  local dark  = Color(c.r*0.45, c.g*0.40, c.b*0.50, 1)
+
+  -- Trail: fading harlequin ghost-orbs (newest first).
+  for i, p in ipairs(self.jester_trail or {}) do
+    local k = 1 - (i - 1)*0.17
+    graphics.circle(p.x, p.y, rs*0.85*k*s, Color(c.r, c.g, c.b, 0.22 - (i - 1)*0.035))
+  end
+
+  -- Shimmering motley aura: a soft disc whose hue flickers between the body colour
+  -- and the bright motley on the idle clock, flaring on a cast.
+  local shimmer = 0.5 + 0.5*math.sin(t*3.3)
+  local aura_c  = Color(c.r + (light.r - c.r)*shimmer, c.g + (light.g - c.g)*shimmer,
+                        c.b + (light.b - c.b)*shimmer, 0.12 + 0.06*shimmer + cast*0.2)
+  graphics.circle(self.x, self.y, rs*(2.1 + 0.3*shimmer) + cast*3, aura_c)
+
+  -- Idle bob (exaggerated for a beat on each cast); the cast also pops the scale.
+  local bob    = math.sin(t*4)*0.8 + cast*rs*0.4
+  local bx, by = self.x, self.y - bob
+  local scale  = s*(1 + cast*0.25)
+
+  -- Body orb (deep shade base).
+  graphics.circle(bx, by, rs*scale + 0.5, bg[-2])
+  graphics.circle(bx, by, rs*scale, dark)
+
+  -- Harlequin motif: a slowly spinning ring of alternating diamonds (convex
+  -- quads) around a centre pip, so the body reads as motley.
+  local a0  = self.checker_a or 0
+  local rad = rs*scale*0.52
+  local pip = rs*scale*0.42
+  for i = 0, 5 do
+    local a  = a0 + i*math.pi/3
+    local px = bx + math.cos(a)*rad
+    local py = by + math.sin(a)*rad
+    local col = (i % 2 == 0) and light or Color(c.r, c.g, c.b, 1)
+    graphics.polygon({px, py - pip, px + pip, py, px, py + pip, px - pip, py}, col)
+  end
+  local cpip = rs*scale*0.5
+  graphics.polygon({bx, by - cpip, bx + cpip, by, bx, by + cpip, bx - cpip, by}, light)
+
+  -- Two-horned fool's cap with bell tips, leaning out from the crown and swinging
+  -- on the pendulum (cap_sway). Each horn is a tapered triangle; the bells flash
+  -- white for a beat after a cast.
+  local sway   = self.cap_sway or 0
+  local bell_c = (cast > 0) and Color(1, 1, 1, 1) or light
+  for _, side in ipairs({-1, 1}) do
+    local tip_a = -math.pi/2 + side*0.5 + sway
+    local hl    = rs*scale*1.7
+    local hx    = bx + math.cos(tip_a)*hl
+    local hy    = by + math.sin(tip_a)*hl
+    local rootx = bx + math.cos(-math.pi/2 + side*0.35)*rs*scale*0.7
+    local rooty = by + math.sin(-math.pi/2 + side*0.35)*rs*scale*0.7
+    local perp  = tip_a + math.pi/2
+    local ww    = rs*scale*0.45
+    local horn_c = (side < 0) and Color(c.r, c.g, c.b, 1) or light
+    graphics.polygon({rootx + math.cos(perp)*ww, rooty + math.sin(perp)*ww,
+                      rootx - math.cos(perp)*ww, rooty - math.sin(perp)*ww,
+                      hx, hy}, horn_c)
+    graphics.circle(hx, hy, rs*scale*0.34 + cast*1.2, bell_c)
+  end
+
+  -- A little white grin so it reads as a face.
+  graphics.arc('open', bx, by + rs*scale*0.15, rs*scale*0.5, math.pi*0.15, math.pi*0.85, Color(1, 1, 1, 0.85), 1.5)
 end
 
 

@@ -26,6 +26,11 @@ function Projectile:init(args)
   self.crit      = self.crit or false
   self.bleed     = self.bleed or 0
   self.bleed_dur = self.bleed_dur or 3
+  -- Homing: steer the heading toward the nearest brick each frame. Used by the
+  -- jester's level-3 "Pandemonium" death-knives (SNKRX jester, enemies.lua:632),
+  -- so the cross a hexed brick bursts into hunts down the rest of the swarm.
+  self.homing      = self.homing or false
+  self.homing_turn = self.homing_turn or 6   -- max steer rate, rad/s
   -- Spellblade spiral: orbit_vr is the angular velocity of the heading (rad/s);
   -- the velocity vector rotates by orbit_vr each second while orbit_vr decays,
   -- so the blade curls outward in a spiral that opens up (SNKRX spellblade).
@@ -89,6 +94,23 @@ function Projectile:update(dt)
   end
 
   local arena = main.current
+
+  -- Homing: curve the heading toward the nearest brick (jester death-knives at
+  -- level 3). Only the direction is rotated -- speed is preserved -- so the knife
+  -- banks after its target instead of snapping to it.
+  if self.homing then
+    local target = arena.get_nearest_brick and arena:get_nearest_brick(self.x, self.y)
+    if target then
+      local cur  = math.atan2(vy, vx)
+      local want = math.atan2(target.y - self.y, target.x - self.x)
+      local diff = math.loop(want - cur, 2*math.pi)
+      if diff > math.pi then diff = diff - 2*math.pi end
+      local sp   = math.sqrt(vx*vx + vy*vy)
+      local na   = cur + math.clamp(diff, -self.homing_turn*dt, self.homing_turn*dt)
+      vx, vy = math.cos(na)*sp, math.sin(na)*sp
+      self:set_velocity(vx, vy)
+    end
+  end
 
   -- SNKRX archer wall behavior: with ricochet charges the bolt reflects off
   -- the side/top walls; spent, it sticks in as a WallArrow and dies. The

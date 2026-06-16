@@ -46,7 +46,7 @@ function Paddle:init(args)
     self.flipper_thick = sig.flipper_thick or 5
     self.rest_tilt     = sig.rest_tilt     or 0.30 -- resting bats droop toward the drain gap
     self.flip_up       = sig.flip_up       or 0.62 -- how far the tip kicks up on a flip
-    self.launch_speed  = sig.launch_speed  or 360  -- gentle pop: balls stay slow + catchable
+    self.launch_speed  = sig.launch_speed  or 150  -- "100%" unit; flip_launch scales it 2x-4x
     self.flip_l_t, self.flip_r_t = 0, 0
     self:build_flipper_rig(1)
   else
@@ -157,11 +157,14 @@ function Paddle:flip_launch(side)
       if d < catch_r + (h.r_size or 6) then
         local _, vy = h:get_velocity()
         if (vy or 0) > -60 then     -- don't re-fire a ball already flying up
-          local power = 0.62 + 0.38*t      -- nearer the tip = stronger, like a real bat
+          -- Position-scaled launch, like a real flipper: a hit out by the
+          -- pivot gives a +200% pop (2x), scaling up to +400% (4x) as you catch
+          -- the ball nearer the inner tip — the "middle" of the table by the
+          -- drain. t runs 0 at the pivot to 1 at the tip.
+          local boost = 2.0 + 2.0*t
           local ang   = -math.pi/2 - side*random:float(0.12, 0.34)
-          local spd   = (self.launch_speed or 360)*power
+          local spd   = (self.launch_speed or 150)*boost
           h:set_velocity(math.cos(ang)*spd, math.sin(ang)*spd)
-          h.speed_mult      = math.min(h.speed_mult_max or 4, (h.speed_mult or 1)*1.06)
           h.charge_dmg_mult = math.min(1.5, (h.charge_dmg_mult or 1)*1.12)
           h.spring:pull(0.35)
           spawn_bounce_sparks(arena.effects, h.x, h.y, ang, h.color)

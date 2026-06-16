@@ -39,8 +39,14 @@ function Paddle:init(args)
   self.color = self.color or fg[0]
 
   if self.flippers then
-    self.flipper_gap = self.flipper_gap or 8
-    self.flip_window = self.flip_window or 0.15
+    local sig          = self.flipper_sig or {}
+    self.flipper_gap   = self.flipper_gap or 14
+    self.flip_window   = self.flip_window or 0.16
+    self.flipper_len   = sig.flipper_len   or 34   -- long real-table bats (was an 18px stub)
+    self.flipper_thick = sig.flipper_thick or 5
+    self.rest_tilt     = sig.rest_tilt     or 0.30 -- resting bats droop toward the drain gap
+    self.flip_up       = sig.flip_up       or 0.62 -- how far the tip kicks up on a flip
+    self.launch_speed  = sig.launch_speed  or 150  -- "100%" unit; flip_launch scales it 2x-4x
     self.flip_l_t, self.flip_r_t = 0, 0
     self:build_flipper_rig(1)
   else
@@ -55,46 +61,122 @@ function Paddle:init(args)
 end
 
 
--- Pinball Lobber: the paddle is two small angled flippers with a drain gap
--- between them, both fixtures on one kinematic body. Physics:destroy and
--- set_restitution/set_friction already iterate self.fixtures, so the second
--- fixture rides along with the mixin's lifecycle. `scale` lets the
--- wide_paddle powerup grow/shrink the whole rig (it can't rebuild_rect_body
--- a two-fixture paddle).
+-- Distance from point (px,py) to segment a->b, plus the parametric position
+-- t along the segment (0 = a, 1 = b). Used by the flipper catch test.
+local function point_segment_distance(px, py, ax, ay, bx, by)
+  local dx, dy = bx - ax, by - ay
+  local len2   = dx*dx + dy*dy
+  local t      = (len2 > 0) and ((px - ax)*dx + (py - ay)*dy)/len2 or 0
+  t = math.clamp(t, 0, 1)
+  local cx, cy = ax + t*dx, ay + t*dy
+  return math.sqrt((px - cx)^2 + (py - cy)^2), t
+end
+
+
+-- Pinball Lobber: two long flipper bats with a central drain gap, both
+-- fixtures riding one kinematic body. The bats pivot OUTBOARD with their tips
+-- sloping down toward the gap (a real table's resting pose), so a ball that
+-- lands on a bat rolls into the drain unless you flip. The fixtures stay in
+-- the resting pose — one body can't rotate two bats independently — so the
+-- flip itself is an upward impulse applied to nearby balls (see flip_launch),
+-- while draw() animates the visible kick. Physics:destroy and
+-- set_restitution/set_friction iterate self.fixtures, so the second bat rides
+-- the mixin lifecycle. `scale` lets the wide_paddle powerup lengthen the rig.
 function Paddle:build_flipper_rig(scale)
   local px, py = self.x, self.y
   if self.body then self:destroy() end
   self.x, self.y = px, py
 
   self.flipper_scale = scale or 1
-  self.flipper_w     = 18*self.flipper_scale
-  self.flipper_tilt  = 0.22
-  local gap          = self.flipper_gap or 8
-  self.flipper_off   = (gap + self.flipper_w)/2
-  -- Logical span including the gap — the bullet hit-test, xp magnet and
-  -- powerup catch all read paddle.w, so they keep working over the whole rig.
-  self.w             = self.flipper_w*2 + gap
+  local len   = self.flipper_len*self.flipper_scale
+  local thick = self.flipper_thick
+  local gap   = self.flipper_gap or 14
+  local tilt  = self.rest_tilt
+  self.cur_len = len
+  -- Logical span (gap + both bats) — the bullet hit-test, xp magnet and
+  -- powerup catch all read paddle.w, so it has to span the whole rig.
+  self.w = gap + 2*len*math.cos(tilt)
 
   local tag  = 'paddle'
   self.tag   = tag
-  self.shape = Rectangle(self.x, self.y, self.w, self.h + 6)
+  self.shape = Rectangle(self.x, self.y, self.w, thick + 6)
   self.body  = love.physics.newBody(self.group.world, self.x, self.y, 'kinematic')
-  -- Resting pose: each flipper slopes down toward the centre gap (y-down, so
-  -- +tilt drops the left flipper's inner end). The fixtures never physically
-  -- rotate on a flip — the lob in flipper_bounce overrides the reflection.
-  local left_shape  = love.physics.newRectangleShape(-self.flipper_off, 0, self.flipper_w, self.h,  self.flipper_tilt)
-  local right_shape = love.physics.newRectangleShape( self.flipper_off, 0, self.flipper_w, self.h, -self.flipper_tilt)
-  self.fixture  = love.physics.newFixture(self.body, left_shape)
-  local right_f = love.physics.newFixture(self.body, right_shape)
-  self.fixtures = {right_f}
-  for _, f in ipairs({self.fixture, right_f}) do
+
+  self.fixtures = {}
+  self.fixture  = nil
+  for _, s in ipairs({-1, 1}) do
+    -- Bat midpoint + long-axis angle in body-local space, pivot outboard.
+    local mx  = s*(gap/2 + (len/2)*math.cos(tilt))
+    local my  = (len/2)*math.sin(tilt)
+    local ang = (s == 1) and (math.pi - tilt) or tilt
+    local shape = love.physics.newRectangleShape(mx, my, len, thick, ang)
+    local f = love.physics.newFixture(self.body, shape)
     f:setUserData(self.id)
     f:setCategory(self.group.collision_tags[tag].category)
     f:setMask(unpack(self.group.collision_tags[tag].masks))
-    f:setRestitution(1)
-    f:setFriction(0)
+    f:setRestitution(0.1)   -- balls settle + roll off the bats, they don't ping
+    f:setFriction(0.6)
+    if not self.fixture then self.fixture = f else table.insert(self.fixtures, f) end
   end
   self.body:setFixedRotation(true)
+end
+
+
+-- World-space pose of one flipper bat (side = -1 left, 1 right), folding in the
+-- live flip animation: returns pivot (px,py), tip (tx,ty), the bat elevation
+-- angle and the 0..1 raise amount. The pivot is fixed outboard; the tip swings
+-- from a resting droop up to flip_up while a flip window is live.
+function Paddle:flipper_pose(side)
+  local ft    = (side == -1) and (self.flip_l_t or 0) or (self.flip_r_t or 0)
+  local raise = (self.flip_window > 0) and math.clamp(ft/self.flip_window, 0, 1) or 0
+  local elev  = self.rest_tilt + (-self.flip_up - self.rest_tilt)*raise
+  local len   = self.cur_len or self.flipper_len
+  local gap   = self.flipper_gap or 14
+  local pivx  = self.x + side*(gap/2 + len*math.cos(self.rest_tilt))
+  local pivy  = self.y
+  local tipx  = pivx + (-side*math.cos(elev))*len
+  local tipy  = pivy + math.sin(elev)*len
+  return pivx, pivy, tipx, tipy, elev, raise
+end
+
+
+-- A live flip kicks every ball resting on (or just above) that bat up and
+-- infield. This is the Lobber's whole offense: gravity rolls balls down to the
+-- flippers, a well-timed tap lobs them back up into the swarm. The pop is
+-- deliberately gentle (launch_speed) so balls stay slow and catchable; the
+-- reward for good timing is a per-flip damage ramp, not raw speed.
+function Paddle:flip_launch(side)
+  local arena = main.current
+  if not (arena and arena.heroes) then return end
+  local pivx, pivy, tipx, tipy = self:flipper_pose(side)
+  local catch_r = (self.flipper_thick or 5) + 15
+  local hit_any = false
+  for _, h in ipairs(arena.heroes) do
+    if h and not h.dead and h.body and not h.stuck and not h.returning then
+      local d, t = point_segment_distance(h.x, h.y, pivx, pivy, tipx, tipy)
+      if d < catch_r + (h.r_size or 6) then
+        local _, vy = h:get_velocity()
+        if (vy or 0) > -60 then     -- don't re-fire a ball already flying up
+          -- Position-scaled launch, like a real flipper: a hit out by the
+          -- pivot gives a +200% pop (2x), scaling up to +400% (4x) as you catch
+          -- the ball nearer the inner tip — the "middle" of the table by the
+          -- drain. t runs 0 at the pivot to 1 at the tip.
+          local boost = 2.0 + 2.0*t
+          local ang   = -math.pi/2 - side*random:float(0.12, 0.34)
+          local spd   = (self.launch_speed or 150)*boost
+          h:set_velocity(math.cos(ang)*spd, math.sin(ang)*spd)
+          h.charge_dmg_mult = math.min(1.5, (h.charge_dmg_mult or 1)*1.12)
+          h.spring:pull(0.35)
+          spawn_bounce_sparks(arena.effects, h.x, h.y, ang, h.color)
+          hit_any = true
+        end
+      end
+    end
+  end
+  if hit_any then
+    bounce1:play{volume = 0.5, pitch = 1.2}
+    camera:shake(1, 0.1)
+  end
 end
 
 
@@ -103,16 +185,14 @@ function Paddle:update(dt)
 
   local arena = main.current
 
-  -- Pinball flip taps. The arrow keys double as aim keys while a ball is
-  -- stuck (or space is held) — aiming wins, flips only register otherwise.
+  -- Pinball flip taps. The Lobber never catches a ball (it has no stick/aim
+  -- flow), so the arrow keys are pure flips — left/right kick that bat up and
+  -- lob any ball resting on it back into play (see flip_launch).
   if self.flippers then
     self.flip_l_t = math.max(0, (self.flip_l_t or 0) - dt)
     self.flip_r_t = math.max(0, (self.flip_r_t or 0) - dt)
-    local aiming = arena and ((arena.stuck_count or 0) > 0 or input.launch.down)
-    if not aiming then
-      if input.aim_left.pressed  then self.flip_l_t = self.flip_window end
-      if input.aim_right.pressed then self.flip_r_t = self.flip_window end
-    end
+    if input.aim_left.pressed  then self.flip_l_t = self.flip_window; self:flip_launch(-1) end
+    if input.aim_right.pressed then self.flip_r_t = self.flip_window; self:flip_launch( 1) end
   end
 
   -- A/D move horizontally; W/S move vertically inside the dodge band. Aim
@@ -173,16 +253,9 @@ function Paddle:draw()
   local body_color = self.hfx.hit.f and fg[0] or self.color
 
   if self.flippers then
-    for side = -1, 1, 2 do
-      local ft = (side == -1) and (self.flip_l_t or 0) or (self.flip_r_t or 0)
-      -- Resting pose slopes down toward the gap; a live flip window snaps the
-      -- flipper up the other way.
-      local a  = (ft > 0) and side*0.45 or -side*self.flipper_tilt
-      local fx = self.x + side*self.flipper_off
-      graphics.push(fx, self.y, a, s, 1/s)
-        graphics.rectangle(fx, self.y, self.flipper_w, self.h, 2, 2, body_color)
-        graphics.rectangle(fx, self.y - self.h/2, self.flipper_w, 1, nil, nil, fg[5])
-      graphics.pop()
+    for _, side in ipairs({-1, 1}) do
+      local pivx, pivy, tipx, tipy = self:flipper_pose(side)
+      self:draw_flipper(pivx, pivy, tipx, tipy, body_color)
     end
     return
   end
@@ -194,6 +267,26 @@ function Paddle:draw()
 end
 
 
+-- Draw one flipper as a tapered bat (wide at the pivot, narrowing to a rounded
+-- tip) with a pivot bolt — reads like a real pinball flipper. Endpoints come
+-- from flipper_pose so the bat visibly kicks up while a flip is live.
+function Paddle:draw_flipper(pivx, pivy, tipx, tipy, color)
+  local ang    = math.atan2(tipy - pivy, tipx - pivx)
+  local wbase  = (self.flipper_thick or 5) + 3
+  local wtip   = math.max(2, (self.flipper_thick or 5) - 1)
+  local nx, ny = -math.sin(ang), math.cos(ang)   -- unit normal to the bat axis
+  graphics.polygon({
+    pivx + nx*wbase/2, pivy + ny*wbase/2,
+    pivx - nx*wbase/2, pivy - ny*wbase/2,
+    tipx - nx*wtip/2,  tipy - ny*wtip/2,
+    tipx + nx*wtip/2,  tipy + ny*wtip/2,
+  }, color)
+  graphics.circle(tipx, tipy, wtip/2, color)
+  graphics.circle(pivx, pivy, wbase/2 + 1, color)
+  graphics.circle(pivx, pivy, math.max(1, wbase/2 - 1.5), fg[5])
+end
+
+
 -- Called when a ball collides with the paddle. Tilts the reflection so the
 -- player can aim by hitting the ball with the edge of the paddle, and ramps
 -- the ball's speed multiplier so chained bounces feel rewarding.
@@ -202,6 +295,16 @@ end
 -- per-bounce effects after the reflection.
 function Paddle:on_ball_bounce(ball)
   self.hfx:use('hit', 0.18, 200, 10)
+
+  -- Pinball Lobber: a ball that lands on a bat ROLLS (low restitution +
+  -- gravity), it doesn't ping back — the launch is the flip (see flip_launch),
+  -- not this contact. So leave the ball's velocity alone here; just soft juice.
+  if self.flippers then
+    ball.boomerang_home = nil
+    ball.spring:pull(0.12)
+    if random:bool(45) then bounce1:play{volume = 0.16, pitch = random:float(0.9, 1.05)} end
+    return
+  end
 
   local arena = main.current
   local mods  = arena and arena.run_mods or nil
@@ -243,18 +346,14 @@ function Paddle:on_ball_bounce(ball)
     return
   end
 
-  if self.flippers then
-    self:flipper_bounce(ball)
-  else
-    -- Edge-offset reflection: hit with the paddle edge to steer. The
-    -- loadout's Aim stat widens/narrows the arc, clamped short of horizontal
-    -- so a wide-aim paddle can never reflect a ball flat.
-    local hit_offset = math.clamp((ball.x - self.x)/(self.w/2), -1, 1)
-    local spread = math.clamp(hit_offset*(math.pi/3)*(self.aim_mult or 1), -1.45, 1.45)
-    local angle = -math.pi/2 + spread
-    local speed = ball.base_speed*ball.speed_mult
-    ball:set_velocity(speed*math.cos(angle), speed*math.sin(angle))
-  end
+  -- Edge-offset reflection: hit with the paddle edge to steer. The loadout's
+  -- Aim stat widens/narrows the arc, clamped short of horizontal so a wide-aim
+  -- paddle can never reflect a ball flat.
+  local hit_offset = math.clamp((ball.x - self.x)/(self.w/2), -1, 1)
+  local spread = math.clamp(hit_offset*(math.pi/3)*(self.aim_mult or 1), -1.45, 1.45)
+  local angle = -math.pi/2 + spread
+  local speed = ball.base_speed*ball.speed_mult
+  ball:set_velocity(speed*math.cos(angle), speed*math.sin(angle))
 
   -- Pitch + spark count both scale with the streak so the feedback escalates.
   local pitch_lift = math.min(0.35, (ball.speed_mult - 1)*0.5)
@@ -268,36 +367,6 @@ function Paddle:on_ball_bounce(ball)
   if arena then
     if sig == 'tesla' and arena.tesla_zap then arena:tesla_zap(ball) end
     if sig == 'hive' and arena.hive_spawn_maggot then arena:hive_spawn_maggot(ball) end
-  end
-end
-
-
--- Reflect (or lob) a ball off the Pinball Lobber's flipper rig. A flipper
--- whose flip window is live LOBS the ball up toward the centre of the arena
--- with extra speed and an extra charge step — that's the Lobber's whole
--- reward loop. A resting flipper reflects against its own centre, with the
--- resting tilt biasing the ball outward like a real table.
-function Paddle:flipper_bounce(ball)
-  local side = (ball.x < self.x) and -1 or 1
-  local ft   = (side == -1) and (self.flip_l_t or 0) or (self.flip_r_t or 0)
-
-  if ft > 0 then
-    -- Active flip: extra charge step + boosted launch speed, aimed upfield
-    -- toward the opposite side (left flipper lobs up-right and vice versa).
-    ball.speed_mult = math.min(ball.speed_mult_max, ball.speed_mult*(ball.speed_mult_step or 1.07))
-    local speed = ball.base_speed*ball.speed_mult*1.35
-    local angle = -math.pi/2 - side*random:float(0.1, 0.45)
-    ball:set_velocity(speed*math.cos(angle), speed*math.sin(angle))
-    ball.spring:pull(0.4)
-    if side == -1 then self.flip_l_t = 0 else self.flip_r_t = 0 end
-    bounce1:play{volume = 0.5, pitch = 1.25}
-  else
-    local fx = self.x + side*self.flipper_off
-    local hit_offset = math.clamp((ball.x - fx)/(self.flipper_w/2), -1, 1)
-    local spread = math.clamp(hit_offset*(math.pi/3)*(self.aim_mult or 1) + side*0.18, -1.45, 1.45)
-    local angle = -math.pi/2 + spread
-    local speed = ball.base_speed*ball.speed_mult
-    ball:set_velocity(speed*math.cos(angle), speed*math.sin(angle))
   end
 end
 

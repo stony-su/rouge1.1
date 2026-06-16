@@ -719,8 +719,8 @@ function BallPit:reset_run()
   -- the paddle fall into the pit and are pulled magnetically back to the
   -- paddle, where they stick for an aimed re-launch.
   local thick = 8
-  self:spawn_wall(self.x1 - thick/2, (self.y1 + self.y2)/2, thick, self.y2 - self.y1 + thick)  -- left
-  self:spawn_wall(self.x2 + thick/2, (self.y1 + self.y2)/2, thick, self.y2 - self.y1 + thick)  -- right
+  self.left_wall  = self:spawn_wall(self.x1 - thick/2, (self.y1 + self.y2)/2, thick, self.y2 - self.y1 + thick)  -- left
+  self.right_wall = self:spawn_wall(self.x2 + thick/2, (self.y1 + self.y2)/2, thick, self.y2 - self.y1 + thick)  -- right
   -- Top wall is captured so the ball collision callback can recognise it and
   -- expire a ball's pierce state when it bonks the ceiling.
   self.top_wall = self:spawn_wall((self.x1 + self.x2)/2, self.y1 - thick/2, self.x2 - self.x1 + thick, thick)
@@ -744,8 +744,19 @@ function BallPit:reset_run()
     aim_mult = pdef.aim, color = _G[pdef.color_key][0],
     flippers = (pdef.signature == 'flippers') or nil,
     flipper_gap = pdef.sig.gap, flip_window = pdef.sig.flip_window,
+    flipper_sig = pdef.sig,
     move_mode = (pdef.signature == 'glacier') and 'ice' or nil,
   }
+
+  -- Pinball Lobber: damp the side/top walls so balls shed energy on a wall hit
+  -- instead of pinging forever — part of the slower, gravity-bound feel. (Ball
+  -- restitution is already low; Box2D mixes the two by taking the higher value,
+  -- so the walls themselves have to come down for the bounce to soften.)
+  if pdef.signature == 'flippers' then
+    for _, w in ipairs({self.left_wall, self.right_wall, self.top_wall}) do
+      if w and w.set_restitution then w:set_restitution(0.55) end
+    end
+  end
 
   -- Starting hero pool — the loadout decides the lineup (Twin Cast mirrors
   -- each one inside add_hero). seen_characters feeds the Mitosis regrow.
@@ -2355,6 +2366,14 @@ local function resize_hero(h, new_r)
   h:set_damping(0)
   h:set_angular_damping(0)
   h:set_mass(0.5)
+  -- The fixture was rebuilt, so the Pinball Lobber's roll-not-bounce surface
+  -- props (low restitution + friction) have to be re-applied.
+  if h.is_pinball and h:is_pinball() then
+    local g = (h.run_mods and h.run_mods.sig) or {}
+    h:set_restitution(g.restitution or 0.12)
+    h:set_friction(0.5)
+    h:set_fixed_rotation(false)   -- keep real rolling after the fixture rebuild
+  end
   if vx and vy then h:set_velocity(vx, vy) end
   if not was_active then h.body:setActive(false) end
   -- The fixture was destroyed and recreated, so any per-fixture filter

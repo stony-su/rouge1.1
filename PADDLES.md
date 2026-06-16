@@ -33,7 +33,7 @@ rewrites a core verb, so stats are balanced by tradeoffs, not flat power.
 | Paddle | Size | Move | Ball | Charge | Aim | Dmg | XP | Combo | HP | Start Ball | Count |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | **Standard** | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 5♥ | Vagrant | 2 |
-| **Pinball Lobber** | 0.5 | 1.1 | 1.4 | 1.8 | 1.5 | 1.2 | 1.0 | 1.4 | 5♥ | Scout | 2 |
+| **Pinball Lobber** | 0.5 | 1.1 | 0.7 | 1.4 | 1.5 | 1.3 | 1.0 | 1.4 | 5♥ | Scout | 2 |
 | **Aegis** | 1.4 | 0.6 | 0.7 | 0.2 | 0.5 | 0.7 | 0.9 | 0.6 | 7♥ | Cleric | 2 |
 | **Mitosis** | 1.0 | 1.0 | 1.0 | 0.9 | 1.0 | 0.5 | 1.4 | 1.3 | 4♥ | Vagrant | 1 |
 | **Hive** | 1.0 | 1.0 | 0.8 | 0.7 | 0.8 | 0 ✦ | 1.6 | 0.9 | 4♥ | Infestor | 3 |
@@ -58,14 +58,21 @@ level costs the same fixed XP (no scaling curve).
 Flat reflective paddle, 5 hearts, all stats 1.0. The reference everything else is
 measured against. Balanced; no signature power.
 
-### Pinball Lobber — *aggro / aiming*
-Two angled **flippers with a central drain gap** (like a real pinball table). Tap
-left/right to flip a side and **lob a ball upward with force + spin**. Hits hard
-and keeps balls upstairs in the swarm (Charge 1.8, Combo 1.4).
-- **Downside:** the center gap means balls can drain straight down the middle —
-  no safety net (Size 0.5).
-- **Hook:** rewrite `Paddle:update` movement + `on_ball_bounce` into flipper
-  impulses; two fixtures with a gap between them.
+### Pinball Lobber — *real-table physics / timing*
+Two long **flippers with a central drain gap**, played like a real pinball table.
+Balls obey **gravity** (Ball 0.7 + a low speed cap → slow, easy to track), **roll
+off the bats instead of bouncing** (low restitution), and **drain down the centre
+gap** if you don't act. Tap left/right to **flip a bat** and lob the resting ball
+back up into the swarm with a gentle pop + a per-flip **damage ramp** (Dmg 1.3,
+Charge 1.4, Combo 1.4) — boost, not raw speed, so the ball stays catchable.
+- **No catch/aim/charge:** a drained ball isn't recalled-and-stuck; it's **dropped
+  back in from above the flippers**, and you have to knock it up again.
+- **Downside:** the centre gap is an open drain with no safety net (Size 0.5); a
+  missed flip means re-serving from scratch.
+- **Hook:** `BallHero:pinball_update` (gravity + cap, replaces normalize_speed) +
+  `pinball_serve` (drop-in respawn); `Paddle:build_flipper_rig` (two long resting
+  bats on one kinematic body) + `Paddle:flip_launch` (tap → upward impulse to
+  nearby balls). Ball/flipper restitution low; side walls damped in `reset_run`.
 
 ### Aegis — *defensive / grind*
 Spawns a **bottom wall** (the pit is closed): balls auto-bounce off it instead of

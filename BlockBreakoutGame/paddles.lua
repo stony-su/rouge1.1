@@ -41,12 +41,24 @@ PADDLES.defs = {
   },
   pinball = {
     id = 'pinball', name = 'Pinball Lobber', price = 100, color_key = 'orange',
-    size = 0.5, move = 1.1, ball = 1.4, charge = 1.8, aim = 1.5, dmg = 1.2,
+    size = 0.5, move = 1.1, ball = 0.7, charge = 1.4, aim = 1.5, dmg = 1.3,
     xp = 1.0, combo = 1.4, hp = 5, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'scout', 'scout'},
-    signature = 'flippers', sig = {flip_window = 0.15, gap = 8},
-    blurb = 'Two flippers with a drain gap in the middle.',
-    sig_blurb = 'tap left/right arrows to flip + lob a side',
+    signature = 'flippers',
+    -- Real-table physics: balls fall under gravity and roll off the bats; a
+    -- flip lobs them back up. ball/restitution kept low + gravity gentle so
+    -- balls stay slow and easy to flip; launch_speed is the modest pop.
+    sig = {
+      flip_window = 0.16, gap = 14,
+      flipper_len = 34, flipper_thick = 5, rest_tilt = 0.30, flip_up = 0.62,
+      -- Floaty + slow between flips (low gravity = high hang-time arc), but a
+      -- flip is a real launch: launch_speed is the "100%" unit and flip_launch
+      -- scales it 2x (+200%) out by the pivot up to 4x (+400%) at the inner
+      -- tip. speed_cap is the hard ceiling. First-pass; expect to retune.
+      launch_speed = 150, gravity = 170, speed_cap = 620, restitution = 0.12,
+    },
+    blurb = 'Two long flippers with a central drain — balls fall, you flip them back up.',
+    sig_blurb = 'tap left/right to flip; gravity does the rest',
   },
   aegis = {
     id = 'aegis', name = 'Aegis', price = 250, color_key = 'blue2',
