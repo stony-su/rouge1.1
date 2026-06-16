@@ -391,6 +391,98 @@ function VoidPool:draw()
 end
 
 
+-- PsyWell (SNKRX psykino port: player.lua:635 / ForceArea "Magnetic Force"). A
+-- stationary psychic gravity well planted on an enemy cluster. For ~duration seconds
+-- it PULLS every swarm in range toward its centre (weakening over time) while it
+-- spins fast then settles. Level 3 ("Magnetic Force"): when it expires it DAMAGES +
+-- shoves everything in range outward. Rotating-circle look + inward pull-streaks.
+PsyWell = Object:extend()
+PsyWell:implement(GameObject)
+function PsyWell:init(args)
+  self:init_game_object(args)
+  self.rs       = self.rs or 64
+  self.color    = self.color or fg[0]
+  self.duration = self.duration or 2.0
+  self.pull     = self.pull or 4         -- per-tick pull added to each swarm's velocity
+  self.level    = self.level or 1
+  self.dmg      = self.dmg or 24         -- level-3 expire damage
+  self.vr       = 0
+  self.dvr      = random:table{-1, 1}*random:float(4*math.pi, 6*math.pi)  -- fast spin...
+  self.elapsed  = 0
+  self.appear   = 0
+  self.hidden   = false
+  self.t:tween(0.12, self, {appear = 1}, math.cubic_in_out)
+  self.t:tween(self.duration, self, {dvr = 0}, math.linear)              -- ...settling to a stop
+  self.t:every(0.06, function() self:do_pull() end, math.floor(self.duration/0.06))
+  self.t:after(self.duration - 0.35, function()
+    self:expire_burst()
+    self.t:every_immediate(0.05, function() self.hidden = not self.hidden end, 7, function() self.dead = true end)
+  end)
+  force1:play{volume = 0.35, pitch = random:float(0.85, 1.0)}
+end
+function PsyWell:update(dt)
+  self:update_game_object(dt)
+  self.vr = self.vr + self.dvr*dt
+end
+function PsyWell:do_pull()
+  local arena = main.current
+  if not (arena and arena.main) then return end
+  local strength = self.pull*(1 - math.min(1, self.elapsed/self.duration))   -- weakens over time
+  self.elapsed = self.elapsed + 0.06
+  local done = {}
+  for _, o in ipairs(arena.main.objects) do
+    if o:is(Brick) and not o.dead and o.swarm then
+      if math.distance(self.x, self.y, o.x, o.y) <= self.rs then
+        if not done[o.swarm] then
+          done[o.swarm] = true
+          o.swarm:apply_knockback(strength, math.atan2(self.y - o.y, self.x - o.x))   -- toward the well
+        end
+      end
+    end
+  end
+end
+function PsyWell:expire_burst()
+  local arena = main.current
+  if not (arena and arena.main) then return end
+  spawn_burst(arena.effects, self.x, self.y, self.color, 8, 40, 120)
+  if self.level >= 3 then
+    TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = self.rs, color = self.color, duration = 0.25}
+    camera:shake(3, 0.2, 110)
+    force1:play{volume = 0.4, pitch = random:float(0.95, 1.1)}
+    local done = {}
+    for _, o in ipairs(arena.main.objects) do
+      if o:is(Brick) and not o.dead and math.distance(self.x, self.y, o.x, o.y) <= self.rs then
+        if o.take_damage then o:take_damage(self.dmg, self.color) end
+        if o.swarm and not done[o.swarm] then
+          done[o.swarm] = true
+          o.swarm:apply_knockback(28, math.atan2(o.y - self.y, o.x - self.x))   -- shove outward
+        end
+      end
+    end
+  end
+end
+function PsyWell:draw()
+  if self.hidden then return end
+  local c  = self.color
+  local rs = self.rs*(self.appear or 1)
+  graphics.circle(self.x, self.y, rs, Color(c.r, c.g, c.b, 0.07))
+  for i = 1, 4 do
+    local b = self.vr + (i - 1)*math.pi/2 + math.pi/4
+    graphics.arc('open', self.x, self.y, rs, b - math.pi/8, b + math.pi/8, c, 3)
+  end
+  -- Inward pull-streaks (rotating) -- telegraph the gather.
+  for i = 0, 5 do
+    local a = -self.vr*0.6 + i*math.pi/3
+    graphics.line(self.x + math.cos(a)*rs*0.95, self.y + math.sin(a)*rs*0.95,
+                  self.x + math.cos(a)*rs*0.5,  self.y + math.sin(a)*rs*0.5, Color(c.r, c.g, c.b, 0.5), 1.5)
+  end
+  -- Bright psychic core.
+  local pulse = 0.5 + 0.5*math.sin(love.timer.getTime()*6)
+  graphics.circle(self.x, self.y, 3 + 2*pulse, Color(c.r, c.g, c.b, 0.8))
+  graphics.circle(self.x, self.y, 1.5, Color(1, 1, 1, 0.9))
+end
+
+
 -- BombDrop (bomber "reactor core" rework). A planted UNSTABLE CONTAINMENT CELL:
 -- a hexagonal casing with rotating containment brackets straining around a pulsing
 -- plasma core -- deliberately distinct from the bomber ball's round vented core.

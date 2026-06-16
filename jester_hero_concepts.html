@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ball Pit X — Jester Hero design concepts</title>
+<style>
+  :root{
+    --bg:#0c0c14; --panel:#14141f; --panel2:#1b1b29;
+    --fg:#dadada; --muted:#8b8b9c; --line:#2a2a3d;
+    --red:#e91d39; --gold:#facf00; --purple:#b07bd0; --blue:#019bd6;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;}
+  header{padding:34px 22px 10px;text-align:center;max-width:1180px;margin:0 auto}
+  header h1{margin:0 0 6px;font-size:26px;letter-spacing:3px;text-transform:uppercase;
+    background:linear-gradient(90deg,#e91d39,#facf00,#b07bd0,#019bd6);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  header p{margin:6px auto;color:var(--muted);max-width:780px;line-height:1.5;font-size:13px}
+  header .hint{color:var(--fg);background:var(--panel);border:1px solid var(--line);
+    border-radius:8px;padding:10px 14px;display:inline-block;margin-top:8px;font-size:12.5px}
+  .legend{color:var(--muted);font-size:11px;margin-top:6px}
+  .grid{max-width:1180px;margin:18px auto 60px;padding:0 18px;
+    display:grid;gap:22px;grid-template-columns:repeat(auto-fit,minmax(420px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    overflow:hidden;box-shadow:0 0 0 1px rgba(0,0,0,.4),0 18px 40px -22px var(--accent)}
+  .card{--accent:var(--red)}
+  .card[data-c="juggler"]{--accent:var(--gold)}
+  .card[data-c="jack"]{--accent:var(--purple)}
+  .card[data-c="puppet"]{--accent:var(--blue)}
+  .stage{position:relative}
+  canvas{display:block;width:100%;height:248px;background:
+    radial-gradient(120% 100% at 50% 0%,#15131f 0%,#0c0c14 70%)}
+  .badge{position:absolute;top:10px;left:12px;font-size:10.5px;letter-spacing:1.5px;
+    text-transform:uppercase;color:var(--accent);background:rgba(0,0,0,.45);
+    border:1px solid var(--accent);border-radius:20px;padding:3px 9px}
+  .state{position:absolute;top:10px;right:12px;font-size:10.5px;letter-spacing:1.5px;
+    text-transform:uppercase;color:var(--muted)}
+  .state b{color:#fff}
+  .body{padding:16px 18px 20px}
+  .body h2{margin:0;font-size:19px;letter-spacing:1px;text-transform:uppercase;color:var(--accent)}
+  .tag{margin:4px 0 14px;color:var(--muted);font-style:italic;font-size:12.5px;line-height:1.45}
+  h3{margin:16px 0 7px;font-size:11px;letter-spacing:2px;text-transform:uppercase;
+    color:var(--fg);border-bottom:1px solid var(--line);padding-bottom:4px}
+  ul{margin:0;padding-left:17px}
+  li{margin:4px 0;font-size:12.5px;line-height:1.45;color:#cdcdd8}
+  li b{color:var(--accent);font-weight:600}
+  dl{display:grid;grid-template-columns:84px 1fr;gap:5px 12px;margin:0;font-size:12px;line-height:1.4}
+  dt{color:var(--accent);text-transform:uppercase;letter-spacing:.5px;font-size:10.5px;padding-top:1px}
+  dd{margin:0;color:#c2c2cf}
+  footer{max-width:1180px;margin:0 auto 60px;padding:0 22px;color:var(--muted);font-size:12.5px;line-height:1.6}
+  footer code{background:var(--panel2);padding:1px 6px;border-radius:5px;color:var(--fg)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Jester Hero — design concepts</h1>
+  <p>Four candidate redesigns for the <b>Jester</b> (currently the curse/harlequin hero). Each canvas is a
+     live mock of how the ball, its <b>spawned projectiles</b>, and its <b>attack</b> would animate in-engine —
+     same dark palette and circle/line drawing style as Ball&nbsp;Pit&nbsp;X. All four lean into the
+     jester/fool/harlequin theme but play very differently.</p>
+  <span class="hint">Tell me which one to build (or mix elements) and I'll implement it in Lua for both builds.</span>
+  <div class="legend">The little squares up top are stand-in “bricks” (enemies); watch each ball idle, then attack.</div>
+</header>
+
+<div class="grid" id="grid">
+  <article class="card" data-c="card">
+    <div class="stage"><canvas data-concept="card"></canvas>
+      <span class="badge">Card Sharp</span><span class="state" data-state></span></div>
+    <div class="body">
+      <h2>Card Sharp</h2>
+      <p class="tag">A harlequin gambler that flings spinning playing cards — each suit rolls a different
+         effect, so its damage is pure showman's luck. Closest to today's jester, but built around chance.</p>
+      <h3>Attack mechanic — “Wild Hand”</h3>
+      <ul>
+        <li>Flings <b>spinning cards</b> at nearby bricks, fast and often (a fan of 1–2 per throw).</li>
+        <li>Each card's <b>suit rolls an effect</b>: ♦ bonus damage, ♠ a vulnerability mark, ♣ a small splash, ♥ heals a sliver of player HP.</li>
+        <li>Land matching suits in a row → a <b>“Royal Flush”</b> burst (big multi-hit).</li>
+      </ul>
+      <h3>The projectile — Card</h3>
+      <ul><li>A spinning playing card with a suit pip; homes slightly onto a brick, then bursts in its suit colour.</li></ul>
+      <h3>Animation &amp; feel</h3>
+      <dl>
+        <dt>Shape</dt><dd>diamond-checker harlequin orb under a two-horned bell cap</dd>
+        <dt>Idle</dt><dd>bob, slow checker spin, cap bells sway</dd>
+        <dt>Attack</dt><dd>a flourish flick + a fan of cards sprays out</dd>
+        <dt>Trail</dt><dd>confetti + the odd drifting card</dd>
+        <dt>Aura</dt><dd>two-tone motley shimmer ring</dd>
+        <dt>Movement</dt><dd>fast &amp; bouncy</dd>
+        <dt>Trajectory</dt><dd>a restless weave with flicks on each bounce</dd>
+      </dl>
+    </div>
+  </article>
+
+  <article class="card" data-c="juggler">
+    <div class="stage"><canvas data-concept="juggler"></canvas>
+      <span class="badge">Juggler</span><span class="state" data-state></span></div>
+    <div class="body">
+      <h2>Juggler</h2>
+      <p class="tag">A poised performer keeping a cascade of props in the air and hurling one at a time —
+         an endless round-robin of juggled throws. Steady, rhythmic, hypnotic.</p>
+      <h3>Attack mechanic — “Three-Ball Cascade”</h3>
+      <ul>
+        <li>Keeps <b>3 props orbiting</b>; each beat it <b>hurls the next one</b> at the nearest brick and catches a fresh one.</li>
+        <li>An endless <b>round-robin</b> cascade — a steady stream of hits, never a big windup.</li>
+        <li>Higher level <b>juggles more props</b> (4–5) → a faster effective fire rate.</li>
+      </ul>
+      <h3>The projectile — Prop</h3>
+      <ul><li>A juggling ball or club, flung spinning at a brick; bonks and bursts. (Could ricochet between two.)</li></ul>
+      <h3>Animation &amp; feel</h3>
+      <dl>
+        <dt>Shape</dt><dd>a round performer orb with three coloured props orbiting it</dd>
+        <dt>Idle</dt><dd>props circle smoothly, body bobs in time</dd>
+        <dt>Attack</dt><dd>one prop peels off the orbit and flies; a new one fades in</dd>
+        <dt>Trail</dt><dd>a faint blur of the orbit path</dd>
+        <dt>Aura</dt><dd>a soft ring marking the orbit</dd>
+        <dt>Movement</dt><dd>medium, balanced, poised (gentle)</dd>
+        <dt>Trajectory</dt><dd>smooth with little hops — never erratic</dd>
+      </dl>
+    </div>
+  </article>
+
+  <article class="card" data-c="jack">
+    <div class="stage"><canvas data-concept="jack"></canvas>
+      <span class="badge">Jack-in-the-Box</span><span class="state" data-state></span></div>
+    <div class="body">
+      <h2>Jack-in-the-Box</h2>
+      <p class="tag">A wind-up prank box that hoards energy, then SPRINGS a surprise — coil-puppets boinging
+         out everywhere. A charge-and-release rhythm: dangerous the longer it waits.</p>
+      <h3>Attack mechanic — “Wind-Up Surprise”</h3>
+      <ul>
+        <li><b>Winds up</b> over a few seconds (jittering harder the closer it gets — a clear telegraph).</li>
+        <li>Then <b>SPRINGS</b>: a fan of coil-puppets <b>boing out</b>, bonk bricks, and snap back, plus a confetti shockwave.</li>
+        <li>The <b>longer the wind-up</b>, the bigger the pop (held charge = more springs / damage).</li>
+      </ul>
+      <h3>The projectile — Spring-Pop</h3>
+      <ul><li>A coiled spring that extends from the box to a brick (puppet head on the end), strikes, and retracts.</li></ul>
+      <h3>Animation &amp; feel</h3>
+      <dl>
+        <dt>Shape</dt><dd>a checkered wind-up box with a turning crank + popping lid</dd>
+        <dt>Idle</dt><dd>crank turns, the box jitters more as the spring loads</dd>
+        <dt>Attack</dt><dd>lid bursts open, coil-puppets spring out + a shockwave</dd>
+        <dt>Trail</dt><dd>wind-up sparkles</dd>
+        <dt>Aura</dt><dd>a jittery “about to pop” shimmer that ramps up</dd>
+        <dt>Movement</dt><dd>dampened wind-up, then a springy burst (stop-start)</dd>
+        <dt>Trajectory</dt><dd>coils that boing out and retract on a tether</dd>
+      </dl>
+    </div>
+  </article>
+
+  <article class="card" data-c="puppet">
+    <div class="stage"><canvas data-concept="puppet"></canvas>
+      <span class="badge">Puppeteer</span><span class="state" data-state></span></div>
+    <div class="body">
+      <h2>Puppeteer</h2>
+      <p class="tag">A marionette master that lowers dancing puppets on strings to do its dirty work — a
+         control build that makes bricks “dance” (slow + vulnerable) before cutting them loose.</p>
+      <h3>Attack mechanic — “Pull the Strings”</h3>
+      <ul>
+        <li>Lowers <b>marionette minions on strings</b> that dance over to a brick and slash it.</li>
+        <li>Struck bricks are <b>“made to dance”</b> — slowed and take extra damage for a beat.</li>
+        <li>Lv3 <b>cuts the strings</b> → the loose puppets fly free as <b>homing knives</b>.</li>
+      </ul>
+      <h3>The projectile — Marionette</h3>
+      <ul><li>A little puppet lowered on a visible string, dancing to its target; the string stays tethered to the ball.</li></ul>
+      <h3>Animation &amp; feel</h3>
+      <dl>
+        <dt>Shape</dt><dd>a fool's control-cross with a marionette dangling on strings below</dd>
+        <dt>Idle</dt><dd>the puppet dangles + sways; the cross tilts with motion</dd>
+        <dt>Attack</dt><dd>a puppet drops down a string toward a brick and slashes</dd>
+        <dt>Trail</dt><dd>trailing string threads + a dangling puppet</dd>
+        <dt>Aura</dt><dd>faint string-cross shimmer</dd>
+        <dt>Movement</dt><dd>marionette jerk — stop-start, string-pulled</dd>
+        <dt>Trajectory</dt><dd>jerky lerps + dangling sway, with string tethers</dd>
+      </dl>
+    </div>
+  </article>
+</div>
+
+<footer>
+  <p>All four are buildable on the existing pieces: the projectile / <code>AllyCritter</code> systems, the
+     curse/splash/zone helpers, and the skin recipe in <code>ball_hero.lua</code> (the current jester already
+     has a harlequin skin + confetti + weave to build on). Whichever you pick, I'll add the themed projectile,
+     the skin (shape/trail/aura/idle/attack), the movement profile, and the new attack behavior — mirrored
+     into <code>BlockBreakoutGame/</code> and <code>admin/</code>. These canvas mocks are illustrative; the
+     in-game version uses the real palette &amp; physics.</p>
+</footer>
+
+<script>
+"use strict";
+const TAU=Math.PI*2, rnd=(a,b)=>a+Math.random()*(b-a), pick=a=>a[(Math.random()*a.length)|0];
+const PAL={bg:"#0c0c14",fg:"#dadada",fgL:"#f0f0f0",gold:"#facf00",orange:"#f07021",
+  blue:"#019bd6",green:"#8bbf40",red:"#e91d39",purple:"#b07bd0",silk:"#cfd2dc",wood:"#9a6b3a"};
+function rgba(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;}
+const BRICK_COLORS=[PAL.blue,PAL.green,PAL.red,PAL.purple,PAL.gold,"#4778ba"];
+const SUIT_COL=[PAL.red,PAL.red,"#20202c","#20202c"]; // heart, diamond, spade, club
+
+function dot(ctx,x,y,r){ctx.beginPath();ctx.arc(x,y,Math.max(0.4,r),0,TAU);ctx.fill();}
+function ring(ctx,x,y,r,col,w){ctx.beginPath();ctx.arc(x,y,Math.max(0.4,r),0,TAU);ctx.strokeStyle=col;ctx.lineWidth=w||1;ctx.stroke();}
+function line(ctx,x1,y1,x2,y2,col,w){ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.strokeStyle=col;ctx.lineWidth=w||1;ctx.stroke();}
+function ballBody(ctx,x,y,r,col){ctx.fillStyle=PAL.bg;dot(ctx,x,y,r+0.8);ctx.fillStyle=col;dot(ctx,x,y,r);
+  ctx.fillStyle=rgba(PAL.fgL,.85);dot(ctx,x-r*0.32,y-r*0.32,r*0.32);}
+function roundRect(ctx,x,y,w,h,r,fill,stroke){ctx.beginPath();
+  ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill();} if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke();}}
+function angTo(a,b,max){let d=((b-a+Math.PI)%TAU+TAU)%TAU-Math.PI;return a+Math.max(-max,Math.min(max,d));}
+function easeOut(k){k=Math.min(1,Math.max(0,k));return 1-(1-k)*(1-k);}
+
+function drawSuit(ctx,x,y,r,s){ctx.fillStyle=SUIT_COL[s];
+  if(s===1){ctx.beginPath();ctx.moveTo(x,y-r);ctx.lineTo(x+r*0.72,y);ctx.lineTo(x,y+r);ctx.lineTo(x-r*0.72,y);ctx.closePath();ctx.fill();}
+  else if(s===0){ctx.beginPath();ctx.arc(x-r*0.4,y-r*0.15,r*0.5,0,TAU);ctx.arc(x+r*0.4,y-r*0.15,r*0.5,0,TAU);ctx.fill();
+    ctx.beginPath();ctx.moveTo(x-r*0.82,y);ctx.lineTo(x+r*0.82,y);ctx.lineTo(x,y+r);ctx.closePath();ctx.fill();}
+  else if(s===2){ctx.beginPath();ctx.moveTo(x,y-r);ctx.lineTo(x+r*0.8,y+r*0.25);ctx.lineTo(x-r*0.8,y+r*0.25);ctx.closePath();ctx.fill();
+    ctx.beginPath();ctx.arc(x-r*0.34,y+r*0.18,r*0.42,0,TAU);ctx.arc(x+r*0.34,y+r*0.18,r*0.42,0,TAU);ctx.fill();ctx.fillRect(x-r*0.12,y+r*0.15,r*0.24,r*0.7);}
+  else{ctx.beginPath();ctx.arc(x,y-r*0.4,r*0.42,0,TAU);ctx.arc(x-r*0.45,y+r*0.12,r*0.42,0,TAU);ctx.arc(x+r*0.45,y+r*0.12,r*0.42,0,TAU);ctx.fill();ctx.fillRect(x-r*0.12,y,r*0.24,r*0.75);}}
+
+function drawCoil(ctx,x1,y1,x2,y2,col){const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy)||1;const n=Math.max(4,Math.floor(len/5));
+  const px=-dy/len,py=dx/len;ctx.strokeStyle=rgba(col,.85);ctx.lineWidth=1.6;ctx.beginPath();ctx.moveTo(x1,y1);
+  for(let i=1;i<n;i++){const t=i/n,amp=(i%2?1:-1)*3;ctx.lineTo(x1+dx*t+px*amp,y1+dy*t+py*amp);}ctx.lineTo(x2,y2);ctx.stroke();}
+
+// ----- bespoke jester bodies -----
+function jesterCap(ctx,x,y,r,sway,c1,c2,flash){ // two-horned bell cap on top
+  for(const s of[-1,1]){const bx=x+s*r*0.55, tipx=x+s*r*1.4+sway*8, tipy=y-r*1.7;
+    ctx.fillStyle=(flash>0.3)?PAL.fgL:(s<0?c1:c2);
+    ctx.beginPath();ctx.moveTo(x,y-r*0.3);ctx.lineTo(bx,y-r*0.9);ctx.lineTo(tipx,tipy);ctx.closePath();ctx.fill();
+    ctx.fillStyle=PAL.gold;dot(ctx,tipx,tipy,1.6);}
+}
+function drawHarlequin(ctx,b){const r=9,bob=Math.sin(b.t*3)*1.0,x=b.x,y=b.y+bob;
+  const c1=PAL.red,c2=PAL.blue,flash=b.flash||0;
+  jesterCap(ctx,x,y,r,b.cap||0,c1,c2,flash);
+  ctx.fillStyle=PAL.bg;dot(ctx,x,y,r+0.8);
+  // diamond checker quadrants
+  ctx.save();ctx.beginPath();ctx.arc(x,y,r,0,TAU);ctx.clip();
+  const a=b.checker||0,ca=Math.cos(a),sa=Math.sin(a);
+  for(let qx=-1;qx<=1;qx++)for(let qy=-1;qy<=1;qy++){const i=((qx+qy)&1);
+    ctx.fillStyle=(flash>0.3)?rgba(PAL.fgL,.9):(i?c1:c2);
+    const cx=x+(qx*r*0.7)*ca-(qy*r*0.7)*sa, cy=y+(qx*r*0.7)*sa+(qy*r*0.7)*ca;
+    ctx.save();ctx.translate(cx,cy);ctx.rotate(a);ctx.fillRect(-r*0.42,-r*0.42,r*0.84,r*0.84);ctx.restore();}
+  ctx.restore();
+  ctx.fillStyle=rgba(PAL.fgL,.85);dot(ctx,x-r*0.32,y-r*0.32,r*0.3);}
+
+function drawJackBox(ctx,b){const r=10,wind=(b.mode==="wind")?(b.wind||0):0;
+  const jit=wind*Math.sin(b.t*30)*1.3,x=b.x+jit,y=b.y;
+  roundRect(ctx,x-r,y-r,2*r,2*r,2,PAL.purple);
+  ctx.save();ctx.beginPath();ctx.rect(x-r,y-r,2*r,2*r);ctx.clip();
+  ctx.fillStyle=rgba(PAL.gold,.5);
+  for(let gx=0;gx<3;gx++)for(let gy=0;gy<3;gy++)if((gx+gy)&1)ctx.fillRect(x-r+gx*r*0.67,y-r+gy*r*0.67,r*0.67,r*0.67);
+  ctx.restore();
+  roundRect(ctx,x-r,y-r,2*r,2*r,2,null,rgba(PAL.fgL,.35));
+  // crank on the right
+  const ca=b.crank||0,hx=x+r+2,hy=y;line(ctx,hx,hy,hx+Math.cos(ca)*5,hy+Math.sin(ca)*5,PAL.fgL,1.6);
+  ctx.fillStyle=PAL.fg;dot(ctx,hx+Math.cos(ca)*5,hy+Math.sin(ca)*5,1.6);
+  // lid: lifts a bit as it nears popping
+  const lift=wind*4;line(ctx,x-r,y-r-lift,x+r,y-r-lift*0.4,rgba(PAL.fgL,.5),1.5);}
+
+function drawMarionette(ctx,x,y,t){const sw=Math.sin(t*8)*2;
+  ctx.fillStyle=PAL.blue;dot(ctx,x,y,2.6); // head
+  ctx.fillStyle=PAL.gold;dot(ctx,x,y,1.1);
+  line(ctx,x,y+2,x,y+6,PAL.blue,1.6); // body
+  line(ctx,x,y+3,x-3,y+5+sw,PAL.blue,1); line(ctx,x,y+3,x+3,y+5-sw,PAL.blue,1); // arms
+  line(ctx,x,y+6,x-2,y+9+sw,PAL.blue,1); line(ctx,x,y+6,x+2,y+9-sw,PAL.blue,1);} // legs
+
+function drawPuppeteer(ctx,b){const r=7,sway=b.sway||0,x=b.x,y=b.y;
+  // control cross (the wooden +) tilting with sway
+  ctx.save();ctx.translate(x,y);ctx.rotate(sway*0.5);
+  ctx.strokeStyle=PAL.wood;ctx.lineWidth=2.4;
+  line(ctx,-r,0,r,0,PAL.wood,2.4);line(ctx,0,-r*0.6,0,r*0.6,PAL.wood,2.4);
+  ctx.fillStyle=PAL.red;dot(ctx,0,0,2.2);ctx.fillStyle=PAL.gold;dot(ctx,0,0,1); // a tiny fool face hub
+  ctx.restore();
+  // the dangling marionette below on two strings
+  const dx=x+sway*6, dy=y+18+Math.sin((b.dangle||0)*2)*2;
+  line(ctx,x-r*0.7,y,dx-2,dy-4,rgba(PAL.silk,.4),1);line(ctx,x+r*0.7,y,dx+2,dy-4,rgba(PAL.silk,.4),1);
+  drawMarionette(ctx,dx,dy,b.dangle||0);}
+
+// ================= engine =================
+class Sim{
+  constructor(canvas,cfg){
+    this.cv=canvas;this.ctx=canvas.getContext("2d");this.cfg=cfg;
+    this.dpr=Math.min(2,window.devicePixelRatio||1);
+    this.bugs=[];this.parts=[];this.s={atk:0,sub:0};
+    this.stateEl=canvas.parentElement.querySelector("[data-state]");
+    this.resize();this.makeBricks();
+    this.ball={x:this.W*0.5,y:this.H*0.7,vx:rnd(-1,1),vy:rnd(-1,1),t:rnd(0,9),flash:0,spd:cfg.spd};
+    const h=rnd(0,TAU);this.ball.vx=Math.cos(h)*cfg.spd;this.ball.vy=Math.sin(h)*cfg.spd;
+    if(cfg.initBall)cfg.initBall(this.ball,this);
+  }
+  resize(){const r=this.cv.getBoundingClientRect();this.W=r.width;this.H=r.height;
+    this.cv.width=this.W*this.dpr;this.cv.height=this.H*this.dpr;this.ctx.setTransform(this.dpr,0,0,this.dpr,0,0);}
+  makeBricks(){this.bricks=[];const n=6,m=24,gap=8,bw=(this.W-2*m-gap*(n-1))/n;
+    for(let i=0;i<n;i++)this.bricks.push({x:m+i*(bw+gap)+bw/2,y:this.H*0.16,w:bw,h:13,
+      alive:true,hp:3,flash:0,shake:0,respawn:0,color:BRICK_COLORS[i%BRICK_COLORS.length]});}
+  alive(){return this.bricks.filter(b=>b.alive);}
+  nearest(x,y){let best=null,bd=1e9;for(const b of this.bricks)if(b.alive){const d=(b.x-x)**2+(b.y-y)**2;if(d<bd){bd=d;best=b;}}return best;}
+  spawnBug(o){if(this.bugs.length<120)this.bugs.push(o);}
+  part(o){this.parts.push(Object.assign({x:0,y:0,vx:0,vy:0,r:2,life:.4,max:.4,col:PAL.fg,g:0,kind:"sq",a:0,spin:0},o));}
+  burst(x,y,col,n,vmin,vmax){for(let i=0;i<(n||6);i++){const a=rnd(0,TAU),v=rnd(vmin||50,vmax||130);
+    this.part({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,r:rnd(1.4,2.8),life:rnd(.25,.45),max:.45,col,kind:"sq",a:rnd(0,TAU),spin:rnd(-12,12)});}}
+  hit(brick,col){brick.flash=1;brick.shake=3;brick.hp-=1;this.burst(brick.x,brick.y,col,4,50,120);
+    if(brick.hp<=0){brick.alive=false;brick.respawn=rnd(1.0,1.7);this.burst(brick.x,brick.y,col,8,70,170);}}
+  bounceWall(b,R){let ag=false;const x0=R,x1=this.W-R,y0=this.H*0.40,y1=this.H-R;
+    if(b.x<x0){b.x=x0;b.vx=Math.abs(b.vx);ag=true;}if(b.x>x1){b.x=x1;b.vx=-Math.abs(b.vx);ag=true;}
+    if(b.y<y0){b.y=y0;b.vy=Math.abs(b.vy);ag=true;}if(b.y>y1){b.y=y1;b.vy=-Math.abs(b.vy);ag=true;}return ag;}
+  step(dt){const c=this.cfg,b=this.ball;b.t+=dt;if(b.flash>0)b.flash-=dt*4;
+    c.move(b,dt,this);if(c.trail)c.trail(b,dt,this);
+    this.s.atk+=dt;c.attack(b,dt,this);
+    for(const g of this.bugs){g.t=(g.t||0)+dt;if(g.life!=null)g.life-=dt;if(c.updateBug(g,dt,this))g.dead=true;
+      if((g.life!=null&&g.life<=0)||g.y<-30||g.x<-30||g.x>this.W+30||g.y>this.H+30)g.dead=true;}
+    this.bugs=this.bugs.filter(g=>!g.dead);
+    for(const p of this.parts){p.life-=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=(p.g||0)*dt;p.a+=p.spin*dt;}
+    this.parts=this.parts.filter(p=>p.life>0);
+    for(const k of this.bricks){if(k.flash>0)k.flash-=dt*4;if(k.shake>0)k.shake-=dt*12;
+      if(!k.alive){k.respawn-=dt;if(k.respawn<=0){k.alive=true;k.hp=3;k.flash=.6;}}}
+    if(this.stateEl)this.stateEl.innerHTML=(b.flash>0.05)?'<b>ATTACK</b>':'idle';}
+  draw(){const ctx=this.ctx,W=this.W,H=this.H,b=this.ball,c=this.cfg;ctx.clearRect(0,0,W,H);
+    line(ctx,0,H*0.40,W,H*0.40,rgba(PAL.red,.12),1);
+    for(const k of this.bricks){const sx=k.shake>0?rnd(-k.shake,k.shake):0;
+      if(k.alive){const col=k.flash>0?rgba(PAL.fgL,1):k.color;roundRect(ctx,k.x-k.w/2+sx,k.y-k.h/2,k.w,k.h,3,col);}
+      else roundRect(ctx,k.x-k.w/2,k.y-k.h/2,k.w,k.h,3,null,rgba(k.color,.18));}
+    for(const p of this.parts)this.drawPart(p);
+    if(c.aura)c.aura(ctx,b,this);
+    c.drawBall(ctx,b,this);
+    for(const g of this.bugs)c.drawBug(ctx,g,this);}
+  drawPart(p){const ctx=this.ctx,al=Math.max(0,p.life/p.max);ctx.fillStyle=rgba(p.col,al);
+    if(p.kind==="sq"){ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.a);ctx.fillRect(-p.r,-p.r*0.6,p.r*2,p.r*1.2);ctx.restore();}
+    else dot(ctx,p.x,p.y,p.r*al+0.3);}
+}
+
+// ================= concepts =================
+const CONCEPTS={};
+
+// ---- A. CARD SHARP ----
+CONCEPTS.card={spd:64,
+  initBall(b){b.cap=0;b.capv=0;b.checker=rnd(0,TAU);},
+  move(b,dt,E){b.weave=(b.weave||0)+9*dt;b.checker+=0.8*dt;
+    const sp=Math.hypot(b.vx,b.vy);if(sp>0){const na=Math.atan2(b.vy,b.vx)+3.0*Math.sin(b.weave)*dt;b.vx=Math.cos(na)*sp;b.vy=Math.sin(na)*sp;}
+    b.x+=b.vx*dt;b.y+=b.vy*dt;
+    if(E.bounceWall(b,16)){b.flash=Math.max(b.flash,.5);b.capv+=rnd(-5,5);
+      for(let i=0;i<3;i++)E.part({x:b.x,y:b.y,vx:rnd(-30,30),vy:rnd(-30,-5),r:rnd(1.4,2.4),life:.55,max:.55,col:pick([PAL.red,PAL.gold,PAL.blue]),kind:"sq",a:rnd(0,TAU),spin:rnd(-12,12)});}
+    b.capv+=(-b.vx*0.0025-(b.cap||0))*60*dt;b.capv*=Math.pow(0.02,dt);b.cap=(b.cap||0)+b.capv*dt;},
+  trail(b,dt,E){if(Math.random()<dt*26)E.part({x:b.x+rnd(-3,3),y:b.y,vx:rnd(-18,18),vy:rnd(-26,4),r:rnd(1.2,2.2),life:rnd(.5,.9),max:.9,col:pick([PAL.red,PAL.gold,PAL.blue]),kind:"sq",a:rnd(0,TAU),spin:rnd(-10,10)});},
+  attack(b,dt,E){if(E.s.atk>=0.5){E.s.atk=0;b.flash=Math.max(b.flash,.8);const n=1+(Math.random()<.5?1:0);
+    for(let i=0;i<n;i++){const tg=pick(E.bricks);if(tg&&tg.alive){const a=Math.atan2(tg.y-b.y,tg.x-b.x)+rnd(-.35,.35);
+      E.spawnBug({x:b.x,y:b.y,vx:Math.cos(a)*150,vy:Math.sin(a)*150,target:tg,life:2,suit:(Math.random()*4)|0,spin:rnd(8,16)*(Math.random()<.5?1:-1),spin_a:rnd(0,TAU)});}}}},
+  updateBug(g,dt,E){if(!g.target||!g.target.alive){const n=E.nearest(g.x,g.y);if(n)g.target=n;}
+    const sp=160;if(g.target){const cur=angTo(Math.atan2(g.vy,g.vx),Math.atan2(g.target.y-g.y,g.target.x-g.x),8*dt);g.vx=Math.cos(cur)*sp;g.vy=Math.sin(cur)*sp;}
+    g.x+=g.vx*dt;g.y+=g.vy*dt;g.spin_a+=g.spin*dt;
+    if(g.target&&Math.hypot(g.target.x-g.x,g.target.y-g.y)<g.target.h){E.hit(g.target,SUIT_COL[g.suit]);
+      for(let i=0;i<4;i++)E.part({x:g.x,y:g.y,vx:rnd(-40,40),vy:rnd(-40,40),r:rnd(1.4,2.4),life:.4,max:.4,col:SUIT_COL[g.suit],kind:"sq",a:rnd(0,TAU),spin:rnd(-12,12)});return true;}},
+  drawBug(ctx,g){ctx.save();ctx.translate(g.x,g.y);ctx.rotate(g.spin_a||0);
+    ctx.fillStyle="#f0f0f0";roundRect(ctx,-3,-4,6,8,1.2,"#f0f0f0",rgba(0,0,0,0));
+    ctx.strokeStyle="rgba(0,0,0,.3)";ctx.lineWidth=.7;ctx.strokeRect(-3,-4,6,8);
+    drawSuit(ctx,0,0,2.2,g.suit);ctx.restore();},
+  aura(ctx,b){const p=0.5+0.5*Math.sin(b.t*5);ring(ctx,b.x,b.y,16+p*1.5,rgba(PAL.red,.12+0.08*p),1.5);
+    ring(ctx,b.x,b.y,19+p*2,rgba(PAL.blue,.08),1);},
+  drawBall(ctx,b){drawHarlequin(ctx,b);}
+};
+
+// ---- B. JUGGLER ----
+CONCEPTS.juggler={spd:46,
+  initBall(b){b.orbit=[0,TAU/3,2*TAU/3];b.next=0;b.bob=0;},
+  move(b,dt,E){b.x+=b.vx*dt;b.y+=b.vy*dt;E.bounceWall(b,16);
+    for(let i=0;i<3;i++)b.orbit[i]+=2.3*dt;b.bob+=dt;},
+  trail(b,dt,E){if(Math.random()<dt*7)E.part({x:b.x,y:b.y,vx:0,vy:0,r:1.4,life:.4,max:.4,col:PAL.gold,kind:"dot"});},
+  attack(b,dt,E){if(E.s.atk>=0.55){E.s.atk=0;const tg=E.nearest(b.x,b.y);if(tg){b.flash=Math.max(b.flash,.7);
+    const oi=b.next%3;b.next++;const oa=b.orbit[oi],ox=b.x+Math.cos(oa)*14,oy=b.y+Math.sin(oa)*11;
+    const a=Math.atan2(tg.y-oy,tg.x-ox);
+    E.spawnBug({x:ox,y:oy,vx:Math.cos(a)*155,vy:Math.sin(a)*155,target:tg,life:2,spin:rnd(-14,14),spin_a:0,kind:b.next%3});}}},
+  updateBug(g,dt,E){if(!g.target||!g.target.alive){const n=E.nearest(g.x,g.y);if(n)g.target=n;}
+    const sp=158;if(g.target){const cur=angTo(Math.atan2(g.vy,g.vx),Math.atan2(g.target.y-g.y,g.target.x-g.x),7*dt);g.vx=Math.cos(cur)*sp;g.vy=Math.sin(cur)*sp;}
+    g.x+=g.vx*dt;g.y+=g.vy*dt;g.spin_a+=g.spin*dt;
+    if(g.target&&Math.hypot(g.target.x-g.x,g.target.y-g.y)<g.target.h){E.hit(g.target,[PAL.red,PAL.blue,PAL.green][g.kind]);E.burst(g.x,g.y,[PAL.red,PAL.blue,PAL.green][g.kind],4,50,110);return true;}},
+  drawBug(ctx,g){const col=[PAL.red,PAL.blue,PAL.green][g.kind];
+    if(g.kind===2){ctx.save();ctx.translate(g.x,g.y);ctx.rotate(g.spin_a||0); // a club/pin
+      ctx.fillStyle=PAL.fg;ctx.beginPath();ctx.ellipse(0,1.5,1.8,4,0,0,TAU);ctx.fill();ctx.fillStyle=col;dot(ctx,0,-3,2.2);ctx.restore();}
+    else{ctx.fillStyle=PAL.fg;dot(ctx,g.x,g.y,3.2);ctx.fillStyle=col;dot(ctx,g.x,g.y,1.7);ctx.fillStyle=rgba(PAL.fgL,.7);dot(ctx,g.x-1,g.y-1,0.9);}},
+  aura(ctx,b){ring(ctx,b.x,b.y,15,rgba(PAL.gold,.14),1);},
+  drawBall(ctx,b){const bob=Math.sin(b.bob*3)*1.3,x=b.x,y=b.y+bob;
+    ballBody(ctx,x,y,9,PAL.gold);
+    ctx.fillStyle="#20202c";dot(ctx,x-3,y-1.5,1);dot(ctx,x+3,y-1.5,1); // eyes
+    ctx.strokeStyle="#20202c";ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,y+1.5,3,0.15*Math.PI,0.85*Math.PI);ctx.stroke(); // smile
+    const cols=[PAL.red,PAL.blue,PAL.green];
+    for(let i=0;i<3;i++){const a=b.orbit[i],px=x+Math.cos(a)*14,py=y+Math.sin(a)*11;
+      ctx.fillStyle=cols[i];dot(ctx,px,py,2.7);ctx.fillStyle=rgba(PAL.fgL,.65);dot(ctx,px-0.9,py-0.9,1);}}
+};
+
+// ---- C. JACK-IN-THE-BOX ----
+CONCEPTS.jack={spd:40,
+  initBall(b){b.wind=0;b.crank=0;b.mode="wind";b.popT=0;},
+  move(b,dt,E){b.crank+=(b.mode==="wind"?4:11)*dt;
+    if(b.mode==="wind"){b.vx*=Math.pow(0.12,dt);b.vy*=Math.pow(0.12,dt);b.wind=Math.min(1,b.wind+dt/1.4);}
+    b.x+=b.vx*dt;b.y+=b.vy*dt;E.bounceWall(b,16);},
+  trail(b,dt,E){if(b.mode==="wind"&&Math.random()<dt*9)E.part({x:b.x+rnd(-9,9),y:b.y+rnd(-9,9),vx:0,vy:0,r:1.1,life:.45,max:.45,col:PAL.purple,kind:"dot"});},
+  attack(b,dt,E){
+    if(b.mode==="wind"&&b.wind>=1){b.mode="pop";b.flash=1;b.popT=0;
+      for(let i=0;i<3;i++){const tg=pick(E.bricks);if(tg&&tg.alive)E.spawnBug({x:b.x,y:b.y,tx:tg.x,ty:tg.y,target:tg,phase:0,life:1.5});}
+      E.burst(b.x,b.y,PAL.purple,10,80,170);for(let i=0;i<6;i++)E.part({x:b.x,y:b.y,vx:rnd(-60,60),vy:rnd(-80,0),r:rnd(1.6,2.6),life:.6,max:.6,col:pick([PAL.gold,PAL.red,PAL.fg]),kind:"sq",a:rnd(0,TAU),spin:rnd(-14,14)});}
+    if(b.mode==="pop"){b.popT+=dt;if(b.popT>0.55){b.mode="wind";b.wind=0;const h=rnd(-TAU,TAU);b.vx=Math.cos(h)*b.spd*2.4;b.vy=Math.sin(h)*b.spd*2.4;}}},
+  updateBug(g,dt,E){g.phase+=dt*4.0;
+    if(g.phase>=0.92&&!g.hit&&g.target&&g.target.alive){g.hit=true;E.hit(g.target,PAL.purple);E.burst(g.target.x,g.target.y,PAL.purple,4,50,120);}
+    if(g.phase>=2)return true;},
+  drawBug(ctx,g,E){const b=E.ball,k=g.phase<1?easeOut(g.phase):Math.max(0,2-g.phase);
+    const tx=b.x+(g.tx-b.x)*k,ty=b.y+(g.ty-b.y)*k;
+    drawCoil(ctx,b.x,b.y,tx,ty,PAL.purple);
+    ctx.fillStyle=PAL.red;dot(ctx,tx,ty,3.4);ctx.fillStyle="#20202c";dot(ctx,tx-1,ty-0.6,0.8);dot(ctx,tx+1,ty-0.6,0.8);
+    ctx.fillStyle=PAL.gold;dot(ctx,tx,ty-3.2,1.1);},
+  aura(ctx,b){const j=b.mode==="wind"?(b.wind||0):0;ring(ctx,b.x,b.y,13+j*3+Math.sin(b.t*30)*j*1.6,rgba(PAL.purple,.1+j*.22),1.5);},
+  drawBall(ctx,b){drawJackBox(ctx,b);}
+};
+
+// ---- D. PUPPETEER ----
+CONCEPTS.puppet={spd:50,
+  initBall(b){b.sway=0;b.swayv=0;b.dangle=rnd(0,TAU);b.jt=0;b.tvx=0;b.tvy=0;},
+  move(b,dt,E){b.jt-=dt;if(b.jt<=0){b.jt=rnd(.4,.8);const h=rnd(0,TAU);b.tvx=Math.cos(h)*b.spd;b.tvy=Math.sin(h)*b.spd;}
+    b.vx+=(b.tvx-b.vx)*7*dt;b.vy+=(b.tvy-b.vy)*7*dt;b.x+=b.vx*dt;b.y+=b.vy*dt;E.bounceWall(b,18);
+    b.dangle+=dt;b.swayv+=(-b.vx*0.004-(b.sway||0))*55*dt;b.swayv*=Math.pow(0.04,dt);b.sway=(b.sway||0)+b.swayv*dt;},
+  trail(b,dt,E){if(Math.random()<dt*6)E.part({x:b.x+(b.sway||0)*6,y:b.y+18,vx:0,vy:0,r:1,life:.4,max:.4,col:PAL.blue,kind:"dot"});},
+  attack(b,dt,E){if(E.s.atk>=0.8){E.s.atk=0;const tg=E.nearest(b.x,b.y);if(tg){b.flash=Math.max(b.flash,.7);
+    E.spawnBug({x:b.x,y:b.y+18,vx:0,vy:40,target:tg,life:2.4});}}},
+  updateBug(g,dt,E){if(!g.target||!g.target.alive){const n=E.nearest(g.x,g.y);if(n)g.target=n;}
+    const sp=92;if(g.target){const cur=angTo(Math.atan2(g.vy||1,g.vx||0.01),Math.atan2(g.target.y-g.y,g.target.x-g.x),6*dt);g.vx=Math.cos(cur)*sp;g.vy=Math.sin(cur)*sp;}
+    g.x+=g.vx*dt;g.y+=g.vy*dt;
+    if(g.target&&Math.hypot(g.target.x-g.x,g.target.y-g.y)<g.target.h){E.hit(g.target,PAL.blue);E.burst(g.x,g.y,PAL.blue,4,50,110);return true;}},
+  drawBug(ctx,g,E){const b=E.ball;line(ctx,b.x,b.y-2,g.x,g.y-4,rgba(PAL.silk,.45),1);drawMarionette(ctx,g.x,g.y,g.t);},
+  aura(ctx,b){ring(ctx,b.x,b.y,13,rgba(PAL.blue,.1),1);},
+  drawBall(ctx,b){drawPuppeteer(ctx,b);}
+};
+
+// ================= boot =================
+const sims=[];
+function boot(){document.querySelectorAll("canvas[data-concept]").forEach(cv=>{sims.push(new Sim(cv,CONCEPTS[cv.dataset.concept]));});
+  let last=performance.now();
+  function frame(now){let dt=(now-last)/1000;last=now;if(dt>0.05)dt=0.05;
+    for(const s of sims){s.step(dt);s.draw();}requestAnimationFrame(frame);}
+  requestAnimationFrame(frame);}
+window.addEventListener("resize",()=>{for(const s of sims){s.resize();s.makeBricks();}});
+if(document.readyState!=="loading")boot();else document.addEventListener("DOMContentLoaded",boot);
+</script>
+</body>
+</html>

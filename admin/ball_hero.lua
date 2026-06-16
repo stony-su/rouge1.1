@@ -134,7 +134,13 @@ local HERO_STATS = {
   engineer    = {r = 6, base_speed = 150, dmg = 8, color = 'orange', behavior = 'turret_drop', cd = 8, lifetime = 16, turret_cd = 3.0, burst_count = 3, burst_gap = 0.12, turret_range = 256, turret_mult = 2.0, shot_speed = 220, lvl3_count = 2, skin = 'engineer'},
 
   -- ----- Force area (behavior = 'force_area') -----
-  psykino     = {r = 6, base_speed = 160, dmg = 8, color = 'fg', behavior = 'force_area', range = 128, cd = 4, force_radius = 64, force_strength = 120},
+  -- ----- Psykino "Magnetic Force" (SNKRX psykino port; behavior = 'force_pull') -----
+  -- SNKRX player.lua:635 / ForceArea -- every cd seconds the psykino plants a psychic
+  -- WELL on a brick cluster that PULLS swarms toward its centre for ~well_dur seconds
+  -- (a gravity well, spinning fast then settling). Level 3 ("Magnetic Force") makes the
+  -- well DAMAGE (dmg_mult x dmg) + shove everything out when it expires. The ball is a
+  -- slow, controlled psychic eye gently drawn toward enemies (skin = 'psy').
+  psykino     = {r = 6, base_speed = 150, dmg = 8, color = 'fg', behavior = 'force_pull', range = 140, cd = 5, well_rs = 64, well_dur = 2.0, pull = 4, dmg_mult = 4.0, skin = 'psy'},
 
   -- ----- Chain lightning (SNKRX stormweaver port; behavior = 'chain_lightning') -----
   -- SNKRX's stormweaver is a passive that infuses every allied unit so their hits
@@ -159,7 +165,13 @@ local HERO_STATS = {
                  cd = 0.13, range = 150, locust_dmg = 1.25, locust_speed = 155, dart = 0.32},
 
   -- ----- Gambler-style random multi-strike -----
-  gambler     = {r = 6, base_speed = 165, dmg = 8, color = 'yellow2', behavior = 'gambler_burst', cd = 2, burst_count = 3, burst_mult = 3.0},
+  -- ----- Gambler "Multicast" (SNKRX gambler port; behavior = 'gamble') -----
+  -- SNKRX player.lua:57 -- every cd seconds the gambler hits a SINGLE RANDOM brick for
+  -- a rolled payout: usually payout_mult x dmg, with a jackpot_chance shot at a big
+  -- jackpot_mult x dmg (the gamble). Level 3 ("Multicast"): a nested 60/40/20% chance
+  -- to cast 2/3/4 times. The ball is a tumbling lucky die: fast + bouncy, with erratic
+  -- "gambled" ricochets off bricks (skin = 'dice').
+  gambler     = {r = 6, base_speed = 170, dmg = 8, color = 'yellow2', behavior = 'gamble', cd = 2, range = 360, payout_mult = 3.0, jackpot_chance = 0.12, jackpot_mult = 9.0, skin = 'dice'},
 
   -- ----- Volcano (SNKRX vulcanist port; behavior = 'volcano') -----
   -- Every 12s, plants a Volcano at the midpoint between this ball and the
@@ -632,6 +644,58 @@ function BallHero:init(args)
       SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(0, 3),
                 color = Color(self.color.r*0.85, self.color.g*0.5, self.color.b*0.95, 1), rs = random:float(0.8, 1.6),
                 alpha = random:float(0.3, 0.6), vx = random:float(-6, 6), vy = random:float(4, 18), duration = random:float(0.4, 0.8)}
+    end)
+  end
+
+  -- Psykino "Psyker" skin: a floating psychic EYE -- a pale eyeball with a drifting
+  -- blue iris that looks around, ringed by orbiting telekinetic shards and a psychic
+  -- distortion aura. It's slow + controlled (dampened) and is gently drawn toward the
+  -- nearest brick (telekinetic attraction, no weave -- see update).
+  --   psy_t       idle clock (eye drift + shard orbit + aura pulse)
+  --   psy_cast_t  eye-focus flash + shard jolt on each well cast
+  if s.skin == 'psy' then
+    self.psy_t      = random:float(0, 2*math.pi)
+    self.psy_cast_t = 0
+    -- Controlled + dampened: barely builds bounce-speed (telekinetic self-stabilise).
+    self.speed_mult_step = 1 + 0.3*(mods.charge or 1)
+    self.speed_mult_max  = 2.5
+    self.t:every(0.07, function()
+      if self.stuck or self.returning or self.mortar then return end
+      -- Faint psychic ripple motes drifting outward.
+      local a = random:float(0, 2*math.pi)
+      SmokePuff{group = main.current.effects, x = self.x + math.cos(a)*self.r_size, y = self.y + math.sin(a)*self.r_size,
+                color = Color(self.color.r, self.color.g, self.color.b, 1), rs = random:float(0.7, 1.3),
+                alpha = random:float(0.25, 0.5), vx = math.cos(a)*random:float(6, 16), vy = math.sin(a)*random:float(6, 16),
+                duration = random:float(0.4, 0.7)}
+    end)
+  end
+
+  -- Gambler "Lucky Die" skin: a tumbling gold die showing pips that RE-ROLL on each
+  -- cast, wrapped in a lucky gold aura, shedding coin-glint sparkles. It spins up +
+  -- flashes on each cast and bursts gold on a jackpot.
+  --   dice_t          idle tumble + aura clock
+  --   dice_a          tumble angle (spins fast for a beat on each cast)
+  --   dice_face       current rolled number (1-6), set on each cast
+  --   dice_roll_t     spin-up + flash timer on each cast
+  --   dice_jackpot_t  bigger gold flash on a jackpot
+  if s.skin == 'dice' then
+    self.dice_t             = random:float(0, 2*math.pi)
+    self.dice_a             = random:float(0, 2*math.pi)
+    self.dice_face          = random:int(1, 6)
+    self.dice_roll_t        = 0
+    self.dice_jackpot_t     = 0
+    self._dice_last_bounces = 0
+    -- Lively + bouncy.
+    self.speed_mult_step = 1 + 0.55*(mods.charge or 1)
+    self.speed_mult_max  = 4.2
+    self.t:every(0.05, function()
+      if self.stuck or self.returning or self.mortar then return end
+      -- Coin-glint sparkles.
+      if random:bool(50) then
+        SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(-2, 2),
+                  color = Color(1, 0.9, 0.45, 1), rs = random:float(0.7, 1.4), alpha = random:float(0.5, 0.85),
+                  vx = random:float(-14, 14), vy = random:float(-16, 8), duration = random:float(0.25, 0.5)}
+      end
     end)
   end
 
@@ -1355,15 +1419,23 @@ BEHAVIORS.turret_drop = function(self, s)
 end
 
 
-BEHAVIORS.force_area = function(self, s)
+-- Psykino "Magnetic Force" (SNKRX psykino port; player.lua:635 -> ForceArea). Every
+-- s.cd seconds, plant a PsyWell centred on a random brick cluster (skip if no bricks
+-- in range). The well pulls swarms toward its centre over s.well_dur, and at level 3
+-- damages + shoves them out when it expires (see PsyWell in effects.lua).
+BEHAVIORS.force_pull = function(self, s)
   self.t:every(s.cd, function()
     if self.stuck or self.returning then return end
     local arena = main.current
-    local t = arena:get_random_brick_within(self.x, self.y, s.range or 128)
-    local tx, ty = (t and t.x) or self.x, (t and t.y) or self.y
-    arena:knockback_area(tx, ty, s.force_radius or 64, s.force_strength or 120)
-    TelegraphRing{group = arena.effects, x = tx, y = ty, radius = s.force_radius or 64, color = self.color, duration = 0.3}
-    force1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
+    if not (arena and arena.main and arena.main.world) then return end
+    local t = arena:get_random_brick_within(self.x, self.y, s.range or 140)
+    if not t then return end
+    PsyWell{group = arena.effects, x = t.x, y = t.y, color = self.color,
+            rs = s.well_rs or 64, duration = s.well_dur or 2.0, pull = s.pull or 4,
+            level = self.level, dmg = self:current_dmg()*(s.dmg_mult or 4.0)}
+    self.spring:pull(0.4)
+    self.psy_cast_t = 0.3
+    force1:play{volume = 0.3, pitch = random:float(0.9, 1.05)}
   end, 0, nil, 'attack')
 end
 
@@ -1575,19 +1647,54 @@ function BallHero:emit_locusts(s)
 end
 
 
-BEHAVIORS.gambler_burst = function(self, s)
-  self.t:every(s.cd, function()
+-- Gambler "Multicast" (SNKRX gambler port; player.lua:57). Every s.cd seconds it
+-- hits a SINGLE RANDOM brick for a rolled payout: usually payout_mult x dmg, with a
+-- jackpot_chance shot at a big jackpot_mult x dmg (the gamble). Level 3 ("Multicast")
+-- is a nested 60/40/20% chance to cast 2/3/4 times. The random target + rolled payout
+-- are the whole fantasy; the die re-rolls its face + flashes on each cast.
+BEHAVIORS.gamble = function(self, s)
+  local function cast(pitch_bump)
     if self.stuck or self.returning then return end
     local arena = main.current
-    for i = 1, s.burst_count or 3 do
-      self.t:after((i-1)*0.18, function()
-        local pool = arena:get_bricks_within(self.x, self.y, 320)
-        if #pool == 0 then return end
-        local t = pool[random:int(1, #pool)]
-        if t and not t.dead then
-          t:take_damage(self:current_dmg()*(s.burst_mult or 3), self.color)
-          spawn_burst(arena.effects, t.x, t.y, self.color, 4, 60, 130)
-          arena_zap_line(arena, self.x, self.y, t.x, t.y, self.color)
+    if not (arena and arena.main) then return end
+    local pool = arena:get_bricks_within(self.x, self.y, s.range or 360)
+    if #pool == 0 then return end
+    local t = pool[random:int(1, #pool)]
+    if not t or t.dead then return end
+    local jackpot = random:bool(math.floor((s.jackpot_chance or 0.12)*100))
+    local mult    = jackpot and (s.jackpot_mult or 9) or (s.payout_mult or 3)*random:float(0.5, 1.3)
+    t:take_damage(self:current_dmg()*mult, jackpot and yellow[0] or self.color)
+    arena_zap_line(arena, self.x, self.y, t.x, t.y, jackpot and yellow[0] or self.color)
+    self.dice_face   = jackpot and 6 or random:int(1, 6)   -- roll the die
+    self.dice_roll_t = 0.25
+    self.spring:pull(0.3)
+    if jackpot then
+      spawn_burst(arena.effects, t.x, t.y, yellow[0], 14, 80, 220)
+      spawn_burst(arena.effects, t.x, t.y, self.color, 8, 60, 150)
+      self.dice_jackpot_t = 0.4
+      camera:shake(2, 0.15, 90)
+      gold1:play{volume = 0.6, pitch = random:float(0.95, 1.05)}
+      level_up1:play{volume = 0.4, pitch = random:float(0.95, 1.1)}
+    else
+      spawn_burst(arena.effects, t.x, t.y, self.color, 4, 60, 130)
+      gold1:play{volume = 0.3, pitch = 0.95 + (pitch_bump or 0)}
+    end
+  end
+
+  self.t:every(s.cd, function()
+    if self.stuck or self.returning then return end
+    cast(0)
+    -- Level 3 "Multicast": a nested 60/40/20% chance to cast a 2nd/3rd/4th time.
+    if self.level >= 3 and random:bool(60) then
+      self.t:after(0.22, function()
+        cast(0.05)
+        if random:bool(40) then
+          self.t:after(0.22, function()
+            cast(0.1)
+            if random:bool(20) then
+              self.t:after(0.22, function() cast(0.15) end)
+            end
+          end)
         end
       end)
     end
@@ -2044,6 +2151,22 @@ function BallHero:update(dt)
     if (self.witch_cast_t or 0) > 0 then self.witch_cast_t = self.witch_cast_t - dt end
   end
 
+  -- Psykino skin: advance the idle clock and decay the cast flash.
+  if self.stats.skin == 'psy' then
+    self.psy_t = (self.psy_t or 0) + dt
+    if (self.psy_cast_t or 0) > 0 then self.psy_cast_t = self.psy_cast_t - dt end
+  end
+
+  -- Gambler skin: idle clock + tumble (faster while rolling); decay the roll + jackpot
+  -- flashes. (The "gambled" ricochet on each brick bounce is in the active-motion block.)
+  if self.stats.skin == 'dice' then
+    self.dice_t = (self.dice_t or 0) + dt
+    local spin = 2.0
+    if (self.dice_roll_t or 0) > 0 then self.dice_roll_t = self.dice_roll_t - dt; spin = 16 end
+    self.dice_a = (self.dice_a or 0) + spin*dt
+    if (self.dice_jackpot_t or 0) > 0 then self.dice_jackpot_t = self.dice_jackpot_t - dt end
+  end
+
   -- Stormweaver skin: advance the idle clock + spoke-ring spin and decay the
   -- discharge flare. The spokes + sparks crackle on the init timer; here we just
   -- run the clocks the draw reads.
@@ -2159,6 +2282,42 @@ function BallHero:update(dt)
       local sp = math.sqrt(vx*vx + vy*vy)
       local na = math.atan2(vy, vx) + (self.witch_curve or 0.5)*dt
       self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+    end
+  end
+
+  -- Psykino telekinetic draw: gently steer toward the nearest brick, but ONLY while
+  -- one is within the attraction radius (120px). Otherwise it flies a NORMAL
+  -- trajectory -- so when no enemy is near it never gets pulled into a far wall and
+  -- left skimming horizontally. Direction-only, small turn rate, NOT a weave.
+  if self.stats.skin == 'psy' and self.body then
+    local arena = main.current
+    local target = arena and arena.get_nearest_brick_within and arena:get_nearest_brick_within(self.x, self.y, 120)
+    if target then
+      local vx, vy = self:get_velocity()
+      if vx and (vx ~= 0 or vy ~= 0) then
+        local sp   = math.sqrt(vx*vx + vy*vy)
+        local cur  = math.atan2(vy, vx)
+        local diff = math.loop(math.atan2(target.y - self.y, target.x - self.x) - cur, 2*math.pi)
+        if diff > math.pi then diff = diff - 2*math.pi end
+        local na = cur + math.clamp(diff, -0.9*dt, 0.9*dt)
+        self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+      end
+    end
+  end
+
+  -- Gambler "gambled" ricochet: on each brick bounce, randomly kick the heading -- an
+  -- unpredictable ricochet (mostly small, occasionally wild). Direction-only and only
+  -- ON a bounce (discrete), so it's not a continuous weave; normalize_speed keeps speed.
+  if self.stats.skin == 'dice' and self.body then
+    if (self.bounces or 0) ~= (self._dice_last_bounces or 0) then
+      self._dice_last_bounces = self.bounces or 0
+      local kick = random:bool(20) and random:float(-0.8, 0.8) or random:float(-0.3, 0.3)
+      local vx, vy = self:get_velocity()
+      if vx and (vx ~= 0 or vy ~= 0) then
+        local sp = math.sqrt(vx*vx + vy*vy)
+        local na = math.atan2(vy, vx) + kick
+        self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+      end
     end
   end
 
@@ -2550,6 +2709,14 @@ function BallHero:draw()
     -- Witch: a dark void orb -- glowing eye, void aura, wreathed in shifting arcane
     -- motes close to the core; it flashes on each death-pool drop.
     self:draw_witch(s)
+  elseif self.stats.skin == 'psy' then
+    -- Psykino: a floating psychic eye -- drifting iris, orbiting telekinetic shards,
+    -- distortion aura; the eye focuses + shards jolt on each well cast.
+    self:draw_psy(s)
+  elseif self.stats.skin == 'dice' then
+    -- Gambler: a tumbling gold die showing rolled pips; lucky aura + coin sparkles,
+    -- re-rolls + flashes on each cast, bursts gold on a jackpot.
+    self:draw_dice(s)
   elseif self.stats.skin == 'stormweaver' then
     -- Stormweaver: a caged-lightning orb -- a white-hot nucleus, crackling rim
     -- arcs and a breathing static aura; flares + discharges chain bolts on cast.
@@ -3406,6 +3573,100 @@ function BallHero:draw_witch(s)
     local r    = (0.7 + 0.7*fl)*sc
     graphics.circle(px, py, r*1.9, Color(c.r, c.g, c.b, (0.22 + cast*0.18)*fl))
     graphics.circle(px, py, r, Color(mote_c.r, mote_c.g, mote_c.b, 0.45 + 0.45*fl))
+  end
+end
+
+
+-- The psykino's "Psyker" body: a floating psychic eye. A pale eyeball with a drifting
+-- blue iris + pupil that looks around, ringed by orbiting telekinetic shards and a
+-- soft psychic distortion aura. On each well cast (psy_cast_t) the iris focuses
+-- (contracts) + flashes and the shards jolt outward. Same r_size physics circle.
+function BallHero:draw_psy(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local t  = self.psy_t or 0
+  local cast = math.clamp((self.psy_cast_t or 0)/0.3, 0, 1)
+  local breathe = 0.5 + 0.5*math.sin(t*2.5)
+  local sc = s*(1 + cast*0.12)
+
+  -- Psychic distortion aura (pulsing; flares on a cast).
+  graphics.circle(self.x, self.y, rs*(1.8 + 0.25*breathe)*sc + cast*5,
+                  Color(c.r, c.g, c.b, 0.07 + 0.05*breathe + cast*0.2))
+  graphics.circle(self.x, self.y, rs*(1.5 + 0.2*breathe)*sc, Color(c.r, c.g, c.b, 0.12), 1)
+
+  -- Orbiting telekinetic shards (small triangles held in suspension; jolt out on cast).
+  local oa = t*1.2
+  for i = 0, 2 do
+    local a    = oa + i*2*math.pi/3
+    local orad = rs*(1.45 + cast*0.5)*sc
+    local cx2, cy2 = self.x + math.cos(a)*orad, self.y + math.sin(a)*orad
+    local sp = a + t*3
+    local sr = rs*0.3*sc
+    graphics.polygon({cx2 + math.cos(sp)*sr,       cy2 + math.sin(sp)*sr,
+                      cx2 + math.cos(sp + 2.6)*sr, cy2 + math.sin(sp + 2.6)*sr,
+                      cx2 + math.cos(sp - 2.6)*sr, cy2 + math.sin(sp - 2.6)*sr},
+                     Color(c.r, c.g, c.b, 0.85))
+  end
+
+  -- Eyeball body.
+  graphics.circle(self.x, self.y, rs*sc + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*sc, Color(0.86, 0.87, 0.9, 1))
+  -- Drifting iris + pupil (looks around) + glint.
+  local lookx = math.sin(t*0.7)*rs*0.3*sc
+  local looky = math.sin(t*0.53 + 1.3)*rs*0.3*sc
+  local irisr = rs*0.5*sc*(1 - cast*0.25)
+  graphics.circle(self.x + lookx, self.y + looky, irisr, Color(0.5, 0.6, 0.92, 1))
+  graphics.circle(self.x + lookx, self.y + looky, irisr*0.5, Color(0.05, 0.05, 0.10, 1))
+  graphics.circle(self.x + lookx - irisr*0.25, self.y + looky - irisr*0.25, math.max(1, irisr*0.22), Color(1, 1, 1, 0.9))
+  if cast > 0 then graphics.circle(self.x + lookx, self.y + looky, irisr*0.4, Color(1, 1, 1, cast*0.8)) end
+end
+
+
+-- The gambler's "Lucky Die" body: a tumbling gold die. A rounded gold square that
+-- rotates (slow idle tumble, whipped fast for a beat on each roll) showing the rolled
+-- face's pips, over a lucky gold aura. It spins up + flashes on each cast (dice_roll_t)
+-- and flares bright gold on a jackpot (dice_jackpot_t). Same r_size physics circle.
+function BallHero:draw_dice(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local t  = self.dice_t or 0
+  local roll = math.clamp((self.dice_roll_t or 0)/0.25, 0, 1)
+  local jack = math.clamp((self.dice_jackpot_t or 0)/0.4, 0, 1)
+  local a    = self.dice_a or 0
+  local face = self.dice_face or 1
+  local breathe = 0.5 + 0.5*math.sin(t*2.5)
+  local sc = s*(1 + roll*0.15 + jack*0.18)
+
+  -- Lucky gold aura (pulses; flares on cast/jackpot).
+  graphics.circle(self.x, self.y, rs*(1.55 + 0.2*breathe)*sc + roll*3 + jack*9,
+                  Color(c.r, c.g, c.b*0.45, 0.08 + 0.05*breathe + roll*0.12 + jack*0.3))
+
+  -- Die body: a rounded gold square tumbling on `a`.
+  local side  = rs*1.7*sc
+  local facec = (jack > 0) and Color(1, 0.97, 0.7, 1) or Color(0.96, 0.86, 0.55, 1)
+  graphics.push(self.x, self.y, a, 1, 1)
+    graphics.rectangle(self.x, self.y, side + 1.5, side + 1.5, 3, 3, bg[-2])
+    graphics.rectangle(self.x, self.y, side, side, 3, 3, facec)
+  graphics.pop()
+
+  -- Pips at the rolled face's standard 3x3 positions, tumbling with the die.
+  local layouts = {
+    {{0, 0}},
+    {{-1, -1}, {1, 1}},
+    {{-1, -1}, {0, 0}, {1, 1}},
+    {{-1, -1}, {1, -1}, {-1, 1}, {1, 1}},
+    {{-1, -1}, {1, -1}, {0, 0}, {-1, 1}, {1, 1}},
+    {{-1, -1}, {-1, 0}, {-1, 1}, {1, -1}, {1, 0}, {1, 1}},
+  }
+  local pips = layouts[face] or layouts[1]
+  local g  = side*0.27
+  local pr = math.max(1, rs*0.16*sc)
+  local ca, sa = math.cos(a), math.sin(a)
+  for _, p in ipairs(pips) do
+    local lx, ly = p[1]*g, p[2]*g
+    graphics.circle(self.x + lx*ca - ly*sa, self.y + lx*sa + ly*ca, pr, Color(0.15, 0.12, 0.05, 1))
   end
 end
 
