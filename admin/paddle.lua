@@ -260,9 +260,43 @@ function Paddle:draw()
     return
   end
 
+  if self.paddle_skin == 'mitosis' then
+    self:draw_mitosis_paddle(s, body_color)
+    return
+  end
+
   graphics.push(self.x, self.y, 0, s, 1/s)
     graphics.rectangle(self.x, self.y, self.w, self.h, 2, 2, body_color)
     graphics.rectangle(self.x, self.y - self.h/2, self.w, 1, nil, nil, fg[5])
+  graphics.pop()
+end
+
+
+-- The Mitosis paddle as a living cell colony: a soft membrane capsule of
+-- cytoplasm with a row of nuclei that pulse + drift and pinch into budding
+-- twins, hinting at constant cell division. Uses the hit-flash colour + spring
+-- scale like the standard paddle, and stays within the same hitbox footprint.
+function Paddle:draw_mitosis_paddle(s, color)
+  local t    = love.timer.getTime()
+  local w, h = self.w, self.h
+  local x, y = self.x, self.y
+  local mh   = h + 3   -- the membrane bulges a touch past the hitbox so it reads as a cell
+  graphics.push(x, y, 0, s, 1/s)
+    graphics.rectangle(x, y, w + 3, mh + 3, (mh + 3)/2, (mh + 3)/2, Color(color.r, color.g, color.b, 0.18))  -- outer glow
+    graphics.rectangle(x, y, w, mh, mh/2, mh/2, Color(color.r, color.g, color.b, 0.85))                      -- cytoplasm
+    graphics.rectangle(x, y, w, mh, mh/2, mh/2, Color(color.r, color.g, color.b, 0.55), 1)                   -- membrane outline
+    local n = 3
+    for i = 1, n do
+      local nx    = x - w/2 + (i - 0.5)*(w/n)
+      local pulse = 0.78 + 0.22*math.sin(t*3 + i*1.3)
+      local drift = math.sin(t*2 + i*1.7)*1.1
+      local nr    = mh*0.32*pulse
+      graphics.circle(nx + drift, y, nr, Color(color.r*0.5, color.g*0.5, color.b*0.5, 0.9))
+      -- a budding twin nucleus that pinches out and back (division motif)
+      local sep = (0.5 + 0.5*math.sin(t*1.6 + i*2.1))*mh*0.5
+      graphics.circle(nx + drift + sep, y, nr*0.55, Color(color.r*0.6, color.g*0.6, color.b*0.6, 0.7))
+    end
+    graphics.rectangle(x, y - mh/2, w*0.92, 1, nil, nil, fg[5])   -- bright top edge
   graphics.pop()
 end
 

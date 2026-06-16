@@ -1,8 +1,8 @@
 -- BallHero is the SNKRX-style hero remixed as a bouncing ball.
 -- The 20-ball roster (trimmed from the full 57 SNKRX archetypes so every
--- pick has a distinct effect): 16 heroes attack continuously on cooldown
--- (SNKRX-style: trigger inside an attack-sensor radius), while 4 exceptions
--- (wizard, cryomancer, pyromancer, cannoneer) keep on-bounce abilities.
+-- pick has a distinct effect): most heroes attack continuously on cooldown
+-- (SNKRX-style: trigger inside an attack-sensor radius), while 3 exceptions
+-- (wizard, cryomancer, pyromancer) keep on-bounce abilities.
 -- Contact damage on bounce applies to all.
 
 BallHero = Object:extend()
@@ -107,17 +107,40 @@ local HERO_STATS = {
   -- ----- Damage-over-time clouds (behavior = 'dot_cloud') -----
   witch       = {r = 6, base_speed = 155, dmg = 6, color = 'purple', behavior = 'dot_cloud', range = 96, cd = 4,  cloud_radius = 48, cloud_duration = 14, dps_mult = 0.5},
 
-  -- ----- Bomb drops (behavior = 'bomb_drop') -----
-  bomber      = {r = 6, base_speed = 150, dmg = 10, color = 'orange', behavior = 'bomb_drop', range = 128, cd = 8,  bomb_radius = 64, fuse = 2,   count = 1, blast_mult = 2.0},
+  -- ----- Bomber "Reactor Core" (SNKRX bomber port; behavior = 'bomb_drop') -----
+  -- SNKRX player.lua:301 / Bomb:3395 -- every cd seconds the bomber PLANTS an
+  -- unstable containment cell at its own position. It detonates the instant a brick
+  -- drifts within trigger_radius (proximity mine; the `fuse` is now just a SILENT
+  -- cleanup lifetime, no visible countdown). The blast is a big AoE (do_splash)
+  -- worth current_dmg*blast_mult over bomb_radius, staged as a ReactorBlast
+  -- (implosion -> flash -> shockwaves). Level 3 ("Demoman") DOUBLES blast radius +
+  -- damage and adds an aftershock. The bomber ball is a heavy reactor core: SLOW +
+  -- dampened, lumbering on drooping arcs, venting plasma (skin = 'bomber').
+  bomber      = {r = 7, base_speed = 125, dmg = 10, color = 'orange', behavior = 'bomb_drop', cd = 7, bomb_radius = 60, fuse = 8, trigger_radius = 16, count = 1, blast_mult = 2.0, skin = 'bomber'},
 
-  -- ----- Turret drops (behavior = 'turret_drop') -----
-  engineer    = {r = 6, base_speed = 155, dmg = 8, color = 'orange', behavior = 'turret_drop', cd = 8,  lifetime = 10, turret_cd = 1.5, turret_range = 96,  turret_dmg = 6},
+  -- ----- Engineer "Builder" (SNKRX engineer port; behavior = 'turret_drop') -----
+  -- SNKRX player.lua:409 / Turret:3196 -- every cd seconds the engineer DEPLOYS a
+  -- turret at its own position. Each turret aims at the nearest brick and fires a
+  -- BURST of burst_count shots, persisting for `lifetime` then folding up. Level 3
+  -- ("Upgrade!!!") drops lvl3_count turrets per deploy and UPGRADES them all (+50%
+  -- damage & fire rate). The engineer ball is a steady fabricator drone: medium
+  -- speed, mildly dampened, hovering on a gentle bob (skin = 'engineer').
+  engineer    = {r = 6, base_speed = 150, dmg = 8, color = 'orange', behavior = 'turret_drop', cd = 8, lifetime = 16, turret_cd = 3.0, burst_count = 3, burst_gap = 0.12, turret_range = 256, turret_mult = 2.0, shot_speed = 220, lvl3_count = 2, skin = 'engineer'},
 
   -- ----- Force area (behavior = 'force_area') -----
   psykino     = {r = 6, base_speed = 160, dmg = 8, color = 'fg', behavior = 'force_area', range = 128, cd = 4, force_radius = 64, force_strength = 120},
 
-  -- ----- Ally damage buff -----
-  stormweaver = {r = 6, base_speed = 160, dmg = 6, color = 'blue',   behavior = 'ally_buff_dmg',  cd = 8,  buff_mult = 1.5, duration = 4},
+  -- ----- Chain lightning (SNKRX stormweaver port; behavior = 'chain_lightning') -----
+  -- SNKRX's stormweaver is a passive that infuses every allied unit so their hits
+  -- fork lightning to 2 (+2 at lvl3) nearby enemies (player.lua:308, :2360-2380).
+  -- Ball Pit has no allied roster, so this stormweaver INITIATES the arc itself:
+  -- every cd it zaps the nearest brick, then the bolt forks onward through the
+  -- swarm, each hop a falloff of its damage. links/radius grow at lvl3 like SNKRX.
+  -- Movement: a moderate base that ramps FAST + bouncy, on an erratic crackling
+  -- zigzag path (see the stormweaver skin blocks + do_chain_lightning).
+  stormweaver = {r = 6, base_speed = 150, dmg = 7, color = 'blue', behavior = 'chain_lightning', skin = 'stormweaver',
+                 cd = 1.3, range = 122, links = 2, chain_radius = 64, hop_falloff = 0.55,
+                 zigzag = 7.0, bounce_scramble = 0.7},
 
   -- ----- Pet spawns (small allies that fly up and hit bricks) -----
   infestor    = {r = 6, base_speed = 150, dmg = 6,  color = 'orange', behavior = 'pet_spawn', cd = 10, count = 3, pet_speed = 70, pet_dmg = 8},
@@ -133,11 +156,21 @@ local HERO_STATS = {
   -- rune-furnace ring instead of a plain ball.
   vulcanist   = {r = 6, base_speed = 150, dmg = 14, color = 'red', behavior = 'volcano', cd = 12, area = 72, volcano_rs = 24, skin = 'rune'},
 
+  -- ----- Cannon (SNKRX cannoneer port; behavior = 'cannon_shot') -----
+  -- SNKRX's cannoneer fires at the closest enemy in a 128 sensor every 6s; the
+  -- shell flies, then DETONATES into a wide Area for 2x damage (player.lua:326,
+  -- :2208-2218), with a level-3 aftershock bombardment. Ported here as a heavy
+  -- mortar: fires an exploding cannonball every cd (blast = current_dmg*blast_mult
+  -- over blast_radius, +bombard aftershocks at level 3). Slow, dampened, heavy-arc
+  -- movement, and the shot RECOILS the ball backward (see shoot_cannonball + skin).
+  cannoneer   = {r = 7, base_speed = 132, dmg = 16, color = 'orange', behavior = 'cannon_shot', skin = 'cannon',
+                 cd = 2.2, range = 150, ball_speed = 150, blast_radius = 56, blast_mult = 1.7,
+                 recoil = 90, bombard = 4},
+
   -- ----- On-bounce exceptions: ability triggers per ball-bounce, not a timer.
   wizard      = {r = 5, base_speed = 170, dmg = 7,  color = 'blue',   on_bounce = 'chain_lightning', bounce_cd = 0.3},
   cryomancer  = {r = 6, base_speed = 160, dmg = 6,  color = 'blue',   on_bounce = 'slow'},
   pyromancer  = {r = 6, base_speed = 160, dmg = 8,  color = 'red',    on_bounce = 'burn', bounce_cd = 0.4},
-  cannoneer   = {r = 7, base_speed = 145, dmg = 18, color = 'orange', on_bounce = 'big_splash'},
 }
 
 function BallHero.stats_for(character)
@@ -441,6 +474,131 @@ function BallHero:init(args)
     end)
   end
 
+  -- Bomber "Reactor Core" skin: a dark vented casing around a molten plasma core,
+  -- with glowing vent seams that rotate and energy arcs crackling off the shell. It
+  -- lumbers along venting heat-haze + plasma sparks; the core swells brighter as the
+  -- next charge nears, then sinks in a recoil-squash on each plant.
+  --   bomber_t        idle clock (core pulse + seam rotation + breathe)
+  --   bomber_recoil_t downward recoil-squash for a beat after laying a charge
+  --   bomber_fuse_t   counts toward stats.cd so the core telegraphs the next plant
+  --   bomber_gravity  the downward "weight" lean that droops its arcs (see update)
+  if s.skin == 'bomber' then
+    self.bomber_t        = random:float(0, 2*math.pi)
+    self.bomber_recoil_t = 0
+    self.bomber_fuse_t   = 0
+    self.bomber_gravity  = 25
+    -- Dampened + heavy: it builds bounce-speed slowly and caps low, so it lumbers
+    -- instead of pinballing (the opposite of the jester's fast, bouncy ramp).
+    self.speed_mult_step = 1 + 0.22*(mods.charge or 1)
+    self.speed_mult_max  = 2.4
+    self.t:every(0.06, function()
+      if self.stuck or self.returning or self.mortar then return end
+      -- Heat-haze venting off the core.
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y - self.r_size*0.4,
+                color = Color(self.color.r, self.color.g*0.7, self.color.b*0.4, 1), rs = random:float(1.2, 2.2),
+                alpha = random:float(0.16, 0.30), vx = random:float(-10, 10), vy = random:float(-22, -10),
+                duration = random:float(0.35, 0.6)}
+      -- ...and the occasional brighter plasma spark.
+      if random:bool(30) then
+        SmokePuff{group = main.current.effects, x = self.x + random:float(-1, 1), y = self.y,
+                  color = Color(yellow[0].r, yellow[0].g, yellow[0].b, 1), rs = random:float(0.7, 1.3),
+                  alpha = random:float(0.5, 0.8), vx = random:float(-14, 14), vy = random:float(-24, -12),
+                  duration = random:float(0.2, 0.4)}
+      end
+    end)
+  end
+
+  -- Engineer "Builder" skin: a fabricator drone -- a dark gear-core ringed with cog
+  -- teeth that rotate, a glowing sensor "eye" lens that scans, and a mechanical glow.
+  -- It hovers steadily, showering welding sparks, and spins up + flashes on each
+  -- turret deploy.
+  --   eng_t        idle clock (eye scan-pulse + aura breathe)
+  --   eng_gear_a   cog-ring rotation (whips fast on a deploy)
+  --   eng_deploy_t fabrication flash + recoil for a beat after deploying
+  if s.skin == 'engineer' then
+    self.eng_t        = random:float(0, 2*math.pi)
+    self.eng_gear_a   = random:float(0, 2*math.pi)
+    self.eng_deploy_t = 0
+    -- Mildly dampened + steady (between the normal ramp and the bomber's heavy one).
+    self.speed_mult_step = 1 + 0.35*(mods.charge or 1)
+    self.speed_mult_max  = 3.0
+    self.t:every(0.05, function()
+      if self.stuck or self.returning or self.mortar then return end
+      -- Grinding/welding sparks that shower off and fall.
+      if random:bool(55) then
+        SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(-1, 2),
+                  color = Color(yellow[0].r, yellow[0].g, yellow[0].b, 1), rs = random:float(0.6, 1.2),
+                  alpha = random:float(0.5, 0.85), vx = random:float(-22, 22), vy = random:float(6, 28),
+                  duration = random:float(0.22, 0.45)}
+      end
+    end)
+  end
+
+  -- Stormweaver "Tempest" skin: a ball of caged lightning. A white-hot nucleus
+  -- inside the electric body, ringed by jagged arc-spokes that crackle (rebuilt
+  -- on a timer so they writhe even at rest), a breathing static aura, and two
+  -- electron sparks orbiting the core. On a discharge the core flares white and
+  -- the spokes whip out (cast_flash_t).
+  --   storm_t        idle clock (core pulse + aura breathe + orbit)
+  --   arc_phase      slow rotation of the spoke ring
+  --   cast_flash_t   core/spoke flare for a beat after each chain discharge
+  --   storm_bolts    the jagged rim spokes, regenerated every tick to crackle
+  -- It sheds a flickering StormSpark trail and rides a fast, bouncy, ERRATIC
+  -- path: a slow-burn base that charges up hard on each bounce (the opposite of
+  -- the bomber's dampened lumber), wobbling along a crackling zigzag.
+  if s.skin == 'stormweaver' then
+    self.storm_t             = random:float(0, 2*math.pi)
+    self.arc_phase           = random:float(0, 2*math.pi)
+    self.cast_flash_t        = 0
+    self._storm_last_bounces = 0
+    self.storm_bolts         = {}
+    self.speed_mult_step = 1 + 0.7*(mods.charge or 1)   -- builds bounce-speed fast (zippy)
+    self.speed_mult_max  = 4.2                           -- ...and uncaps high
+    self.t:every(0.05, function()
+      self:gen_storm_bolts()
+      if self.stuck or self.returning or self.mortar then return end
+      -- Trail/emission: a crackling spark sloughs off the body while it travels.
+      local a = random:float(0, 2*math.pi)
+      StormSpark{group = main.current.effects, x = self.x + random:float(-1, 1), y = self.y + random:float(-1, 1),
+                 color = self.color, vx = math.cos(a)*random:float(8, 26), vy = math.sin(a)*random:float(8, 26),
+                 alpha = random:float(0.4, 0.7)}
+    end)
+  end
+
+  -- Cannon "Siege Mortar" skin: the ball as a heavy artillery piece. An iron base
+  -- (the body) carries a thick barrel that swivels toward the nearest brick, recoils
+  -- on each shot, and glows a reload ember at the muzzle that brightens as the cd
+  -- fills. A heat-haze aura + a steady gunsmoke drizzle round it out.
+  --   aim_a / aim_want    barrel angle (smoothed in update toward the sampled target)
+  --   cannon_recoil_t     barrel kick + muzzle flash for a beat after firing
+  --   cannon_t            idle clock (heat shimmer)
+  --   cannon_gravity      heavy-lob droop added to its arcs (see active-motion)
+  -- Movement: slow + dampened (builds bounce-speed slower than the bomber, caps low)
+  -- and the shot recoils it backward -- a ponderous siege engine.
+  if s.skin == 'cannon' then
+    self.aim_a           = -math.pi/2
+    self.aim_want        = -math.pi/2
+    self.cannon_recoil_t = 0
+    self.cannon_t        = random:float(0, 2*math.pi)
+    self.cannon_gravity  = 32
+    self.speed_mult_step = 1 + 0.18*(mods.charge or 1)
+    self.speed_mult_max  = 2.2
+    -- Retarget the barrel on a timer (cheap), like the crossbow turret.
+    self.t:every(0.08, function()
+      local arena = main.current
+      if not arena or self.stuck or self.returning or self.mortar then return end
+      local target = arena.get_nearest_brick and arena:get_nearest_brick(self.x, self.y)
+      if target then self.aim_want = math.atan2(target.y - self.y, target.x - self.x) end
+    end)
+    -- Idle gunsmoke drizzle off the barrel.
+    self.t:every(0.07, function()
+      if self.stuck or self.returning or self.mortar then return end
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y - self.r_size*0.4,
+                color = Color(0.30, 0.28, 0.26, 1), rs = random:float(1.2, 2.2), alpha = random:float(0.12, 0.22),
+                vx = random:float(-6, 6), vy = random:float(-18, -6), duration = random:float(0.4, 0.7)}
+    end)
+  end
+
   self:set_as_circle(self.r_size, 'dynamic', 'ball')
   self.body:setBullet(true)
   self:set_fixed_rotation(true)
@@ -635,6 +793,9 @@ function BallHero:launch_from_paddle()
   if not arena or not arena.paddle then return end
   -- Pinball Lobber: served from above the flippers, never launched off the paddle.
   if self:is_pinball() then self:pinball_serve() return end
+  -- Mitosis daughter cell: it grew in at its parent's position, so don't yank
+  -- it to the paddle — leave it where mitosis_on_kill placed it (one-shot flag).
+  if self.mitosis_spawned then self.mitosis_spawned = nil; return end
   local px = arena.paddle.x
   local py = arena.paddle.y - arena.paddle.h/2 - self.r_size - 1
   self:set_position(px, py)
@@ -970,36 +1131,73 @@ BEHAVIORS.dot_cloud = function(self, s)
 end
 
 
+-- Bomber "Demoman" (SNKRX bomber port; player.lua:301 -> Bomb:3395). Every s.cd
+-- seconds the bomber PLANTS a bomb at its own position (count of them, staggered
+-- along its path). Each bomb detonates when a brick drifts within trigger_radius
+-- or after its fuse, for a big AoE blast. Level 3 ("Demoman") doubles blast radius
+-- + damage and the BombDrop adds a second aftershock. Damage is baked here as
+-- current_dmg * blast_mult so the planted bomb needs no hero reference.
 BEHAVIORS.bomb_drop = function(self, s)
   self.t:every(s.cd, function()
     if self.stuck or self.returning then return end
     local arena = main.current
+    local lvl3  = self.level >= 3
     local count = s.count or 1
     for i = 1, count do
-      arena.t:after((i-1)*0.2, function()
-        local t = arena:get_random_brick_within(self.x, self.y, s.range or 128)
-        local tx, ty
-        if t then tx, ty = t.x + random:float(-8, 8), t.y + random:float(-8, 8)
-        else tx, ty = self.x + random:float(-32, 32), self.y + random:float(-32, 32) end
-        BombDrop{group = arena.effects, x = tx, y = ty, color = self.color,
-                 dmg = self:current_dmg()*(s.blast_mult or 2), radius = s.bomb_radius, fuse = s.fuse}
+      arena.t:after((i-1)*0.15, function()
+        if not (arena.main and arena.main.world) then return end
+        local rad = (s.bomb_radius or 60) * (lvl3 and 2 or 1)
+        local dmg = self:current_dmg() * (s.blast_mult or 2) * (lvl3 and 2 or 1)
+        BombDrop{group = arena.effects, x = self.x, y = self.y, color = self.color,
+                 dmg = dmg, radius = rad, fuse = s.fuse or 6,
+                 trigger_radius = s.trigger_radius or 16, lvl3 = lvl3}
       end)
     end
-    mine1:play{volume = 0.2, pitch = random:float(0.95, 1.05)}
+    -- Cast juice: a heavy recoil as it expels the charge + a burst of plasma sparks;
+    -- the core telegraph resets so it dims then re-swells toward the next plant.
+    self.spring:pull(0.5)
+    self.bomber_recoil_t = 0.32
+    self.bomber_fuse_t   = 0
+    for _ = 1, 7 do
+      SmokePuff{group = arena.effects, x = self.x + random:float(-3, 3), y = self.y,
+                color = Color(self.color.r, self.color.g, self.color.b, 1), rs = random:float(1.4, 2.8), alpha = 0.6,
+                vx = random:float(-26, 26), vy = random:float(-26, -4), duration = random:float(0.3, 0.6)}
+    end
+    mine1:play{volume = 0.3, pitch = random:float(0.9, 1.0)}
   end, 0, nil, 'attack')
 end
 
 
+-- Engineer "Builder" (SNKRX engineer port; player.lua:409 -> Turret:3196). Every
+-- s.cd seconds the engineer DEPLOYS turret(s) at its own position (a roaming
+-- fabricator). Each turret aims at the nearest brick and fires bursts (see
+-- AllyTurret). Level 3 ("Upgrade!!!") drops lvl3_count turrets per deploy and they
+-- come pre-upgraded (+50% damage baked in here, +50% fire rate inside the turret).
 BEHAVIORS.turret_drop = function(self, s)
   self.t:every(s.cd, function()
     if self.stuck or self.returning then return end
     local arena = main.current
-    local tx = math.clamp(arena.paddle.x + random:float(-arena.paddle.w/2, arena.paddle.w/2),
-                          arena.x1 + 6, arena.x2 - 6)
-    local ty = arena.paddle.y - random:float(20, 40)
-    AllyTurret{group = arena.effects, x = tx, y = ty, color = self.color,
-               lifetime = s.lifetime, fire_cd = s.turret_cd, range = s.turret_range,
-               dmg = s.turret_dmg*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)}
+    if not (arena and arena.main and arena.main.world) then return end
+    local lvl3  = self.level >= 3
+    local count = lvl3 and (s.lvl3_count or 2) or 1
+    local tdmg  = self:current_dmg() * (s.turret_mult or 2.0) * (lvl3 and 1.5 or 1)
+    for i = 1, count do
+      local ox = (count > 1) and (i - (count + 1)/2)*18 or 0
+      local px = math.clamp(self.x + ox, arena.x1 + 8, arena.x2 - 8)
+      local py = math.clamp(self.y, arena.y1 + 10, arena.y2 - 24)
+      AllyTurret{group = arena.effects, x = px, y = py, color = self.color,
+                 lifetime = s.lifetime, burst_cd = s.turret_cd, burst_count = s.burst_count,
+                 burst_gap = s.burst_gap, range = s.turret_range, dmg = tdmg,
+                 shot_speed = s.shot_speed, upgraded = lvl3}
+    end
+    -- Deploy juice: a fabrication recoil + a spray of welding sparks.
+    self.spring:pull(0.4)
+    self.eng_deploy_t = 0.3
+    for _ = 1, 6 do
+      SmokePuff{group = arena.effects, x = self.x + random:float(-3, 3), y = self.y,
+                color = Color(yellow[0].r, yellow[0].g, yellow[0].b, 1), rs = random:float(0.8, 1.6),
+                alpha = 0.7, vx = random:float(-26, 26), vy = random:float(-6, 26), duration = random:float(0.25, 0.5)}
+    end
     spawn1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
   end, 0, nil, 'attack')
 end
@@ -1031,6 +1229,141 @@ BEHAVIORS.ally_buff_dmg = function(self, s)
     end
     buff1:play{volume = 0.3, pitch = random:float(1.0, 1.15)}
   end, 0, nil, 'attack')
+end
+
+
+-- Stormweaver chain lightning. Direct port of SNKRX's chain_infuse arc
+-- (assets_from_SNKRX/player.lua:2370-2379): a strike forks to N nearby enemies,
+-- each link drawn as a jagged bolt. SNKRX runs it as a passive infusing every
+-- ally's hits; with no ally roster here, the stormweaver INITIATES -- it zaps the
+-- nearest brick for full damage, then the bolt forks onward through the swarm.
+-- links = base (+2 at lvl3) and radius doubles at lvl3 (mirrors SNKRX 64->128).
+-- Hop damage uses a falloff of the ball's own damage instead of SNKRX's flat
+-- 0.2x (there it piled onto a real hit; here the arc IS the attack). Each link
+-- also briefly slows the brick -- an electric stun.
+function BallHero:do_chain_lightning(s)
+  if self.stuck or self.returning then return end
+  local arena = main.current
+  if not arena then return end
+  local first = arena:get_nearest_brick_within(self.x, self.y, s.range or 122)
+  if not first then return end
+
+  local lvl3    = (self.level or 1) >= 3
+  local links   = (s.links or 2) + (lvl3 and 2 or 0)
+  local radius  = (s.chain_radius or 64)*(lvl3 and 2 or 1)
+  local falloff = s.hop_falloff or 0.55
+  local dmg     = self:current_dmg()
+  local hit     = { [first.id] = true }
+
+  -- Primary strike: full damage + a bolt from the ball to the first brick.
+  first:take_damage(dmg, self.color)
+  if first.apply_slow then first:apply_slow(0.6, 0.6) end
+  LightningArc{group = arena.effects, x = self.x, y = self.y,
+               x1 = self.x, y1 = self.y, x2 = first.x, y2 = first.y, color = self.color}
+
+  -- Fork onward through the swarm (SNKRX player.lua:2370-2379).
+  local src, hop_dmg = first, dmg
+  for _ = 1, links do
+    -- A random in-range brick we haven't struck yet this discharge
+    -- (== SNKRX get_random_object_in_shape(..., infused_enemies_hit)).
+    local pool, cands = arena:get_bricks_within(src.x, src.y, radius), {}
+    for _, b in ipairs(pool) do if not hit[b.id] then cands[#cands + 1] = b end end
+    if #cands == 0 then break end
+    local dst = cands[random:int(1, #cands)]
+    hit[dst.id] = true
+    hop_dmg = hop_dmg*falloff
+    dst:take_damage(hop_dmg, self.color)
+    if dst.apply_slow then dst:apply_slow(0.6, 0.6) end
+    LightningArc{group = arena.effects, x = src.x, y = src.y,
+                 x1 = src.x, y1 = src.y, x2 = dst.x, y2 = dst.y, color = self.color}
+    src = dst
+  end
+
+  -- Cast feedback: flare the body, pop the spring, discharge ring + crackle + thunder.
+  self.cast_flash_t = 0.22
+  self.spring:pull(0.16)
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = (s.range or 122)*0.5,
+                color = self.color, duration = 0.18}
+  for _ = 1, 5 do
+    local a = random:float(0, 2*math.pi)
+    StormSpark{group = arena.effects, x = self.x, y = self.y, color = self.color,
+               vx = math.cos(a)*random:float(40, 110), vy = math.sin(a)*random:float(40, 110)}
+  end
+  thunder1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
+end
+
+
+BEHAVIORS.chain_lightning = function(self, s)
+  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+    self:do_chain_lightning(s)
+  end, 0, nil, 'attack')
+end
+
+
+BEHAVIORS.cannon_shot = function(self, s)
+  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+    self:shoot_cannonball(s)
+  end, 0, nil, 'attack')
+end
+
+
+-- Fire a heavy exploding cannonball at the nearest brick (SNKRX cannoneer,
+-- player.lua:326). The shell flies slowly and DETONATES into a wide splash on
+-- impact (the explosion lives in projectile.lua's cannon_explode). Firing kicks
+-- the barrel into recoil, belches a muzzle flash + smoke, and shoves the BALL
+-- backward along its heading -- a real cannon recoil that nudges its path.
+function BallHero:shoot_cannonball(s)
+  if self.stuck or self.returning then return end
+  local arena  = main.current
+  if not arena then return end
+  local target = arena:get_nearest_brick_within(self.x, self.y, s.range or 150)
+  if not target then return end
+
+  local hx, hy = self.x, self.y
+  local ang    = math.atan2(target.y - hy, target.x - hx)
+  self.aim_want = ang   -- snap the barrel onto the shot
+  -- Blast damage read live so charge / ally / loadout buffs apply per shell.
+  local dmg     = self:current_dmg()*(s.blast_mult or 1.7)
+  local bombard = ((self.level or 1) >= 3) and (s.bombard or 4) or 0
+  local color   = self.color
+  -- Box2D world is locked during collision callbacks; spawn the shell next frame.
+  arena.t:after(0, function()
+    if arena.main and arena.main.world then
+      Projectile{
+        group        = arena.main,
+        x = hx, y = hy, r = ang,
+        type         = 'cannonball',
+        dmg          = dmg,
+        speed        = s.ball_speed or 150,
+        blast_radius = s.blast_radius or 56,
+        bombard      = bombard,
+        color        = color,
+      }
+    end
+  end)
+
+  -- Recoil: kick the ball backward along its heading (normalize_speed restores
+  -- the magnitude next frame, so the kick mostly shoves the heading off-axis).
+  if self.body then
+    local vx, vy = self:get_velocity()
+    if vx then
+      local kick = s.recoil or 90
+      self:set_velocity(vx - math.cos(ang)*kick, vy - math.sin(ang)*kick)
+    end
+  end
+
+  -- Muzzle feedback: recoil + flash timer, smoke from the muzzle, a pop + thud.
+  self.cannon_recoil_t = 0.22
+  self.spring:pull(0.12)
+  local mx, my = hx + math.cos(ang)*self.r_size*2.2, hy + math.sin(ang)*self.r_size*2.2
+  for _ = 1, 4 do
+    SmokePuff{group = arena.effects, x = mx, y = my,
+              color = Color(0.34, 0.32, 0.30, 1), rs = random:float(2, 4), alpha = random:float(0.3, 0.5),
+              vx = math.cos(ang)*random:float(20, 60) + random:float(-10, 10),
+              vy = math.sin(ang)*random:float(20, 60) + random:float(-10, 10),
+              duration = random:float(0.35, 0.6)}
+  end
+  shoot1:play{volume = 0.3, pitch = random:float(0.7, 0.85)}
 end
 
 
@@ -1354,6 +1687,18 @@ function BallHero:update(dt)
 
   local arena = main.current
 
+  -- Mitosis: the grow-in (a budding daughter cell scaling up) and decay (a
+  -- dying clone) timers advance every frame regardless of state, so the
+  -- division + rot animation stays smooth. See begin_mitosis_grow/decay.
+  if self.mitosis_grow_t then
+    self.mitosis_grow_t = self.mitosis_grow_t + dt
+    if self.mitosis_grow_t >= (self.mitosis_grow_dur or 0.35) then self.mitosis_grow_t = nil end
+  end
+  if self.mitosis_decay_t then
+    self.mitosis_decay_t = self.mitosis_decay_t - dt
+    if self.mitosis_decay_t <= 0 then self:mitosis_die(); return end
+  end
+
   -- Crescent skin (swordsman): bank the slash arc into the travel direction
   -- with a smooth turn; while stuck it eases back to pointing up, ready for
   -- the launch. cleave_flash_t drives the full slash-ring flash in draw.
@@ -1481,6 +1826,44 @@ function BallHero:update(dt)
     end
   end
 
+  -- Bomber skin: advance the idle clock, ramp the core telegraph toward the next
+  -- plant, and decay the recoil-squash.
+  if self.stats.skin == 'bomber' then
+    self.bomber_t      = (self.bomber_t or 0) + dt
+    self.bomber_fuse_t = math.min(self.stats.cd or 7, (self.bomber_fuse_t or 0) + dt)
+    if (self.bomber_recoil_t or 0) > 0 then self.bomber_recoil_t = self.bomber_recoil_t - dt end
+  end
+
+  -- Engineer skin: advance the idle clock and the cog-ring rotation (whipped fast
+  -- for a beat on each deploy), and decay the deploy flash.
+  if self.stats.skin == 'engineer' then
+    self.eng_t = (self.eng_t or 0) + dt
+    local gspeed = 1.6
+    if (self.eng_deploy_t or 0) > 0 then self.eng_deploy_t = self.eng_deploy_t - dt; gspeed = 10 end
+    self.eng_gear_a = (self.eng_gear_a or 0) + gspeed*dt
+  end
+
+  -- Stormweaver skin: advance the idle clock + spoke-ring spin and decay the
+  -- discharge flare. The spokes + sparks crackle on the init timer; here we just
+  -- run the clocks the draw reads.
+  if self.stats.skin == 'stormweaver' then
+    self.storm_t   = (self.storm_t or 0) + dt
+    self.arc_phase = (self.arc_phase or 0) + 1.4*dt
+    if (self.cast_flash_t or 0) > 0 then self.cast_flash_t = self.cast_flash_t - dt end
+  end
+
+  -- Cannon skin (cannoneer): swivel the heavy barrel toward the latest target
+  -- (eases back to up while stuck), advance the heat clock, decay the recoil
+  -- kick + muzzle flash. The barrel turns a touch slower than the crossbow.
+  if self.stats.skin == 'cannon' then
+    self.cannon_t = (self.cannon_t or 0) + dt
+    if (self.cannon_recoil_t or 0) > 0 then self.cannon_recoil_t = self.cannon_recoil_t - dt end
+    local want = self.stuck and -math.pi/2 or (self.aim_want or -math.pi/2)
+    local diff = math.loop(want - (self.aim_a or 0), 2*math.pi)
+    if diff > math.pi then diff = diff - 2*math.pi end
+    self.aim_a = (self.aim_a or 0) + diff*math.min(1, 8*dt)
+  end
+
   if self.stuck then
     self:update_stuck(dt)
     return
@@ -1525,6 +1908,65 @@ function BallHero:update(dt)
       local sp = math.sqrt(vx*vx + vy*vy)
       local na = math.atan2(vy, vx) + self.jester_weave_amp*math.sin(self.jester_weave_t)*dt
       self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+    end
+  end
+
+  -- Bomber heavy lean: add a gentle downward "weight" to its velocity each frame so
+  -- its arcs droop like a heavy object (its signature lumbering trajectory).
+  -- normalize_speed re-corrects the magnitude next frame, so only the heading sags.
+  if self.stats.skin == 'bomber' and self.body then
+    local vx, vy = self:get_velocity()
+    if vx then self:set_velocity(vx, vy + (self.bomber_gravity or 25)*dt) end
+  end
+
+  -- Engineer hover: a gentle, regular perpendicular bob so it reads as a hovering
+  -- drone holding a steady heading -- mechanical, not chaotic like the jester weave.
+  if self.stats.skin == 'engineer' and self.body then
+    local vx, vy = self:get_velocity()
+    if vx and (vx ~= 0 or vy ~= 0) then
+      local sp = math.sqrt(vx*vx + vy*vy)
+      local na = math.atan2(vy, vx) + math.sin((self.eng_t or 0)*4)*0.6*dt
+      self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+    end
+  end
+
+  -- Cannon heavy lob: a stronger downward "weight" than the bomber so its arcs sag
+  -- like a hurled siege ball -- its signature ponderous trajectory. normalize_speed
+  -- re-corrects the magnitude next frame, so only the heading droops.
+  if self.stats.skin == 'cannon' and self.body then
+    local vx, vy = self:get_velocity()
+    if vx then self:set_velocity(vx, vy + (self.cannon_gravity or 32)*dt) end
+  end
+
+  -- Stormweaver erratic crackle: the heading stutters along a fast, sign-flipping
+  -- wobble (a product of two out-of-phase sines -> chaotic but bounded + mean-zero,
+  -- so it never drifts and -- being direction-only -- never fights normalize_speed).
+  -- Reads as a nervous, arcing path rather than the jester's smooth weave. Each new
+  -- bounce also scrambles the heading a touch and pops a crackle, so ricochets feel
+  -- electric and unpredictable (its bouncy, static-discharge signature).
+  if self.stats.skin == 'stormweaver' and self.body then
+    local vx, vy = self:get_velocity()
+    if vx and (vx ~= 0 or vy ~= 0) then
+      local sp  = math.sqrt(vx*vx + vy*vy)
+      local amp = self.stats.zigzag or 7.0
+      local wob = math.sin((self.storm_t or 0)*23)*math.sin((self.storm_t or 0)*7.3 + 1.7)
+      local na  = math.atan2(vy, vx) + amp*wob*dt
+      self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+    end
+    if (self.bounces or 0) ~= (self._storm_last_bounces or 0) then
+      self._storm_last_bounces = self.bounces or 0
+      local vx2, vy2 = self:get_velocity()
+      if vx2 and (vx2 ~= 0 or vy2 ~= 0) then
+        local sp2 = math.sqrt(vx2*vx2 + vy2*vy2)
+        local na2 = math.atan2(vy2, vx2) + random:float(-1, 1)*(self.stats.bounce_scramble or 0.7)
+        self:set_velocity(math.cos(na2)*sp2, math.sin(na2)*sp2)
+      end
+      self.spring:pull(0.08)
+      for _ = 1, 3 do
+        local a = random:float(0, 2*math.pi)
+        StormSpark{group = main.current.effects, x = self.x, y = self.y, color = self.color,
+                   vx = math.cos(a)*random:float(30, 80), vy = math.sin(a)*random:float(30, 80)}
+      end
     end
   end
 
@@ -1687,6 +2129,93 @@ function BallHero:launch_from_stuck(angle)
 end
 
 
+-- ----- Mitosis loadout: cell division -----
+-- A live "cell" (hero ball) divides on a brick kill: a daughter cell grows out
+-- of it (begin_mitosis_grow), the two diverge, and one of them — chosen at
+-- random — is the non-viable daughter that decays and dies (begin_mitosis_decay
+-- -> draw_mitosis_cell -> mitosis_die). Driven by BallPit:mitosis_on_kill.
+
+function BallHero:mitosis_grow_factor()
+  if not self.mitosis_grow_t then return 1 end
+  local f = math.clamp(self.mitosis_grow_t/(self.mitosis_grow_dur or 0.35), 0, 1)
+  return math.clamp(f*(2 - f), 0.05, 1)   -- ease-out so it pops into being
+end
+
+
+function BallHero:mitosis_decay_factor()
+  if not (self.mitosis_decay_t and self.mitosis_decay_max) then return 1 end
+  return math.clamp(self.mitosis_decay_t/self.mitosis_decay_max, 0, 1)
+end
+
+
+function BallHero:begin_mitosis_grow(dur)
+  self.mitosis_grow_t   = 0
+  self.mitosis_grow_dur = dur or 0.35
+  self.spring:pull(0.45)
+end
+
+
+-- Mark this body as the non-viable daughter: it becomes a decaying cell and
+-- dies when the countdown runs out.
+function BallHero:begin_mitosis_decay(life)
+  self.is_clone          = true
+  self.mitosis_clone     = true
+  self.mitosis_decay_max = life or 2.5
+  self.mitosis_decay_t   = life or 2.5
+end
+
+
+-- The decaying cell ruptures: a small cytoplasm/spore burst, then it despawns.
+function BallHero:mitosis_die()
+  if self.dead then return end
+  local arena = main.current
+  local fx    = arena and arena.effects
+  if fx then
+    spawn_burst(fx, self.x, self.y, self.color, 6, 40, 90)
+    for _ = 1, 4 do
+      SporeMote{group = fx, x = self.x, y = self.y, color = self.color,
+        vx = random:float(-45, 45), vy = random:float(-45, 45),
+        rs = random:float(1, 2.4), alpha = 0.6, duration = random:float(0.3, 0.6)}
+    end
+  end
+  if self.body then self.body:setActive(false) end
+  self.dead = true
+  if arena and arena.heroes then
+    for i = #arena.heroes, 1, -1 do
+      if arena.heroes[i] and arena.heroes[i].dead then table.remove(arena.heroes, i) end
+    end
+  end
+end
+
+
+-- Draw a Mitosis clone as a living cell: a translucent membrane around a
+-- cytoplasm blob with a drifting nucleus. `grow` (0..1) scales it up as it buds
+-- in; `decay` (1..0) shrinks + dulls it and ramps a death wobble, so the cell
+-- visibly rots over its countdown before mitosis_die ruptures it.
+function BallHero:draw_mitosis_cell(grow, decay)
+  grow  = grow or 1
+  decay = decay or 1
+  local t  = love.timer.getTime()
+  local c  = self.color
+  local k  = decay
+  local rs = self.r_size*grow*(0.55 + 0.45*k)
+  if rs < 0.5 then return end
+  local jit    = (1 - k)*1.8                 -- death wobble grows as it rots
+  local px, py = self.x + math.sin(t*23)*jit, self.y + math.cos(t*19)*jit
+  local cyto = Color(c.r, c.g, c.b, 0.40 + 0.30*k)
+  local mem  = Color(c.r, c.g, c.b, 0.30 + 0.45*k)
+  local nuc  = Color(c.r*0.5, c.g*0.5, c.b*0.5, 0.75*k + 0.15)
+  graphics.circle(px, py, rs + 0.5, bg[-2])
+  graphics.circle(px, py, rs, cyto)
+  graphics.circle(px, py, rs + 1.2, mem, 1)            -- soft membrane ring
+  graphics.circle(px + math.sin(t*3)*rs*0.2, py + math.cos(t*2.3)*rs*0.2, rs*0.4, nuc)
+  if k < 0.3 then
+    local f = 0.4 + 0.6*math.abs(math.sin(t*26))       -- flickering rupture halo
+    graphics.circle(px, py, rs*1.35, Color(0.12, 0.12, 0.12, 0.4*f*(1 - k/0.3)), 1)
+  end
+end
+
+
 function BallHero:draw()
   -- Cannon mortar: the ball is "out of the screen" — a ground shadow stays at
   -- (x, y) while the ball draws above it, scaled up with height, so the
@@ -1704,6 +2233,21 @@ function BallHero:draw()
                     math.max(1, self.r_size*scale*0.35), fg[5])
     return
   end
+
+  -- Mitosis decaying clone: drawn as a dividing/decaying cell (not the hero
+  -- skin), wobbling harder as it dies — see draw_mitosis_cell.
+  if self.mitosis_clone then
+    self:draw_mitosis_cell(self:mitosis_grow_factor(), self:mitosis_decay_factor())
+    if main.current.show_hero_labels then
+      graphics.print_centered(self.character:sub(1, 3), pixul_font, self.x, self.y - self.r_size - 6, 0, 1, 1, 0, 0, fg[0])
+    end
+    return
+  end
+
+  -- Freshly-budded daughter cell: scale the whole body up from a point so it
+  -- "grows" out of its parent (mitosis) instead of popping in.
+  local grow = self:mitosis_grow_factor()
+  if grow < 1 then graphics.push(self.x, self.y, 0, grow, grow) end
 
   self.spring:pull(0)
   local s = self.spring.x
@@ -1736,11 +2280,29 @@ function BallHero:draw()
     -- Jester: a bouncy harlequin orb in a spinning diamond-checker, crowned with
     -- a bell-tipped fool's cap; shimmering motley aura, confetti, cap-flash on cast.
     self:draw_jester(s)
+  elseif self.stats.skin == 'bomber' then
+    -- Bomber: a dark vented reactor core around a molten plasma center; rotating
+    -- vent seams, crackling energy arcs, core swells toward the next plant.
+    self:draw_bomb(s)
+  elseif self.stats.skin == 'engineer' then
+    -- Engineer: a gear-core fabricator drone with a rotating cog ring + scanning
+    -- sensor eye; spins up + flashes on each turret deploy.
+    self:draw_engineer(s)
+  elseif self.stats.skin == 'stormweaver' then
+    -- Stormweaver: a caged-lightning orb -- a white-hot nucleus, crackling rim
+    -- arcs and a breathing static aura; flares + discharges chain bolts on cast.
+    self:draw_stormweaver(s)
+  elseif self.stats.skin == 'cannon' then
+    -- Cannoneer: an iron siege mortar -- heavy base + a swiveling barrel that
+    -- recoils + muzzle-flashes on fire, with a reload ember and a heat-haze aura.
+    self:draw_cannon(s)
   else
     graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
     graphics.circle(self.x - self.r_size*0.3, self.y - self.r_size*0.3, math.max(1, self.r_size*0.35), fg[5])
   end
+
+  if grow < 1 then graphics.pop() end
 
   if main.current.show_hero_labels then
     graphics.print_centered(self.character:sub(1, 3), pixul_font, self.x, self.y - self.r_size - 6, 0, 1, 1, 0, 0, fg[0])
@@ -2150,6 +2712,243 @@ function BallHero:draw_jester(s)
 
   -- A little white grin so it reads as a face.
   graphics.arc('open', bx, by + rs*scale*0.15, rs*scale*0.5, math.pi*0.15, math.pi*0.85, Color(1, 1, 1, 0.85), 1.5)
+end
+
+
+-- Rebuild the stormweaver's jagged rim spokes (called on the crackle timer in
+-- init). Each spoke is a short midpoint-displaced fork springing from the body
+-- rim outward, stored relative to centre and offset at draw time. They lengthen
+-- while a discharge flare is active (cast_flash_t), so the cage of lightning
+-- snaps wider on each cast.
+function BallHero:gen_storm_bolts()
+  local flare = math.clamp((self.cast_flash_t or 0)/0.22, 0, 1)
+  local n     = 5
+  self.storm_bolts = {}
+  for i = 1, n do
+    local a  = (self.arc_phase or 0) + (i - 1)*2*math.pi/n + random:float(-0.35, 0.35)
+    local r0 = self.r_size*0.9
+    local r1 = self.r_size*(1.5 + random:float(0, 0.7) + flare*1.4)
+    local x0, y0 = math.cos(a)*r0, math.sin(a)*r0
+    local x1, y1 = math.cos(a)*r1, math.sin(a)*r1
+    local mx, my = (x0 + x1)/2, (y0 + y1)/2
+    local k  = random:float(-r1*0.3, r1*0.3)
+    mx = mx + math.cos(a + math.pi/2)*k
+    my = my + math.sin(a + math.pi/2)*k
+    self.storm_bolts[i] = {x0, y0, mx, my, x1, y1}
+  end
+end
+
+
+-- The stormweaver's caged-lightning body: a breathing static aura, a ring of
+-- crackling arc-spokes (rebuilt each tick in gen_storm_bolts), the electric
+-- shell, a white-hot nucleus that pulses with the idle clock and flares to pure
+-- white on each discharge (cast_flash_t), and two electron sparks orbiting the
+-- core. Physics body underneath is the same r_size circle, so bounces are unchanged.
+function BallHero:draw_stormweaver(s)
+  s = s or 1
+  local rs    = self.r_size
+  local c     = self.color
+  local t     = self.storm_t or 0
+  local flare = math.clamp((self.cast_flash_t or 0)/0.22, 0, 1)
+  local hot   = Color(math.min(1, c.r*0.4 + 0.6), math.min(1, c.g*0.4 + 0.6), math.min(1, c.b*0.3 + 0.7), 1)
+
+  -- Static aura: a soft disc that breathes and flares on a discharge.
+  local breathe = 0.5 + 0.5*math.sin(t*3.0)
+  graphics.circle(self.x, self.y, rs*(1.8 + 0.25*breathe) + flare*9,
+                  Color(c.r, c.g, c.b, 0.10 + 0.05*breathe + flare*0.22))
+
+  -- Discharge ring: a bright ring snaps out + fades on each cast.
+  if flare > 0.01 then
+    graphics.circle(self.x, self.y, rs + 5 + (1 - flare)*26, Color(hot.r, hot.g, hot.b, flare*0.55), 2)
+  end
+
+  -- Crackling rim spokes (offset from centre to the body position), coloured glow
+  -- with a hot inner streak on the first leg.
+  local bcol = Color(c.r, c.g, c.b, 0.55 + flare*0.45)
+  local ccol = Color(hot.r, hot.g, hot.b, 0.7 + flare*0.3)
+  for _, b in ipairs(self.storm_bolts or {}) do
+    graphics.line(self.x + b[1], self.y + b[2], self.x + b[3], self.y + b[4], bcol, 1.5)
+    graphics.line(self.x + b[3], self.y + b[4], self.x + b[5], self.y + b[6], bcol, 1.5)
+    graphics.line(self.x + b[1], self.y + b[2], self.x + b[3], self.y + b[4], ccol, 1)
+  end
+
+  -- Body shell + outline.
+  graphics.circle(self.x, self.y, rs*s + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*s, c)
+
+  -- White-hot nucleus: pulses with the idle clock, swells + whitens on discharge.
+  local core_r = rs*(0.38 + 0.10*math.sin(t*6.0)) + flare*rs*0.5
+  graphics.circle(self.x, self.y, math.max(1, core_r), Color(hot.r, hot.g, hot.b, 0.9))
+  graphics.circle(self.x, self.y, math.max(0.6, core_r*0.5), Color(1, 1, 1, 0.85 + flare*0.15))
+
+  -- Two electron sparks orbiting the nucleus (extra emission + animation).
+  for i = 0, 1 do
+    local oa  = t*5.0 + i*math.pi
+    local orr = rs*(0.95 + 0.15*math.sin(t*4 + i))
+    graphics.circle(self.x + math.cos(oa)*orr, self.y + math.sin(oa)*orr, 1.1, Color(hot.r, hot.g, hot.b, 0.8))
+  end
+end
+
+
+-- The cannoneer's siege-mortar body: a heavy iron base carrying a thick barrel
+-- that swivels to the nearest brick (aim_a). A reload ember at the muzzle
+-- brightens as the cooldown fills; on fire the barrel recoils backward along its
+-- axis and a muzzle flash blooms (cannon_recoil_t). The physics body underneath is
+-- the same r_size circle, so bounces are unchanged.
+function BallHero:draw_cannon(s)
+  s = s or 1
+  local rs = self.r_size
+  local a  = self.aim_a or -math.pi/2
+  local c  = self.color
+
+  -- Reload progress 0..1 from the attack cooldown trigger.
+  local prog = 1
+  local tr   = self.t.triggers and self.t.triggers.attack
+  if tr and tr.delay and tr.delay > 0 then
+    prog = math.clamp(tr.timer/(tr.delay*(tr.multiplier or 1)), 0, 1)
+  end
+
+  -- Heat-haze aura: brightens as the next shell loads, pulses when ready.
+  local glow = 0.08 + 0.18*prog
+  if prog >= 1 then glow = 0.28 + 0.12*math.sin(love.timer.getTime()*6) end
+  graphics.circle(self.x, self.y, rs*1.7, Color(c.r, c.g, c.b, glow))
+
+  -- Iron base (the ball body) with a coloured rim + metal highlight.
+  graphics.circle(self.x, self.y, rs + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*s, Color(0.26, 0.24, 0.26, 1))
+  graphics.circle(self.x, self.y, rs*s, c, 1)
+  graphics.circle(self.x - rs*0.32, self.y - rs*0.32, math.max(1, rs*0.3), fg[5])
+
+  -- Barrel: a thick tube along the aim, sliding back into recoil on fire.
+  graphics.push(self.x, self.y, a, s, s)
+    local kick = 0
+    if (self.cannon_recoil_t or 0) > 0 then kick = -(self.cannon_recoil_t/0.22)*rs*0.7 end
+    local x0  = self.x + kick   -- local frame: +x is the aim direction
+    local y0  = self.y
+    local len = rs*2.0
+    local bw  = rs*0.95
+    -- Tube + dark outline.
+    graphics.rectangle(x0 + len*0.5, y0, len, bw, 2, 2, Color(0.22, 0.20, 0.22, 1))
+    graphics.rectangle(x0 + len*0.5, y0, len, bw, 2, 2, bg[-2], 1)
+    -- Reinforcing band near the breech.
+    graphics.rectangle(x0 + rs*0.5, y0, rs*0.35, bw + 1.5, 1, 1, Color(0.32, 0.30, 0.32, 1))
+    -- Muzzle ring at the front.
+    local mx = x0 + len
+    graphics.circle(mx, y0, bw*0.6, Color(0.12, 0.11, 0.12, 1))
+    graphics.circle(mx, y0, bw*0.6, c, 1)
+    -- Muzzle flash on fire, or a reload ember glowing as the shell loads.
+    local flash = math.clamp((self.cannon_recoil_t or 0)/0.22, 0, 1)
+    if flash > 0.01 then
+      graphics.circle(mx + rs*0.4, y0, rs*(0.5 + flash*1.2), Color(1, 0.85, 0.4, flash*0.9))
+      graphics.circle(mx + rs*0.2, y0, rs*(0.3 + flash*0.6), Color(1, 1, 0.8, flash))
+    else
+      graphics.circle(mx, y0, 1.6, Color(1, 0.6 + 0.3*prog, 0.3, 0.4 + 0.5*prog))
+    end
+  graphics.pop()
+end
+
+
+-- The bomber's "Demoman" body: a heavy iron bomb-sphere with a tumbling iron band
+-- + rivets, a glossy metal highlight and a lit fuse whose ember swells brighter as
+-- the next charge nears (bomber_fuse_t -> stats.cd). It breathes heavily, sinks +
+-- flattens in a recoil-squash for a beat after laying a bomb (bomber_recoil_t), and
+-- glows a heat-haze danger aura. The physics body underneath is the same r_size circle.
+-- The bomber's "reactor core" body: a dark vented casing with four glowing vent
+-- seams rotating around a molten plasma core (orange -> yellow -> white-hot). It
+-- pulses, crackles energy arcs off its shell, and swells brighter as the next
+-- charge nears (bomber_fuse_t -> stats.cd); on each plant it sinks in a
+-- recoil-squash (bomber_recoil_t). The physics body underneath is the same r_size
+-- circle, so bounces are unchanged.
+function BallHero:draw_bomb(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local t  = self.bomber_t or 0
+  local recoil = math.clamp((self.bomber_recoil_t or 0)/0.32, 0, 1)
+  local fuse_k = math.clamp((self.bomber_fuse_t or 0)/(self.stats.cd or 7), 0, 1)
+  local pulse  = 0.5 + 0.5*math.sin(t*5)
+
+  -- Recoil sink + a slow heavy breathe.
+  local breathe = 1 + 0.03*math.sin(t*2)
+  local sc = s*(1 + recoil*0.18)*breathe
+  local cx = self.x
+  local by = self.y + recoil*rs*0.4
+
+  -- Plasma aura that swells with the core pulse + toward the next plant.
+  graphics.circle(cx, by, rs*(1.55 + 0.3*pulse)*sc + fuse_k*8,
+                  Color(c.r, c.g*0.55, c.b*0.3, 0.10 + 0.06*pulse + fuse_k*0.12))
+
+  -- Dark reactor casing.
+  graphics.circle(cx, by, rs*sc + 1.5, bg[-2])
+  graphics.circle(cx, by, rs*sc, Color(0.11, 0.10, 0.13, 1))
+
+  -- Four glowing vent seams, slowly rotating; brighter with pulse + charge.
+  local a0   = t*0.5
+  local seam = Color(c.r, c.g*0.8, c.b*0.4, 0.5 + 0.3*pulse + fuse_k*0.2)
+  for i = 0, 3 do
+    local a = a0 + i*math.pi/2
+    graphics.arc('open', cx, by, rs*0.78*sc, a + 0.3, a + 1.15, seam, 2.2)
+  end
+
+  -- Molten core: orange -> yellow -> white-hot, swelling with pulse + charge.
+  graphics.circle(cx, by, rs*(0.5 + 0.12*pulse + fuse_k*0.12)*sc, Color(c.r, c.g, c.b, 0.92))
+  graphics.circle(cx, by, rs*(0.30 + 0.10*pulse)*sc, Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.95))
+  graphics.circle(cx, by, rs*0.14*sc, Color(1, 1, 1, 0.95))
+
+  -- Energy arcs crackling off the shell (time-driven, no RNG; livelier as it charges).
+  for i = 1, 2 do
+    local seed = t*(7.3 + i*2.1) + i*2.0
+    if math.sin(seed*3.1) > (0.35 - fuse_k*0.5) then
+      local a  = seed
+      local r1 = rs*0.6*sc
+      local r2 = rs*(1.1 + 0.4*(0.5 + 0.5*math.sin(seed*5)))*sc
+      graphics.line(cx + math.cos(a)*r1, by + math.sin(a)*r1,
+                    cx + math.cos(a)*r2, by + math.sin(a)*r2,
+                    Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.75), 1.5)
+    end
+  end
+end
+
+
+-- The engineer's "Builder" body: a fabricator drone -- a dark gear-core ringed with
+-- rotating cog teeth around a glowing sensor "eye" lens that scans. A mechanical
+-- glow aura breathes; the cog ring whips fast and the body flashes + pops for a beat
+-- on each turret deploy (eng_deploy_t). Same r_size physics circle underneath.
+function BallHero:draw_engineer(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local t  = self.eng_t or 0
+  local ga = self.eng_gear_a or 0
+  local deploy = math.clamp((self.eng_deploy_t or 0)/0.3, 0, 1)
+  local pulse  = 0.5 + 0.5*math.sin(t*4)
+  local sc = s*(1 + deploy*0.18)
+
+  -- Mechanical glow aura (flares on a deploy).
+  graphics.circle(self.x, self.y, rs*(1.4 + 0.15*pulse)*sc + deploy*6,
+                  Color(c.r, c.g*0.6, c.b*0.3, 0.08 + 0.05*pulse + deploy*0.18))
+
+  -- Cog teeth ring: 8 stubby teeth radiating from the rim, rotating on ga.
+  for i = 0, 7 do
+    local a  = ga + i*math.pi/4
+    local tr = rs*1.0*sc
+    local tx = self.x + math.cos(a)*tr
+    local ty = self.y + math.sin(a)*tr
+    graphics.push(tx, ty, a, 1, 1)
+      graphics.rectangle(tx, ty, rs*0.55*sc, rs*0.3*sc, 1, 1, Color(c.r*0.55, c.g*0.45, c.b*0.30, 1))
+    graphics.pop()
+  end
+
+  -- Dark gear body + inner metal ring.
+  graphics.circle(self.x, self.y, rs*sc + 1, bg[-2])
+  graphics.circle(self.x, self.y, rs*sc, Color(0.15, 0.14, 0.16, 1))
+  graphics.circle(self.x, self.y, rs*0.72*sc, Color(c.r*0.4, c.g*0.33, c.b*0.26, 1), 1.5)
+
+  -- Central sensor eye/lens: a glowing orange core that scans (brightness pulse),
+  -- white-hot on a deploy.
+  graphics.circle(self.x, self.y, rs*(0.42 + 0.06*pulse)*sc, Color(c.r, c.g, c.b, 0.85 + deploy*0.15))
+  graphics.circle(self.x, self.y, rs*0.24*sc, Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.95))
+  graphics.circle(self.x, self.y, rs*0.11*sc, Color(1, 1, 1, 0.9))
 end
 
 

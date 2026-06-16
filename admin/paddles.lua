@@ -75,8 +75,8 @@ PADDLES.defs = {
     xp = 1.4, combo = 1.3, hp = 4, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'vagrant'},
     signature = 'mitosis', sig = {clone_life = 2.5, clone_cap = 10},
-    blurb = 'Every kill splits off a short-lived clone ball.',
-    sig_blurb = 'lost hero types regrow on their own',
+    blurb = 'Every kill makes a ball divide in two like a splitting cell.',
+    sig_blurb = 'one daughter cell decays away; lost types regrow',
   },
   hive = {
     id = 'hive', name = 'Hive', price = 750, color_key = 'orange',
@@ -241,7 +241,11 @@ function BallPit:setup_signature()
 end
 
 
--- Mitosis: a brick kill splits off a temporary clone of a random live hero.
+-- Mitosis: a brick kill makes a live "cell" (hero ball) DIVIDE — a daughter
+-- cell grows out of it at its position, the two diverge, and one of the pair
+-- (chosen at random) is the non-viable daughter that decays and dies. The cell
+-- lifecycle/visuals live on BallHero (begin_mitosis_grow / begin_mitosis_decay
+-- / draw_mitosis_cell / mitosis_die); regrow covers a fully-lost variant.
 -- Deferred a frame — on_brick_killed can fire inside a Box2D contact callback
 -- and body creation there would crash (same reason Brick:die defers its XpOrb).
 function BallPit:mitosis_on_kill()
@@ -256,20 +260,45 @@ function BallPit:mitosis_on_kill()
       end
     end
     if clones >= (sig.clone_cap or 10) or #live == 0 then return end
-    local src = live[random:int(1, #live)]
-    local c = self:add_hero(src.character, {clone = true})
-    c.is_clone = true
-    c.level    = src.level
-    c.dmg      = src.dmg
-    self.t:after(sig.clone_life or 2.5, function()
-      if c and not c.dead then
-        if c.body then c.body:setActive(false) end
-        c.dead = true
-      end
-      for i = #self.heroes, 1, -1 do
-        if self.heroes[i] and self.heroes[i].dead then table.remove(self.heroes, i) end
-      end
-    end)
+    -- Only a cell that's actually in play can divide (not caught/serving).
+    local pool = {}
+    for _, h in ipairs(live) do
+      if not (h.stuck or h.returning or h.serving or h.mortar) then pool[#pool + 1] = h end
+    end
+    if #pool == 0 then return end
+    local src = pool[random:int(1, #pool)]
+
+    -- Grow a daughter cell OUT of the source at its position (no teleport-in).
+    local bud = self:add_hero(src.character, {clone = true})
+    bud.is_clone        = true
+    bud.mitosis_spawned = true   -- skip the default launch-from-paddle
+    bud.level           = src.level
+    bud.dmg             = src.dmg
+    if bud.body then bud.body:setActive(true) end
+    bud:set_position(src.x, src.y)
+    bud:begin_mitosis_grow()
+
+    -- The two cells split apart along a random axis (equal, opposite pushes).
+    local ang = random:float(0, 2*math.pi)
+    local sp  = (src.base_speed or 120)*(src.speed_mult or 1)
+    src:set_velocity(math.cos(ang)*sp, math.sin(ang)*sp)
+    bud:set_velocity(-math.cos(ang)*sp, -math.sin(ang)*sp)
+    src.spring:pull(0.4)
+
+    -- One of the pair is the non-viable daughter that decays + dies; the other
+    -- stays as the persistent cell. Which is which is chosen at random.
+    local decayer, survivor
+    if random:bool(50) then decayer, survivor = bud, src
+    else                    decayer, survivor = src, bud end
+    survivor.is_clone      = false
+    survivor.mitosis_clone = nil
+    survivor.mitosis_decay_t = nil
+    decayer:begin_mitosis_decay(sig.clone_life or 2.5)
+
+    -- Division flourish at the split point.
+    spawn_burst(self.effects, src.x, src.y, src.color, 5, 30, 70)
+    TelegraphRing{group = self.effects, x = src.x, y = src.y,
+                  radius = (src.r_size or 6)*2.4, color = src.color, duration = 0.3}
   end)
 end
 

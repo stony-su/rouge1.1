@@ -41,10 +41,24 @@ function Projectile:init(args)
     self.spin_speed = 20*(self.orbit_vr >= 0 and 1 or -1)
     self.btrail     = {}
     self._tr_t      = 0
+    -- Dissolve-out state: instead of popping out at end-of-life, the shard fades
+    -- + shrinks over fade_dur (see the end-of-life timer + draw_spellblade_shard).
+    self.fade       = 1
+    self.fade_dur   = 0.28
+  end
+  -- Cannonball (SNKRX cannoneer port): a heavy iron shell that DETONATES into a
+  -- splash on the first thing it touches (brick or wall) instead of piercing.
+  -- blast_radius + dmg (= the blast damage) drive the explosion; bombard schedules
+  -- the level-3 aftershocks. It tumbles + sheds gunsmoke as it flies (see update).
+  if self.type == 'cannonball' then
+    self.cball_spin = random:float(0, 2*math.pi)
+    self._smoke_t   = 0
   end
   -- Wall-sticking bolts live long enough to cross the arena and spend their
   -- ricochets; they end at a wall (or the open pit), not on a timer.
-  self.life     = self.life or (self.wall_stick and 6 or 1.5)
+  -- Spellblade shards travel a shorter distance before dissolving (was 1.5s ->
+  -- ~300px at speed 200; now ~0.85s -> ~170px, fading out over the last fade_dur).
+  self.life     = self.life or (self.wall_stick and 6 or (self.type == 'spellblade' and 0.85 or 1.5))
   self.hits     = {}
 
   self:set_as_circle(2, 'dynamic', 'projectile')
@@ -57,7 +71,19 @@ function Projectile:init(args)
   self:set_velocity(math.cos(self.r)*self.speed, math.sin(self.r)*self.speed)
   self:set_angle(self.r)
 
-  self.t:after(self.life, function() self.dead = true end)
+  if self.type == 'spellblade' then
+    -- Dissolve instead of popping out of existence: hold full life, then fade +
+    -- shrink out over fade_dur, shedding a couple of arcane sparks as it breaks up.
+    self.t:after(math.max(0, self.life - self.fade_dur), function()
+      for _ = 1, 2 do
+        ArcaneSpark{group = main.current.effects, x = self.x, y = self.y, color = self.color,
+                    rs = random:float(2, 3), alpha = 0.6, spin = random:float(-8, 8), duration = self.fade_dur}
+      end
+      self.t:tween(self.fade_dur, self, {fade = 0}, math.linear, function() self.dead = true end)
+    end)
+  else
+    self.t:after(self.life, function() self.dead = true end)
+  end
 
   self.on_collision_enter = function(p, other, contact)
     if other and other.tag == 'brick' then
@@ -94,6 +120,23 @@ function Projectile:update(dt)
   end
 
   local arena = main.current
+
+  -- Cannonball: tumble, shed gunsmoke, and DETONATE the instant it reaches a
+  -- wall (projectiles don't physically collide with walls, so test the bounds).
+  if self.type == 'cannonball' then
+    self.cball_spin = (self.cball_spin or 0) + 6*dt
+    self._smoke_t   = (self._smoke_t or 0) + dt
+    if self._smoke_t >= 0.03 then
+      self._smoke_t = 0
+      SmokePuff{group = arena.effects, x = self.x, y = self.y,
+                color = Color(0.32, 0.30, 0.28, 1), rs = random:float(1.6, 3), alpha = random:float(0.2, 0.4),
+                vx = random:float(-8, 8), vy = random:float(-14, 4), duration = random:float(0.3, 0.6)}
+    end
+    if self.x <= arena.x1 + 2 or self.x >= arena.x2 - 2 or self.y <= arena.y1 + 2 then
+      self:cannon_explode()
+      return
+    end
+  end
 
   -- Homing: curve the heading toward the nearest brick (jester death-knives at
   -- level 3). Only the direction is rotated -- speed is preserved -- so the knife
@@ -149,6 +192,10 @@ function Projectile:draw()
     self:draw_spellblade_shard()
     return
   end
+  if self.type == 'cannonball' then
+    self:draw_cannonball()
+    return
+  end
   local r = self:get_angle() or 0
   graphics.push(self.x, self.y, r)
     if self.type == 'arrow' then
@@ -167,26 +214,34 @@ end
 -- independent of the travel direction so the spiral reads clearly.
 function Projectile:draw_spellblade_shard()
   local c = self.color
+  -- Dissolve factor (1 -> 0 over the last fade_dur of life): scales every alpha
+  -- and shrinks the blade so the shard melts away instead of popping out.
+  local f = self.fade or 1
   -- Curved trail (newest first): fading dots along the spiral path.
   for i, p in ipairs(self.btrail or {}) do
     local k = 1 - (i - 1)*0.15
-    graphics.circle(p.x, p.y, 2.4*k, Color(c.r, c.g, c.b, 0.5 - (i - 1)*0.075))
+    graphics.circle(p.x, p.y, 2.4*k*f, Color(c.r, c.g, c.b, (0.5 - (i - 1)*0.075)*f))
   end
   -- Soft glow.
-  graphics.circle(self.x, self.y, 4.5, Color(c.r, c.g, c.b, 0.28))
-  -- A 4-point blade: one long axis (the blade) and one short (the crossguard).
+  graphics.circle(self.x, self.y, 4.5*f, Color(c.r, c.g, c.b, 0.28*f))
+  -- A 4-point blade: one long axis (the blade) and one short (the crossguard);
+  -- both shrink toward the core as it dissolves.
+  local bl = 6.5*(0.4 + 0.6*f)
+  local cg = 3*(0.4 + 0.6*f)
   local a  = self.spin or 0
   local pa = a + math.pi/2
-  graphics.line(self.x - math.cos(a)*6.5, self.y - math.sin(a)*6.5,
-                self.x + math.cos(a)*6.5, self.y + math.sin(a)*6.5, c, 2)
-  graphics.line(self.x - math.cos(pa)*3, self.y - math.sin(pa)*3,
-                self.x + math.cos(pa)*3, self.y + math.sin(pa)*3, c, 1.5)
+  graphics.line(self.x - math.cos(a)*bl, self.y - math.sin(a)*bl,
+                self.x + math.cos(a)*bl, self.y + math.sin(a)*bl, Color(c.r, c.g, c.b, f), 2)
+  graphics.line(self.x - math.cos(pa)*cg, self.y - math.sin(pa)*cg,
+                self.x + math.cos(pa)*cg, self.y + math.sin(pa)*cg, Color(c.r, c.g, c.b, f), 1.5)
   -- White-hot core.
-  graphics.circle(self.x, self.y, 2, Color(1, 1, 1, 0.9))
+  graphics.circle(self.x, self.y, 2*f, Color(1, 1, 1, 0.9*f))
 end
 
 
 function Projectile:on_hit_brick(brick)
+  -- Cannonball: ignore the single target -- detonate into a splash that covers it.
+  if self.type == 'cannonball' then self:cannon_explode(); return end
   if self.hits[brick.id] then return end
   self.hits[brick.id] = true
   brick:take_damage(self.dmg, self.color)
@@ -262,4 +317,59 @@ function Projectile:on_hit_brick(brick)
   end
 
   self.dead = true
+end
+
+
+-- Cannonball detonation (SNKRX cannoneer Projectile:die -> Area, player.lua:2208).
+-- A wide flat-damage splash (do_splash deals the burst + ring + shake), a puff of
+-- gunsmoke, and -- at level 3 -- a short bombardment of weaker aftershocks that
+-- walk outward from the impact. dmg here is the full blast damage the caller baked
+-- (current_dmg * blast_mult). Safe to call from on_hit_brick (a collision callback):
+-- do_splash only flags bricks dead + spawns non-physics effects, never builds bodies.
+function Projectile:cannon_explode()
+  if self.exploded then return end
+  self.exploded = true
+  self.dead     = true
+  local arena = main.current
+  if not arena then return end
+  local radius = self.blast_radius or 56
+  local dmg    = self.dmg
+  local col    = self.color
+  arena:do_splash(self.x, self.y, radius, dmg, col)
+  explosion1:play{volume = 0.5, pitch = random:float(0.9, 1.0)}
+  for _ = 1, 6 do
+    SmokePuff{group = arena.effects, x = self.x + random:float(-radius*0.4, radius*0.4),
+              y = self.y + random:float(-radius*0.4, radius*0.4),
+              color = Color(0.30, 0.28, 0.26, 1), rs = random:float(3, 6), alpha = random:float(0.3, 0.5),
+              vx = random:float(-22, 22), vy = random:float(-44, -10), duration = random:float(0.5, 0.9)}
+  end
+  -- Level-3 bombardment: a few weaker blasts march outward over the next ~0.9s.
+  -- Driven off the ARENA timer (self.t dies with the projectile this frame).
+  local n = self.bombard or 0
+  if n > 0 then
+    for i = 1, n do
+      local bx = self.x + random:float(-44, 44)
+      local by = self.y + random:float(-44, 44)
+      arena.t:after(i*0.18, function()
+        local a = main.current
+        if not (a and a.world) then return end
+        a:do_splash(bx, by, radius*0.7, dmg*0.5, col)
+        explosion1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
+      end)
+    end
+  end
+end
+
+
+-- Heavy iron shell: a dark sphere ringed with a hot rim, a metal highlight, and a
+-- glowing fuse ember on top. The gunsmoke trail is shed in update.
+function Projectile:draw_cannonball()
+  local rs = 4.5
+  local c  = self.color
+  graphics.circle(self.x, self.y, rs + 1, bg[-2])
+  graphics.circle(self.x, self.y, rs, Color(0.18, 0.17, 0.19, 1))            -- iron body
+  graphics.circle(self.x, self.y, rs, Color(c.r, c.g, c.b, 0.5), 1)          -- hot rim
+  graphics.circle(self.x - rs*0.35, self.y - rs*0.35, rs*0.35, fg[5])        -- highlight
+  local e = 0.55 + 0.45*math.sin((self.cball_spin or 0)*3)                   -- fuse ember pulse
+  graphics.circle(self.x + rs*0.3, self.y - rs*0.85, 1.5, Color(1, 0.7, 0.3, e))
 end

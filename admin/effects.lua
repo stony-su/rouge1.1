@@ -207,77 +207,290 @@ function DotCloud:draw()
 end
 
 
--- BombDrop: blinks at its fuse rate, then explodes via arena:do_splash.
+-- BombDrop (bomber "reactor core" rework). A planted UNSTABLE CONTAINMENT CELL:
+-- a hexagonal casing with rotating containment brackets straining around a pulsing
+-- plasma core -- deliberately distinct from the bomber ball's round vented core.
+-- There is NO fuse countdown: it detonates the instant a brick drifts within
+-- trigger_radius (a proximity mine); a silent `fuse` lifetime only cleans up cells
+-- that are never touched, with no visible blink. The blast is the multi-stage
+-- ReactorBlast (implosion -> flash -> shockwaves -> radiating arcs).
 BombDrop = Object:extend()
 BombDrop:implement(GameObject)
 function BombDrop:init(args)
   self:init_game_object(args)
-  self.dmg     = self.dmg or 10
-  self.radius  = self.radius or 48
-  self.fuse    = self.fuse or 2
-  self.color   = self.color or orange[0]
-  self.elapsed = 0
+  self.dmg            = self.dmg or 20
+  self.radius         = self.radius or 60
+  self.fuse           = self.fuse or 8     -- SILENT cleanup lifetime (no visible countdown)
+  self.trigger_radius = self.trigger_radius or 16
+  self.color          = self.color or orange[0]
+  self.lvl3           = self.lvl3 or false
+  self.armed          = false              -- brief arming delay so it doesn't pop on the planter
+  self.exploded       = false
+  self.settle         = 1                  -- drop-and-settle squash on landing
+  self.spin           = random:float(0, 2*math.pi)
+  self.t:after(0.35, function() self.armed = true end)
   self.t:after(self.fuse, function() self:explode() end)
 end
 function BombDrop:update(dt)
   self:update_game_object(dt)
-  self.elapsed = self.elapsed + dt
+  self.settle = self.settle*(1 - math.min(1, 8*dt))   -- ease the landing squash out
+  self.spin   = self.spin + 1.2*dt
+  -- Proximity detonation: blow the instant a live brick enters trigger_radius.
+  if self.armed and not self.exploded then
+    local arena = main.current
+    if arena and arena.has_brick_within and arena:has_brick_within(self.x, self.y, self.trigger_radius) then
+      self:explode()
+    end
+  end
 end
 function BombDrop:draw()
-  -- Blink frequency ramps up as the fuse runs down.
-  local left = math.max(0.05, self.fuse - self.elapsed)
-  local hz   = math.clamp(3 + (self.fuse - left)*4, 3, 16)
-  local on   = math.floor(love.timer.getTime()*hz) % 2 == 0
-  local col  = on and self.color or fg[0]
-  graphics.circle(self.x, self.y, 4, col)
-  graphics.circle(self.x, self.y, 2, fg[5])
+  local c     = self.color
+  local t     = love.timer.getTime()
+  local pulse = 0.5 + 0.5*math.sin(t*6)
+  local rs    = self.lvl3 and 8 or 7
+  local sx    = 1 + self.settle*0.4
+  local sy    = 1 - self.settle*0.3
+  -- Faint steady blast-radius hint (NOT a countdown -- just reads the AoE).
+  graphics.circle(self.x, self.y, self.radius, Color(c.r, c.g, c.b, 0.05 + 0.03*pulse))
+  -- Hexagonal dark casing -- a distinct silhouette from the round bomber ball.
+  local hex = {}
+  for i = 0, 5 do
+    local a = self.spin + i*math.pi/3
+    hex[#hex+1] = self.x + math.cos(a)*rs*1.15*sx
+    hex[#hex+1] = self.y + math.sin(a)*rs*1.15*sy
+  end
+  graphics.polygon(hex, Color(0.10, 0.09, 0.12, 1))
+  graphics.polygon(hex, Color(c.r*0.55, c.g*0.45, c.b*0.30, 0.85), 1.5)
+  -- Rotating containment brackets (4 short arcs) straining around the core.
+  for i = 0, 3 do
+    local a = -self.spin*1.6 + i*math.pi/2
+    graphics.arc('open', self.x, self.y, rs*0.95, a + 0.2, a + 0.95,
+                 Color(c.r, c.g*0.7, c.b*0.35, 0.75), 2)
+  end
+  -- Unstable plasma core: orange -> yellow -> white-hot, pulsing.
+  graphics.circle(self.x, self.y, rs*(0.55 + 0.15*pulse), Color(c.r, c.g, c.b, 0.95))
+  graphics.circle(self.x, self.y, rs*(0.32 + 0.10*pulse), Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.95))
+  graphics.circle(self.x, self.y, rs*0.16, Color(1, 1, 1, 0.95))
 end
 function BombDrop:explode()
+  if self.exploded then return end
+  self.exploded = true
   local arena = main.current
   if arena then
-    arena:do_splash(self.x, self.y, self.radius, self.dmg, self.color)
+    ReactorBlast{group = arena.effects, x = self.x, y = self.y,
+                 radius = self.radius, dmg = self.dmg, color = self.color, lvl3 = self.lvl3}
   end
-  explosion1:play{volume = 0.4, pitch = random:float(0.9, 1.05)}
   self.dead = true
+end
+
+
+-- ReactorBlast: the bomber's intricate detonation (a reactor going critical). A
+-- multi-stage sequence rather than a single pop:
+--   1. implosion  -- a ring sucks inward + the core whites out (first 0.1s),
+--   2. detonation -- a white core flash, three staggered expanding shockwave rings,
+--      eight radiating energy spokes, and a spray of plasma debris + smoke,
+-- The AoE damage (do_splash) lands at the detonation beat; level 3 adds a delayed
+-- aftershock. Self-contained: BombDrop just spawns one of these and dies.
+ReactorBlast = Object:extend()
+ReactorBlast:implement(GameObject)
+function ReactorBlast:init(args)
+  self:init_game_object(args)
+  self.radius    = self.radius or 60
+  self.dmg       = self.dmg or 20
+  self.color     = self.color or orange[0]
+  self.lvl3      = self.lvl3 or false
+  self.age       = 0
+  self.detonated = false
+  self.t:after(0.1,  function() self:detonate() end)
+  self.t:after(0.85, function() self.dead = true end)
+end
+function ReactorBlast:detonate()
+  if self.detonated then return end
+  self.detonated = true
+  local arena = main.current
+  if not arena then return end
+  arena:do_splash(self.x, self.y, self.radius, self.dmg, self.color)
+  -- Plasma debris + smoke spray on top of the splash.
+  spawn_burst(arena.effects, self.x, self.y, self.color, 14, 90, 240)
+  spawn_burst(arena.effects, self.x, self.y, Color(yellow[0].r, yellow[0].g, yellow[0].b, 1), 8, 60, 180)
+  for _ = 1, 8 do
+    local a = random:float(0, 2*math.pi)
+    local sp = random:float(40, 120)
+    SmokePuff{group = arena.effects, x = self.x, y = self.y, color = Color(0.30, 0.28, 0.30, 1),
+              rs = random:float(3, 6), alpha = 0.4, vx = math.cos(a)*sp, vy = math.sin(a)*sp - 10,
+              duration = random:float(0.5, 0.9)}
+  end
+  camera:shake(self.lvl3 and 6 or 4, 0.3, 120)
+  explosion1:play{volume = 0.5, pitch = random:float(0.9, 1.05)}
+  -- Level-3 "Demoman": a second, smaller aftershock a beat later.
+  if self.lvl3 then
+    local x, y, r, d, col = self.x, self.y, self.radius*0.7, self.dmg*0.55, self.color
+    self.t:after(0.18, function()
+      if arena.main and arena.main.world then
+        arena:do_splash(x, y, r, d, col)
+        camera:shake(3, 0.2, 120)
+        explosion1:play{volume = 0.35, pitch = random:float(0.95, 1.1)}
+      end
+    end)
+  end
+end
+function ReactorBlast:update(dt)
+  self:update_game_object(dt)
+  self.age = self.age + dt
+end
+function ReactorBlast:draw()
+  local c = self.color
+  if not self.detonated then
+    -- Stage 1 -- implosion: a bright ring contracts inward + the core whites out.
+    local k  = math.clamp(self.age/0.1, 0, 1)
+    local rr = self.radius*0.6*(1 - k)
+    graphics.circle(self.x, self.y, math.max(0, rr), Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.5), 2)
+    graphics.circle(self.x, self.y, 3 + k*7, Color(1, 1, 1, 0.4 + 0.6*k))
+    return
+  end
+  -- Stage 2 -- detonation visuals over the remaining ~0.75s.
+  local k = math.clamp((self.age - 0.1)/0.75, 0, 1)
+  -- Core flash fading.
+  graphics.circle(self.x, self.y, math.max(0, 16*(1 - k)), Color(1, 1, 1, 1 - k))
+  -- Three staggered expanding shockwave rings.
+  for i = 1, 3 do
+    local kk = math.clamp(k*1.25 - (i - 1)*0.18, 0, 1)
+    if kk > 0 and kk < 1 then
+      graphics.circle(self.x, self.y, self.radius*(0.3 + kk), Color(c.r, c.g, c.b, 0.7*(1 - kk)), 2.6 - i*0.5)
+    end
+  end
+  -- Eight radiating energy spokes shooting outward, fading.
+  local spoke = self.radius*(0.25 + k*0.95)
+  local fade  = 1 - k
+  for i = 0, 7 do
+    local a  = i*math.pi/4 + self.age*4
+    local r1 = spoke*0.55
+    graphics.line(self.x + math.cos(a)*r1, self.y + math.sin(a)*r1,
+                  self.x + math.cos(a)*spoke, self.y + math.sin(a)*spoke,
+                  Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.7*fade), 1.5)
+  end
 end
 
 
 -- AllyTurret: parks above the paddle, fires projectiles at the nearest brick
 -- on its own cooldown, despawns after `lifetime` seconds.
+-- AllyTurret (SNKRX engineer port: player.lua:3196 Turret). A deployed gun
+-- emplacement planted by the engineer: a bolted hex base + a barrel that rotates to
+-- track the nearest brick, firing a BURST of burst_count shots every burst_cd. It
+-- deploys with a pop, persists for `lifetime`, then folds up in a spark puff. Level
+-- 3 ("Upgrade!!!") turrets (upgraded) fire faster, hit harder (baked into dmg) and
+-- wear a twin barrel + a "+" mark.
 AllyTurret = Object:extend()
 AllyTurret:implement(GameObject)
 function AllyTurret:init(args)
   self:init_game_object(args)
-  self.lifetime = self.lifetime or 10
-  self.fire_cd  = self.fire_cd or 1.5
-  self.range    = self.range or 96
-  self.dmg      = self.dmg or 6
-  self.color    = self.color or orange[0]
-  self.t:after(self.lifetime, function() self.dead = true end)
-  self.t:every(self.fire_cd, function() self:fire() end)
-  self.born_at = love.timer.getTime()
+  self.lifetime    = self.lifetime or 16
+  self.burst_cd    = self.burst_cd or 3.0
+  self.burst_count = self.burst_count or 3
+  self.burst_gap   = self.burst_gap or 0.12
+  self.range       = self.range or 256
+  self.dmg         = self.dmg or 8
+  self.shot_speed  = self.shot_speed or 220
+  self.color       = self.color or orange[0]
+  self.upgraded    = self.upgraded or false
+  self.aim_a       = -math.pi/2     -- barrel angle, smoothed toward the nearest brick
+  self.gear_a      = random:float(0, 2*math.pi)
+  self.flash_t     = 0              -- muzzle flash timer
+  self.deploy_t    = 1              -- deploy pop (eases 1 -> 0)
+  self.born_at     = love.timer.getTime()
+  self.t:after(self.lifetime, function() self:expire() end)
+  -- Upgraded turrets fire 50% faster (SNKRX "Upgrade!!!" attack-speed boost).
+  self.t:every(self.burst_cd/(self.upgraded and 1.5 or 1), function() self:fire_burst() end)
+  spawn1:play{volume = 0.25, pitch = random:float(1.05, 1.2)}
 end
-function AllyTurret:update(dt) self:update_game_object(dt) end
-function AllyTurret:draw()
-  local age = love.timer.getTime() - self.born_at
-  local fade = 1
-  if age > self.lifetime - 1 then fade = math.max(0.3, self.lifetime - age) end
-  graphics.rectangle(self.x, self.y, 8, 8, 2, 2, Color(self.color.r, self.color.g, self.color.b, fade))
-  graphics.circle(self.x, self.y, 1.6, fg[5])
+function AllyTurret:update(dt)
+  self:update_game_object(dt)
+  self.gear_a = self.gear_a + 1.5*dt
+  if self.flash_t  > 0 then self.flash_t  = self.flash_t - dt end
+  if self.deploy_t > 0 then self.deploy_t = math.max(0, self.deploy_t - dt*4) end
+  -- Track the nearest brick: smoothly rotate the barrel toward it.
+  local arena = main.current
+  local target = arena and arena.get_nearest_brick_within and arena:get_nearest_brick_within(self.x, self.y, self.range)
+  if target then
+    local want = math.atan2(target.y - self.y, target.x - self.x)
+    local diff = math.loop(want - self.aim_a, 2*math.pi)
+    if diff > math.pi then diff = diff - 2*math.pi end
+    self.aim_a = self.aim_a + math.clamp(diff, -6*dt, 6*dt)
+  end
 end
-function AllyTurret:fire()
+function AllyTurret:fire_burst()
   local arena = main.current
   if not (arena and arena.main and arena.main.world) then return end
-  local target = arena:get_nearest_brick_within(self.x, self.y, self.range)
-  if not target then return end
-  local r = math.atan2(target.y - self.y, target.x - self.x)
-  arena.t:after(0, function()
-    if arena.main and arena.main.world then
-      Projectile{group = arena.main, x = self.x, y = self.y, r = r,
-                 type = 'arrow', dmg = self.dmg, speed = 180, color = self.color, pierce = 1}
-    end
-  end)
-  shoot1:play{volume = 0.12, pitch = random:float(1.0, 1.15)}
+  if not arena:get_nearest_brick_within(self.x, self.y, self.range) then return end
+  local bl = self.upgraded and 11 or 9
+  for i = 0, self.burst_count - 1 do
+    self.t:after(i*self.burst_gap, function()
+      if not (arena.main and arena.main.world) then return end
+      local tgt = arena:get_nearest_brick_within(self.x, self.y, self.range)
+      if not tgt then return end
+      local r = math.atan2(tgt.y - self.y, tgt.x - self.x)
+      self.aim_a   = r
+      self.flash_t = 0.1
+      local mx, my = self.x + math.cos(r)*bl, self.y + math.sin(r)*bl
+      Projectile{group = arena.main, x = mx, y = my, r = r, type = 'arrow',
+                 dmg = self.dmg, speed = self.shot_speed, color = self.color, pierce = 1}
+      spawn_burst(arena.effects, mx, my, self.color, 2, 40, 90)
+      shoot1:play{volume = 0.12, pitch = random:float(1.0, 1.15)}
+    end)
+  end
+end
+function AllyTurret:expire()
+  spawn_burst(main.current.effects, self.x, self.y, self.color, 5, 40, 110)
+  self.dead = true
+end
+function AllyTurret:draw()
+  local age  = love.timer.getTime() - self.born_at
+  local fade = 1
+  if age > self.lifetime - 1.2 then fade = math.max(0.25, (self.lifetime - age)/1.2) end
+  local c   = self.color
+  local pop = 1 + self.deploy_t*0.4
+  local a   = self.aim_a or -math.pi/2
+  local bl  = (self.upgraded and 11 or 9)*pop
+
+  -- Bolted hex base (slowly turning).
+  local hb = {}
+  for i = 0, 5 do
+    local ha = self.gear_a*0.3 + i*math.pi/3
+    hb[#hb+1] = self.x + math.cos(ha)*5.5*pop
+    hb[#hb+1] = self.y + math.sin(ha)*5.5*pop
+  end
+  graphics.polygon(hb, Color(0.16, 0.15, 0.17, fade))
+  graphics.polygon(hb, Color(c.r*0.55, c.g*0.45, c.b*0.3, 0.85*fade), 1)
+
+  -- Barrel(s) aimed along aim_a (twin barrels when upgraded).
+  local function barrel(off)
+    local pa  = a + math.pi/2
+    local cxm = self.x + math.cos(a)*bl*0.5 + math.cos(pa)*off
+    local cym = self.y + math.sin(a)*bl*0.5 + math.sin(pa)*off
+    graphics.push(cxm, cym, a, 1, 1)
+      graphics.rectangle(cxm, cym, bl, 3, 1, 1, Color(c.r*0.6, c.g*0.5, c.b*0.35, fade))
+    graphics.pop()
+  end
+  if self.upgraded then barrel(-2.2); barrel(2.2) else barrel(0) end
+
+  -- Muzzle flash at the barrel tip while firing.
+  if self.flash_t > 0 then
+    local k = self.flash_t/0.1
+    local mx, my = self.x + math.cos(a)*bl, self.y + math.sin(a)*bl
+    graphics.circle(mx, my, 2 + 3*k, Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.8*k))
+    graphics.circle(mx, my, 1.2, Color(1, 1, 1, k))
+  end
+
+  -- Sensor light on the base (pulses; brighter on upgraded turrets).
+  local pulse = 0.5 + 0.5*math.sin(love.timer.getTime()*5)
+  graphics.circle(self.x, self.y, (self.upgraded and 2.6 or 2.0), Color(c.r, c.g, c.b, fade))
+  graphics.circle(self.x, self.y, 1.1 + 0.5*pulse, Color(yellow[0].r, yellow[0].g, yellow[0].b, (0.7 + 0.3*pulse)*fade))
+
+  -- Upgraded turrets wear a small "+" mark.
+  if self.upgraded then
+    graphics.line(self.x - 7, self.y - 7, self.x - 4, self.y - 7, Color(yellow[0].r, yellow[0].g, yellow[0].b, fade), 1)
+    graphics.line(self.x - 5.5, self.y - 8.5, self.x - 5.5, self.y - 5.5, Color(yellow[0].r, yellow[0].g, yellow[0].b, fade), 1)
+  end
 end
 
 
@@ -432,6 +645,134 @@ function JesterMote:draw()
     v[#v+1] = self.y + px[i]*sa + py[i]*ca
   end
   graphics.polygon(v, c)
+end
+
+
+-- LightningArc: a jagged electric bolt drawn between two points, built by
+-- recursive midpoint displacement -- each segment's midpoint is kicked
+-- perpendicular by a halving offset, so the line frays into a forked bolt. It
+-- snaps in bright and fades fast, draws a hot near-white core over a coloured
+-- glow, and peels off a couple of short branches. The stormweaver's chain
+-- links are drawn with these. Ported from SNKRX's LightningLine
+-- (assets_from_SNKRX/objects.lua:40 + :69 generate) -- same midpoint-displacement
+-- idea, rebuilt as a Ball Pit effect: ordered subdivision (no greedy re-sort),
+-- segment-drawn (no unpack), plus forked branches.
+LightningArc = Object:extend()
+LightningArc:implement(GameObject)
+function LightningArc:init(args)
+  self:init_game_object(args)
+  self.x        = self.x  or self.x1
+  self.y        = self.y  or self.y1
+  self.color    = self.color or blue[0]
+  self.w        = self.w or 2.5
+  self.duration = self.duration or 0.13
+  self.gens     = self.gens or 4
+  self.offset   = self.offset or 9
+  self.alpha    = 1
+  self:generate()
+  self.t:tween(self.duration, self, {alpha = 0, w = math.max(1, self.w*0.4)}, math.linear,
+    function() self.dead = true end)
+  -- A spark at each endpoint so the bolt reads as landing on something.
+  for _ = 1, 2 do HitParticle{group = self.group, x = self.x1, y = self.y1, color = self.color} end
+  HitParticle{group = self.group, x = self.x2, y = self.y2, color = self.color}
+end
+
+-- Subdivide a straight segment into a jagged polyline (flat {x,y,x,y,...}).
+function LightningArc:jag(x1, y1, x2, y2, gens, offset)
+  local pts = {x1, y1, x2, y2}
+  local off = offset
+  for _ = 1, gens do
+    local np = {}
+    for i = 1, #pts - 2, 2 do
+      local ax, ay = pts[i], pts[i+1]
+      local bx, by = pts[i+2], pts[i+3]
+      np[#np+1] = ax; np[#np+1] = ay
+      local mx, my = (ax+bx)/2, (ay+by)/2
+      local dx, dy = bx-ax, by-ay
+      local len = math.sqrt(dx*dx + dy*dy)
+      if len > 0 then
+        local k = random:float(-off, off)
+        mx = mx + (-dy/len)*k
+        my = my + ( dx/len)*k
+      end
+      np[#np+1] = mx; np[#np+1] = my
+    end
+    np[#np+1] = pts[#pts-1]; np[#np+1] = pts[#pts]
+    pts = np
+    off = off*0.5
+  end
+  return pts
+end
+
+function LightningArc:generate()
+  self.points   = self:jag(self.x1, self.y1, self.x2, self.y2, self.gens, self.offset)
+  self.branches = {}
+  local p = self.points
+  for _ = 1, 2 do
+    if #p >= 6 then
+      local idx = (random:int(1, (#p/2) - 1))*2 - 1
+      local bx, by = p[idx], p[idx+1]
+      local a, bl  = random:float(0, 2*math.pi), random:float(6, 16)
+      self.branches[#self.branches+1] = self:jag(bx, by, bx + math.cos(a)*bl, by + math.sin(a)*bl, 2, 4)
+    end
+  end
+end
+
+function LightningArc:update(dt) self:update_game_object(dt) end
+
+local function draw_bolt_points(p, color, w)
+  for i = 1, #p - 3, 2 do graphics.line(p[i], p[i+1], p[i+2], p[i+3], color, w) end
+end
+
+function LightningArc:draw()
+  local c    = self.color
+  local glow = Color(c.r, c.g, c.b, self.alpha*0.5)
+  local core = Color(math.min(1, c.r*0.5 + 0.6), math.min(1, c.g*0.5 + 0.6),
+                     math.min(1, c.b*0.5 + 0.7), self.alpha)
+  draw_bolt_points(self.points, glow, self.w + 1.5)         -- coloured outer glow
+  draw_bolt_points(self.points, core, math.max(1, self.w*0.6))  -- hot core
+  for _, b in ipairs(self.branches) do draw_bolt_points(b, glow, 1) end
+end
+
+
+-- StormSpark: a tiny flickering zigzag spark shed by the stormweaver -- a 2-seg
+-- electric tick that tumbles, decelerates, blinks on/off and fades. Used both as
+-- its moving trail/emission and as the crackle burst on each discharge / bounce.
+-- (Distinct from ArcaneSpark's spinning cross and SporeMote's soft dot.)
+StormSpark = Object:extend()
+StormSpark:implement(GameObject)
+function StormSpark:init(args)
+  self:init_game_object(args)
+  self.color    = self.color or blue[0]
+  self.vx       = self.vx or random:float(-30, 30)
+  self.vy       = self.vy or random:float(-30, 30)
+  self.len      = self.len or random:float(2.5, 5.5)
+  self.a        = self.a or random:float(0, 2*math.pi)
+  self.alpha    = self.alpha or random:float(0.5, 0.9)
+  self.duration = self.duration or random:float(0.16, 0.38)
+  self.vis      = true
+  self.t:every(0.035, function() self.vis = not self.vis end)   -- electric flicker
+  self.t:tween(self.duration, self, {alpha = 0}, math.linear, function() self.dead = true end)
+end
+
+function StormSpark:update(dt)
+  self:update_game_object(dt)
+  self.x  = self.x + self.vx*dt
+  self.y  = self.y + self.vy*dt
+  self.vx = self.vx*(1 - 3.2*dt)
+  self.vy = self.vy*(1 - 3.2*dt)
+  self.a  = self.a + 14*dt
+end
+
+function StormSpark:draw()
+  if not self.vis then return end
+  local c = Color(math.min(1, self.color.r*0.5 + 0.55), math.min(1, self.color.g*0.5 + 0.55),
+                  math.min(1, self.color.b*0.5 + 0.65), self.alpha)
+  local hl     = self.len/2
+  local ca, sa = math.cos(self.a), math.sin(self.a)
+  local k      = self.len*0.35
+  graphics.line(self.x - ca*hl, self.y - sa*hl, self.x - sa*k, self.y + ca*k, c, 1)
+  graphics.line(self.x - sa*k,  self.y + ca*k,  self.x + ca*hl, self.y + sa*hl, c, 1)
 end
 
 
