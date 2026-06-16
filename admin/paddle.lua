@@ -265,6 +265,11 @@ function Paddle:draw()
     return
   end
 
+  if self.paddle_skin == 'boomerang' then
+    self:draw_boomerang_paddle(s, body_color)
+    return
+  end
+
   graphics.push(self.x, self.y, 0, s, 1/s)
     graphics.rectangle(self.x, self.y, self.w, self.h, 2, 2, body_color)
     graphics.rectangle(self.x, self.y - self.h/2, self.w, 1, nil, nil, fg[5])
@@ -298,6 +303,50 @@ function Paddle:draw_mitosis_paddle(s, color)
     end
     graphics.rectangle(x, y - mh/2, w*0.92, 1, nil, nil, fg[5])   -- bright top edge
   graphics.pop()
+end
+
+
+-- The Boomerang paddle as a thrown boomerang at rest: a shallow wooden chevron
+-- (two tapered arms + a centre hub bolt) with a bright leading edge, rocking
+-- gently and trailing faint return-swirls to sell the "it always comes back"
+-- theme. Purely cosmetic — the hitbox is still the flat paddle rectangle.
+function Paddle:draw_boomerang_paddle(s, color)
+  local t    = love.timer.getTime()
+  local x, y = self.x, self.y
+  local half = self.w/2
+  local th   = self.h + 1.5
+  local peak, droop = 2.5, 2.5
+  local rock = math.sin(t*2.2)*0.05
+  graphics.push(x, y, rock, s, 1/s)
+    -- faint spinning return-swirls behind the body
+    for i = 1, 2 do
+      local ga = t*3 + i*math.pi
+      graphics.arc('open', x, y, half*(0.55 + 0.14*i), ga, ga + 1.1,
+                   Color(color.r, color.g, color.b, 0.10), 1.5)
+    end
+    self:draw_boomerang_arm(x, y - peak, x - half, y + droop, th, color)
+    self:draw_boomerang_arm(x, y - peak, x + half, y + droop, th, color)
+    -- centre hub bolt
+    graphics.circle(x, y - peak + 0.5, th*0.55, color)
+    graphics.circle(x, y - peak + 0.5, math.max(1, th*0.28), fg[5])
+  graphics.pop()
+end
+
+
+-- One boomerang arm: a tapered rounded bar from the hub to a rounded tip, with
+-- a darker wood-grain streak and a bright top edge.
+function Paddle:draw_boomerang_arm(hx, hy, tx, ty, th, color)
+  local ang    = math.atan2(ty - hy, tx - hx)
+  local len    = math.distance(hx, hy, tx, ty)
+  local cx, cy = (hx + tx)/2, (hy + ty)/2
+  local dark   = Color(color.r*0.62, color.g*0.62, color.b*0.62, 1)
+  graphics.push(cx, cy, ang)
+    graphics.rectangle(cx, cy, len, th, th/2, th/2, color)            -- arm body
+    graphics.rectangle(cx, cy, len*0.9, th*0.4, th*0.2, th*0.2, dark) -- wood grain streak
+    graphics.rectangle(cx, cy - th/2, len*0.9, 1, nil, nil, fg[5])    -- bright top edge
+  graphics.pop()
+  graphics.circle(tx, ty, th*0.5, color)        -- rounded tip
+  graphics.circle(tx, ty, th*0.24, fg[5])       -- tip cap glint
 end
 
 

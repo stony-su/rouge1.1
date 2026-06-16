@@ -2,7 +2,7 @@
 -- The 20-ball roster (trimmed from the full 57 SNKRX archetypes so every
 -- pick has a distinct effect): most heroes attack continuously on cooldown
 -- (SNKRX-style: trigger inside an attack-sensor radius), while 3 exceptions
--- (wizard, cryomancer, pyromancer) keep on-bounce abilities.
+-- (wizard, pyromancer) keep on-bounce abilities.
 -- Contact damage on bounce applies to all.
 
 BallHero = Object:extend()
@@ -169,7 +169,13 @@ local HERO_STATS = {
 
   -- ----- On-bounce exceptions: ability triggers per ball-bounce, not a timer.
   wizard      = {r = 5, base_speed = 170, dmg = 7,  color = 'blue',   on_bounce = 'chain_lightning', bounce_cd = 0.3},
-  cryomancer  = {r = 6, base_speed = 160, dmg = 6,  color = 'blue',   on_bounce = 'slow'},
+  -- ----- Cryomancer "Frostbite" (SNKRX cryomancer port; behavior = 'frost_aura') -----
+  -- SNKRX player.lua:481 / DotArea -- a rotating blue frost field that FOLLOWS the
+  -- cryomancer, SLOWING (slow_factor) every brick inside and dealing cold DoT each
+  -- `tick`. Level 3 ("Frostbite") slows harder + hits harder. The ball is a slow
+  -- ice crystal that DRIFTS on ice (frost_glide -> the slippery glacier physics:
+  -- shallow, momentum-keeping glides, no weave) (skin = 'frost').
+  cryomancer  = {r = 6, base_speed = 135, dmg = 6,  color = 'blue',   behavior = 'frost_aura', area_rs = 58, tick = 0.5, dps_mult = 0.8, slow_factor = 0.5, slow_duration = 1.5, skin = 'frost'},
   pyromancer  = {r = 6, base_speed = 160, dmg = 8,  color = 'red',    on_bounce = 'burn', bounce_cd = 0.4},
 }
 
@@ -531,6 +537,26 @@ function BallHero:init(args)
                   alpha = random:float(0.5, 0.85), vx = random:float(-22, 22), vy = random:float(6, 28),
                   duration = random:float(0.22, 0.45)}
       end
+    end)
+  end
+
+  -- Cryomancer "Frostbite" skin: a faceted ice crystal -- a six-spoked snowflake
+  -- star around a pale hex core, wrapped in a cold frost aura. It drifts on ice
+  -- (frost_glide), sheds drifting snow motes, and flashes + extends its spokes when
+  -- the frost field bites an enemy (frost_flash_t, set from FrostArea:chill).
+  --   frost_t        idle clock (slow crystal spin + aura breathe)
+  --   frost_flash_t  brief flash + spoke-extend on each frost bite
+  --   frost_glide    slippery ice movement (see normalize_speed)
+  if s.skin == 'frost' then
+    self.frost_t       = random:float(0, 2*math.pi)
+    self.frost_flash_t = 0
+    self.frost_glide   = true
+    self.t:every(0.07, function()
+      if self.stuck or self.returning or self.mortar then return end
+      -- Drifting snow / frost motes.
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(-2, 2),
+                color = Color(0.75, 0.88, 1, 1), rs = random:float(0.7, 1.5), alpha = random:float(0.3, 0.6),
+                vx = random:float(-8, 8), vy = random:float(-6, 14), duration = random:float(0.4, 0.8)}
     end)
   end
 
@@ -1114,6 +1140,22 @@ BEHAVIORS.pandemonium = function(self, s)
     end
     buff1:play{volume = 0.35, pitch = random:float(0.95, 1.1)}
   end, 0, nil, 'attack')
+end
+
+
+-- Cryomancer "Frostbite" (SNKRX cryomancer port; player.lua:481 -> DotArea). Spawns
+-- ONE persistent rotating frost field bound to this ball (deferred so the arena
+-- effects group exists). The field follows the ball and slows + chills every enemy
+-- inside (see FrostArea in effects.lua). Damage scales off current_dmg at spawn.
+BEHAVIORS.frost_aura = function(self, s)
+  self.t:after(0.01, function()
+    local arena = main.current
+    if not (arena and arena.effects) then return end
+    self.frost_area = FrostArea{group = arena.effects, x = self.x, y = self.y,
+      rs = s.area_rs or 58, color = self.color, dmg = self:current_dmg()*(s.dps_mult or 0.8),
+      tick = s.tick or 0.5, slow_factor = s.slow_factor or 0.5, slow_dur = s.slow_duration or 1.5,
+      level = self.level, parent = self}
+  end)
 end
 
 
@@ -1843,6 +1885,12 @@ function BallHero:update(dt)
     self.eng_gear_a = (self.eng_gear_a or 0) + gspeed*dt
   end
 
+  -- Cryomancer skin: advance the idle clock and decay the frost-bite flash.
+  if self.stats.skin == 'frost' then
+    self.frost_t = (self.frost_t or 0) + dt
+    if (self.frost_flash_t or 0) > 0 then self.frost_flash_t = self.frost_flash_t - dt end
+  end
+
   -- Stormweaver skin: advance the idle clock + spoke-ring spin and decay the
   -- discharge flare. The spokes + sparks crackle on the init timer; here we just
   -- run the clocks the draw reads.
@@ -2288,6 +2336,10 @@ function BallHero:draw()
     -- Engineer: a gear-core fabricator drone with a rotating cog ring + scanning
     -- sensor eye; spins up + flashes on each turret deploy.
     self:draw_engineer(s)
+  elseif self.stats.skin == 'frost' then
+    -- Cryomancer: a faceted ice crystal -- a six-spoked snowflake star over a cold
+    -- aura; spokes flare + it flashes when its frost field bites.
+    self:draw_frost(s)
   elseif self.stats.skin == 'stormweaver' then
     -- Stormweaver: a caged-lightning orb -- a white-hot nucleus, crackling rim
     -- arcs and a breathing static aura; flares + discharges chain bolts on cast.
@@ -2952,6 +3004,53 @@ function BallHero:draw_engineer(s)
 end
 
 
+-- The cryomancer's "Frostbite" body: a faceted ice crystal -- six snowflake spokes
+-- (each with a pair of branch ticks) around a pale hex core, wrapped in a cold blue
+-- aura. It spins slowly; when its frost field bites an enemy (frost_flash_t, set in
+-- FrostArea:chill) the spokes extend, the aura flares and the core flashes white.
+-- Same r_size physics circle underneath (the slippery glide is in normalize_speed).
+function BallHero:draw_frost(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local t  = self.frost_t or 0
+  local flash = math.clamp((self.frost_flash_t or 0)/0.2, 0, 1)
+  local breathe = 0.5 + 0.5*math.sin(t*2.2)
+  local a0 = t*0.6
+  local sc = s*(1 + flash*0.15)
+  local pale = Color(0.8, 0.9, 1, 0.9)
+
+  -- Cold frost aura (flares on a bite).
+  graphics.circle(self.x, self.y, rs*(1.7 + 0.25*breathe)*sc + flash*4,
+                  Color(c.r, c.g, c.b, 0.10 + 0.05*breathe + flash*0.25))
+
+  -- Six snowflake spokes with branch ticks, slowly rotating; extend on a bite.
+  local spoke = rs*(1.5 + flash*0.5)*sc
+  for i = 0, 5 do
+    local a = a0 + i*math.pi/3
+    local ex, ey = self.x + math.cos(a)*spoke, self.y + math.sin(a)*spoke
+    graphics.line(self.x, self.y, ex, ey, pale, 1.5)
+    local bx, by = self.x + math.cos(a)*spoke*0.62, self.y + math.sin(a)*spoke*0.62
+    local bl = rs*0.4*sc
+    graphics.line(bx, by, bx + math.cos(a + 0.5)*bl, by + math.sin(a + 0.5)*bl, pale, 1)
+    graphics.line(bx, by, bx + math.cos(a - 0.5)*bl, by + math.sin(a - 0.5)*bl, pale, 1)
+  end
+
+  -- Faceted hex ice core.
+  local hex = {}
+  for i = 0, 5 do
+    local a = a0 + i*math.pi/3 + math.pi/6
+    hex[#hex+1] = self.x + math.cos(a)*rs*0.7*sc
+    hex[#hex+1] = self.y + math.sin(a)*rs*0.7*sc
+  end
+  graphics.polygon(hex, Color(c.r, c.g, c.b, 1))
+  graphics.polygon(hex, Color(0.85, 0.93, 1, 0.9), 1)
+  -- White glint + a white-hot center on a bite.
+  graphics.circle(self.x - rs*0.25*sc, self.y - rs*0.28*sc, math.max(1, rs*0.22), Color(1, 1, 1, 0.85))
+  if flash > 0 then graphics.circle(self.x, self.y, rs*0.4*sc, Color(1, 1, 1, flash*0.7)) end
+end
+
+
 -- The spellblade's body: a bright arcane core wrapped in a soft pulsing aura,
 -- with three blade-shards orbiting it (orbit_a, whipped on each cast). It reads
 -- as a little blade-mage orb; the shards telegraph the spiraling blades it
@@ -3142,7 +3241,7 @@ function BallHero:normalize_speed()
     self:set_velocity(0, -target)
     return
   end
-  local ice = self.run_mods and self.run_mods.sig and self.run_mods.sig.ice
+  local ice = self.frost_glide or (self.run_mods and self.run_mods.sig and self.run_mods.sig.ice)
   if ice then
     -- Glacier: pucks on ice. Instead of snapping to the target speed, drift
     -- toward it a few percent per frame — launches and knocks leave lasting
@@ -3272,7 +3371,7 @@ function BallHero:terror_detonate()
   local trigger = self.stats.on_bounce
   if trigger == 'burn' then
     arena:burn_area(x, y, radius, self:current_dmg()*1.5, 3)
-  elseif trigger == 'slow' then
+  elseif trigger == 'slow' or self.character == 'cryomancer' then
     arena:slow_in_area(x, y, radius, 0.5, 3)
   end
   explosion1:play{volume = 0.4, pitch = random:float(0.9, 1.05)}

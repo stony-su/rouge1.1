@@ -746,7 +746,7 @@ function BallPit:reset_run()
     flipper_gap = pdef.sig.gap, flip_window = pdef.sig.flip_window,
     flipper_sig = pdef.sig,
     move_mode = (pdef.signature == 'glacier') and 'ice' or nil,
-    paddle_skin = (pdef.signature == 'mitosis') and 'mitosis' or nil,
+    paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang'})[pdef.signature],
   }
 
   -- Pinball Lobber: damp the side/top walls so balls shed energy on a wall hit

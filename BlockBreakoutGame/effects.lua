@@ -207,6 +207,91 @@ function DotCloud:draw()
 end
 
 
+-- FrostArea (SNKRX cryomancer port: player.lua:481 / DotArea). A rotating blue
+-- frost field that FOLLOWS the cryomancer ball, chilling every enemy inside: each
+-- tick it refreshes a SLOW on bricks in range and deals cold DoT. Level 3
+-- ("Frostbite") slows harder + hits harder. The signature look (straight from
+-- SNKRX) is a transparent disc + four rim arc-segments that rotate as `vr`
+-- accumulates, here over an inner counter-rotating ring for depth. Bound to a
+-- parent ball: it tracks the ball and dies with it.
+FrostArea = Object:extend()
+FrostArea:implement(GameObject)
+function FrostArea:init(args)
+  self:init_game_object(args)
+  self.rs          = self.rs or 58
+  self.color       = self.color or blue[0]
+  self.dmg         = self.dmg or 5          -- damage per TICK to enemies inside
+  self.tick        = self.tick or 0.5
+  self.slow_factor = self.slow_factor or 0.5
+  self.slow_dur    = self.slow_dur or 1.5
+  self.level       = self.level or 1
+  self.vr          = random:float(0, 2*math.pi)             -- rim-arc rotation angle
+  self.dvr         = random:table{-1, 1}*random:float(0.5, 1.0)  -- slow spin, random direction
+  self.pulse       = random:float(0, 6.28)
+  self.hit_pulse   = 0
+  self.appear      = 0
+  self.t:tween(0.25, self, {appear = 1}, math.cubic_in_out)
+  self.t:every(self.tick, function() self:chill() end)
+end
+function FrostArea:update(dt)
+  self:update_game_object(dt)
+  self.pulse     = self.pulse + dt
+  self.vr        = self.vr + self.dvr*dt
+  self.hit_pulse = math.max(0, self.hit_pulse - dt*3)
+  -- Follow the cryomancer ball; die with it.
+  if self.parent then
+    if self.parent.dead then self.dead = true return end
+    self.x, self.y = self.parent.x, self.parent.y
+  end
+end
+function FrostArea:chill()
+  local arena = main.current
+  if not (arena and arena.main) then return end
+  local lvl3 = self.level >= 3
+  local sf   = lvl3 and (self.slow_factor*0.7) or self.slow_factor   -- harder slow at lvl3
+  local dmg  = self.dmg * (lvl3 and 1.6 or 1)
+  local hit_any = false
+  for _, o in ipairs(arena.main.objects) do
+    if not o.dead and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+      if math.distance(self.x, self.y, o.x, o.y) <= self.rs then
+        hit_any = true
+        if o.apply_slow   then o:apply_slow(sf, self.slow_dur) end
+        if o.take_damage  then o:take_damage(dmg, self.color, true) end
+        if random:bool(40) then
+          SmokePuff{group = arena.effects, x = o.x + random:float(-4, 4), y = o.y + random:float(-4, 4),
+                    color = Color(0.72, 0.86, 1, 1), rs = random:float(0.8, 1.6), alpha = 0.7,
+                    vx = random:float(-10, 10), vy = random:float(-14, 6), duration = random:float(0.3, 0.6)}
+        end
+      end
+    end
+  end
+  if hit_any then
+    self.hit_pulse = 1
+    if self.parent then self.parent.frost_flash_t = 0.2 end
+    frost1:play{volume = 0.25, pitch = random:float(0.9, 1.1)}
+  end
+end
+function FrostArea:draw()
+  local c  = self.color
+  local rs = self.rs*(self.appear or 1)*(1 + (self.hit_pulse or 0)*0.06)
+  local pulse = 0.5 + 0.5*math.sin((self.pulse or 0)*2.5)
+  -- Transparent chill fill.
+  graphics.circle(self.x, self.y, rs, Color(c.r, c.g, c.b, 0.06 + 0.03*pulse + (self.hit_pulse or 0)*0.05))
+  -- Faint full ring.
+  graphics.circle(self.x, self.y, rs, Color(c.r, c.g, c.b, 0.18 + 0.15*(self.hit_pulse or 0)), 1)
+  -- Four rotating rim arc-segments (the SNKRX signature), spun by vr.
+  for i = 1, 4 do
+    local b = self.vr + (i - 1)*math.pi/2 + math.pi/4
+    graphics.arc('open', self.x, self.y, rs, b - math.pi/8, b + math.pi/8, c, 3)
+  end
+  -- Inner counter-rotating arcs for depth (thinner, paler).
+  for i = 1, 3 do
+    local b = -self.vr*1.4 + (i - 1)*2*math.pi/3
+    graphics.arc('open', self.x, self.y, rs*0.62, b - 0.22, b + 0.22, Color(c.r, c.g, c.b, 0.55), 1.5)
+  end
+end
+
+
 -- BombDrop (bomber "reactor core" rework). A planted UNSTABLE CONTAINMENT CELL:
 -- a hexagonal casing with rotating containment brackets straining around a pulsing
 -- plasma core -- deliberately distinct from the bomber ball's round vented core.
