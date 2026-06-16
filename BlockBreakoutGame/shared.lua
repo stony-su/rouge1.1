@@ -59,7 +59,7 @@ function shared_init()
     bomber      = orange[0], stormweaver = blue[0],    cannoneer   = orange[0],
     spellblade  = blue[0],   engineer    = orange[0],  barbarian   = yellow[0],
     cryomancer  = blue[0],   pyromancer  = red[0],     jester      = red[0],
-    assassin    = purple[0], psykino     = fg[0],      infestor    = orange[0],
+    assassin    = purple[0], psykino     = fg[0],      infestor    = green[0],
     witch       = purple[0], gambler     = yellow2[0],  vulcanist   = red[0],
   }
 

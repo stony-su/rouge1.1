@@ -589,6 +589,112 @@ end
 function AllyCritter:take_damage() end
 
 
+-- Locust: the Hive hero's bug (Swarm Pressure). A tiny erratic critter that
+-- ZIGZAGS toward a target brick, gnaws it, and -- a fraction of the time -- RICOCHETS
+-- onward to another brick before dying. Uses the 'projectile' tag (collides only
+-- with bricks). On a killing bite it pings its parent hero for a brief feeding
+-- frenzy. Steers actively each frame (so it homes), unlike the straight-up
+-- AllyCritter. Modeled on AllyCritter; damage is applied flat (NOT routed through
+-- on_ball_contact) so a dense drizzle doesn't spam the combo meter.
+Locust = Object:extend()
+Locust:implement(GameObject)
+Locust:implement(Physics)
+
+function Locust:init(args)
+  self:init_game_object(args)
+  self.r_size   = 2.6
+  self.color    = self.color or green[0]
+  self.dmg      = self.dmg or 5
+  self.speed    = self.speed or 155
+  self.ric      = self.ric or 0
+  self.lifetime = self.lifetime or 2.2
+  self.zig_t    = random:float(0, 2*math.pi)
+  self.zig_f    = random:float(26, 34)
+  self.hit_ids  = {}
+
+  self:set_as_circle(self.r_size, 'dynamic', 'projectile')
+  self.body:setBullet(true)
+  self:set_fixed_rotation(true)
+  self:set_restitution(0.2)
+  self:set_friction(0)
+  self:set_damping(0)
+  self:set_mass(0.15)
+
+  local a = self.r or -math.pi/2
+  self:set_velocity(math.cos(a)*self.speed, math.sin(a)*self.speed)
+  self.hfx:add('hit', 1)
+
+  self.on_collision_enter = function(s, other, contact)
+    if other and other.tag == 'brick' then s:on_brick_contact(other) end
+  end
+  self.t:after(self.lifetime, function() self.dead = true end)
+end
+
+-- Nearest live brick we haven't gnawed yet this flight.
+function Locust:retarget()
+  local arena = main.current
+  if not arena then return end
+  local best, bd = nil, 1e9
+  for _, o in ipairs(arena.main.objects) do
+    if o:is(Brick) and not o.dead and not self.hit_ids[o.id] then
+      local d = math.distance(self.x, self.y, o.x, o.y)
+      if d < bd then bd = d; best = o end
+    end
+  end
+  self.target = best
+end
+
+function Locust:update(dt)
+  self:update_game_object(dt)
+  local arena = main.current
+  if not arena then return end
+  if not self.target or self.target.dead then self:retarget() end
+  self.zig_t = self.zig_t + dt*self.zig_f
+  if self.target then
+    -- Base heading toward the target + a perpendicular zigzag wobble.
+    local want = math.atan2(self.target.y - self.y, self.target.x - self.x)
+    local perp = want + math.pi/2
+    local zig  = math.sin(self.zig_t)*0.9
+    self:set_velocity(math.cos(want)*self.speed + math.cos(perp)*zig*45,
+                      math.sin(want)*self.speed + math.sin(perp)*zig*45)
+  end
+  if self.x < arena.x1 - 8 or self.x > arena.x2 + 8 or self.y < arena.y1 - 8 or self.y > arena.y2 + 8 then
+    self.dead = true
+  end
+end
+
+function Locust:draw()
+  local vx, vy = self:get_velocity()
+  local a = math.atan2(vy or 0, vx or -1)
+  local ca, sa = math.cos(a), math.sin(a)
+  -- a tiny dark dash along its heading + a bright body fleck of the hero colour
+  graphics.line(self.x - ca*3, self.y - sa*3, self.x + ca*2, self.y + sa*2, Color(0.18, 0.20, 0.10, 1), 2)
+  graphics.circle(self.x, self.y, 1.2, self.hfx.hit.f and fg[0] or self.color)
+end
+
+function Locust:on_brick_contact(brick)
+  if brick.dead or self.hit_ids[brick.id] then return end
+  self.hit_ids[brick.id] = true
+  if brick.take_damage then brick:take_damage(self.dmg, self.color) end
+  local killed = brick.dead or (brick.hp ~= nil and brick.hp <= 0)
+  spawn_burst(main.current.effects, self.x, self.y, self.color, 3, 50, 100)
+  self.hfx:use('hit', 0.2)
+  -- Feeding frenzy: a kill spurs the parent hive to vent faster for a beat.
+  if killed and self.parent and not self.parent.dead then
+    self.parent.locust_frenzy = math.max(self.parent.locust_frenzy or 0, 0.5)
+  end
+  -- Ricochet onward to a fresh brick, else die.
+  if self.ric > 0 then
+    self.ric = self.ric - 1
+    self:retarget()
+    if self.target then return end
+  end
+  self.dead = true
+end
+
+function Locust:take_damage() end
+
+
 -- Wave-10 Boss: "The Prism Core".
 --
 -- A single large, freely-moving geometric construct that floats in the upper

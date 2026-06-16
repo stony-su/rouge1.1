@@ -105,7 +105,13 @@ local HERO_STATS = {
   jester      = {r = 6, base_speed = 190, dmg = 8,  color = 'red',    behavior = 'pandemonium', range = 96, cd = 6, curse_radius = 128, curse_targets = 6, curse_duration = 6, knife_mult = 2.5, knife_speed = 250, skin = 'jester'},
 
   -- ----- Damage-over-time clouds (behavior = 'dot_cloud') -----
-  witch       = {r = 6, base_speed = 155, dmg = 6, color = 'purple', behavior = 'dot_cloud', range = 96, cd = 4,  cloud_radius = 48, cloud_duration = 14, dps_mult = 0.5},
+  -- ----- Witch "Death Pool" (SNKRX witch port; behavior = 'death_pool') -----
+  -- SNKRX player.lua:444 / DotArea -- every cd seconds the witch drops a roaming
+  -- VOID POOL at its position. The pool DRIFTS and RICOCHETS off the walls, dealing
+  -- void DoT to anything it rolls over for ~dur seconds. Level 3 ("Death Pool") makes
+  -- each pool spit a chaining projectile at the nearest brick. The witch ball is a
+  -- slow, ethereal hex-caster that floats in lazy CURVES (no weave) (skin = 'witch').
+  witch       = {r = 6, base_speed = 140, dmg = 6, color = 'purple', behavior = 'death_pool', cd = 4, pool_rs = 44, tick = 0.25, dps_mult = 0.7, dur_min = 11, dur_max = 15, shoot_mult = 2.5, skin = 'witch'},
 
   -- ----- Bomber "Reactor Core" (SNKRX bomber port; behavior = 'bomb_drop') -----
   -- SNKRX player.lua:301 / Bomb:3395 -- every cd seconds the bomber PLANTS an
@@ -142,8 +148,15 @@ local HERO_STATS = {
                  cd = 1.3, range = 122, links = 2, chain_radius = 64, hop_falloff = 0.55,
                  zigzag = 7.0, bounce_scramble = 0.7},
 
-  -- ----- Pet spawns (small allies that fly up and hit bricks) -----
-  infestor    = {r = 6, base_speed = 150, dmg = 6,  color = 'orange', behavior = 'pet_spawn', cd = 10, count = 3, pet_speed = 70, pet_dmg = 8},
+  -- ----- Hive / locust swarm (behavior = 'swarm_pressure'; skin = 'swarm') -----
+  -- The infestor reworked into a roiling LOCUST CLOUD. Instead of 3 pets/10s it
+  -- applies relentless "swarm pressure": a constant drizzle of locusts at bricks in
+  -- a wide radius, scaling with how densely they're clustered there; a locust KILL
+  -- triggers a brief feeding frenzy (extra locusts for a beat). Locusts zigzag in,
+  -- gnaw, and a few ricochet onward (see Locust in enemies.lua). The ball itself is
+  -- a non-solid churning swarm; fast, twitchy, erratic movement.
+  infestor    = {r = 6, base_speed = 165, dmg = 5, color = 'green', behavior = 'swarm_pressure', skin = 'swarm',
+                 cd = 0.13, range = 150, locust_dmg = 1.25, locust_speed = 155, dart = 0.32},
 
   -- ----- Gambler-style random multi-strike -----
   gambler     = {r = 6, base_speed = 165, dmg = 8, color = 'yellow2', behavior = 'gambler_burst', cd = 2, burst_count = 3, burst_mult = 3.0},
@@ -156,16 +169,17 @@ local HERO_STATS = {
   -- rune-furnace ring instead of a plain ball.
   vulcanist   = {r = 6, base_speed = 150, dmg = 14, color = 'red', behavior = 'volcano', cd = 12, area = 72, volcano_rs = 24, skin = 'rune'},
 
-  -- ----- Cannon (SNKRX cannoneer port; behavior = 'cannon_shot') -----
-  -- SNKRX's cannoneer fires at the closest enemy in a 128 sensor every 6s; the
-  -- shell flies, then DETONATES into a wide Area for 2x damage (player.lua:326,
-  -- :2208-2218), with a level-3 aftershock bombardment. Ported here as a heavy
-  -- mortar: fires an exploding cannonball every cd (blast = current_dmg*blast_mult
-  -- over blast_radius, +bombard aftershocks at level 3). Slow, dampened, heavy-arc
-  -- movement, and the shot RECOILS the ball backward (see shoot_cannonball + skin).
+  -- ----- Mortar (SNKRX cannoneer port, reworked into ARTILLERY; behavior = 'cannon_shot') -----
+  -- Lobs a shell straight UP and off the top of the screen; a RED target scope marks
+  -- where it will land during the hang, then it drops back IN onto that spot and
+  -- DETONATES into a wide splash (blast = current_dmg*blast_mult over blast_radius,
+  -- +bombard aftershocks at level 3 -- player.lua:326,:2208-2218). The shell arc +
+  -- scope + explosion live in MortarShell (effects.lua). Slow, dampened, heavy mover;
+  -- Three barrel-circles in a triangle fire in an endless ROUND-ROBIN, ~1 shot/sec
+  -- (one circle pops + lobs, then the next). See shoot_mortar + draw_cannon.
   cannoneer   = {r = 7, base_speed = 132, dmg = 16, color = 'orange', behavior = 'cannon_shot', skin = 'cannon',
-                 cd = 2.2, range = 150, ball_speed = 150, blast_radius = 56, blast_mult = 1.7,
-                 recoil = 90, bombard = 4},
+                 cd = 1.0, range = 240, blast_radius = 50, blast_mult = 1.0,
+                 bombard = 2, shell_delay = 0.8},
 
   -- ----- On-bounce exceptions: ability triggers per ball-bounce, not a timer.
   wizard      = {r = 5, base_speed = 170, dmg = 7,  color = 'blue',   on_bounce = 'chain_lightning', bounce_cd = 0.3},
@@ -176,7 +190,10 @@ local HERO_STATS = {
   -- ice crystal that DRIFTS on ice (frost_glide -> the slippery glacier physics:
   -- shallow, momentum-keeping glides, no weave) (skin = 'frost').
   cryomancer  = {r = 6, base_speed = 135, dmg = 6,  color = 'blue',   behavior = 'frost_aura', area_rs = 58, tick = 0.5, dps_mult = 0.8, slow_factor = 0.5, slow_duration = 1.5, skin = 'frost'},
-  pyromancer  = {r = 6, base_speed = 160, dmg = 8,  color = 'red',    on_bounce = 'burn', bounce_cd = 0.4},
+  -- Pyromancer: VISUAL/feel overhaul only -- the burn-on-bounce attack (on_bounce,
+  -- bounce_cd, dmg) is UNCHANGED. skin = 'flame' makes it a living fireball that's
+  -- fast + bouncy + buoyant (movement feel lives in the skin init / update).
+  pyromancer  = {r = 6, base_speed = 160, dmg = 8,  color = 'red',    on_bounce = 'burn', bounce_cd = 0.4, skin = 'flame'},
 }
 
 function BallHero.stats_for(character)
@@ -560,6 +577,64 @@ function BallHero:init(args)
     end)
   end
 
+  -- Pyromancer "Inferno" skin: a living fireball -- a molten core that streams flame
+  -- tongues out BEHIND its motion (a trailing comet) and the body SPINS (see init).
+  -- It sheds trailing embers + smoke. VISUAL/feel only; the burn-on-bounce attack is
+  -- unchanged.
+  --   flame_t        flicker/idle clock (tongue dance + core pulse)
+  --   flame_flare_t  a brief flare-up + spin-kick on each bounce (visual)
+  --   flame_buoyancy gentle UPWARD lean (the ball's path rises -- see update)
+  if s.skin == 'flame' then
+    self.flame_t             = random:float(0, 2*math.pi)
+    self.flame_flare_t       = 0
+    self._flame_last_bounces = 0
+    self.flame_buoyancy      = 24
+    -- Energetic fire: builds bounce-speed fast and caps a touch higher.
+    self.speed_mult_step = 1 + 0.6*(mods.charge or 1)
+    self.speed_mult_max  = 4.5
+    self.t:every(0.04, function()
+      if self.stuck or self.returning or self.mortar then return end
+      -- Embers + smoke stream out BEHIND the ball (opposite its velocity).
+      local ta = -math.pi/2
+      if self.body then
+        local vx, vy = self:get_velocity()
+        if vx and (vx*vx + vy*vy) > 100 then ta = math.atan2(-vy, -vx) end
+      end
+      local es = random:float(18, 40)
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(-2, 2),
+                color = Color(1, 0.6, 0.15, 1), rs = random:float(0.7, 1.6), alpha = random:float(0.5, 0.85),
+                vx = math.cos(ta)*es + random:float(-8, 8), vy = math.sin(ta)*es + random:float(-8, 8),
+                duration = random:float(0.3, 0.6)}
+      if random:bool(30) then
+        SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y,
+                  color = Color(0.22, 0.20, 0.20, 1), rs = random:float(2, 3.5), alpha = random:float(0.2, 0.35),
+                  vx = math.cos(ta)*es*0.6 + random:float(-6, 6), vy = math.sin(ta)*es*0.6 + random:float(-6, 6),
+                  duration = random:float(0.5, 0.9)}
+      end
+    end)
+  end
+
+  -- Witch "Hexcraft" skin: a dark void orb with a glowing void eye, wreathed in
+  -- SHIFTING arcane motes and a void aura. It floats in lazy curves, dripping void
+  -- essence; the body flashes on each death-pool drop.
+  --   witch_t      idle clock (mote drift + eye pulse + aura breathe)
+  --   witch_cast_t a brief flash on each death-pool drop
+  --   witch_curve  a gentle CONSTANT curve so it drifts in arcs (no weave)
+  if s.skin == 'witch' then
+    self.witch_t      = random:float(0, 2*math.pi)
+    self.witch_cast_t = 0
+    self.witch_curve  = random:table{-1, 1}*0.5
+    self.speed_mult_step = 1 + 0.35*(mods.charge or 1)
+    self.speed_mult_max  = 3.0
+    self.t:every(0.06, function()
+      if self.stuck or self.returning or self.mortar then return end
+      -- Dripping void essence.
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(0, 3),
+                color = Color(self.color.r*0.85, self.color.g*0.5, self.color.b*0.95, 1), rs = random:float(0.8, 1.6),
+                alpha = random:float(0.3, 0.6), vx = random:float(-6, 6), vy = random:float(4, 18), duration = random:float(0.4, 0.8)}
+    end)
+  end
+
   -- Stormweaver "Tempest" skin: a ball of caged lightning. A white-hot nucleus
   -- inside the electric body, ringed by jagged arc-spokes that crackle (rebuilt
   -- on a timer so they writhe even at rest), a breathing static aura, and two
@@ -591,37 +666,58 @@ function BallHero:init(args)
     end)
   end
 
-  -- Cannon "Siege Mortar" skin: the ball as a heavy artillery piece. An iron base
-  -- (the body) carries a thick barrel that swivels toward the nearest brick, recoils
-  -- on each shot, and glows a reload ember at the muzzle that brightens as the cd
-  -- fills. A heat-haze aura + a steady gunsmoke drizzle round it out.
-  --   aim_a / aim_want    barrel angle (smoothed in update toward the sampled target)
-  --   cannon_recoil_t     barrel kick + muzzle flash for a beat after firing
-  --   cannon_t            idle clock (heat shimmer)
-  --   cannon_gravity      heavy-lob droop added to its arcs (see active-motion)
-  -- Movement: slow + dampened (builds bounce-speed slower than the bomber, caps low)
-  -- and the shot recoils it backward -- a ponderous siege engine.
+  -- Cannoneer "Triple Mortar" skin: three barrel-circles in a TRIANGLE (a multi-barrel
+  -- turret) that fire in an endless ROUND-ROBIN -- one circle pops + lobs a shell, then
+  -- the next, ~once a second. The cluster spins slowly; the barrel that just fired flares
+  -- + swells (tri_pop), and the next one up glows a reload ember as the cd fills.
+  --   tri_a     slow spin of the 3-circle cluster
+  --   tri_idx   which barrel fired last (round-robin index)
+  --   tri_pop   per-barrel fire flash/recoil timers (1 -> 0)
+  --   cannon_t / cannon_gravity   idle clock + heavy-lob droop (movement unchanged)
+  -- Movement: slow + dampened, heavy-arc droop -- a ponderous mobile battery.
   if s.skin == 'cannon' then
-    self.aim_a           = -math.pi/2
-    self.aim_want        = -math.pi/2
-    self.cannon_recoil_t = 0
+    self.tri_a           = random:float(0, 2*math.pi)
+    self.tri_idx         = 0
+    self.tri_pop         = {0, 0, 0}
     self.cannon_t        = random:float(0, 2*math.pi)
     self.cannon_gravity  = 32
     self.speed_mult_step = 1 + 0.18*(mods.charge or 1)
     self.speed_mult_max  = 2.2
-    -- Retarget the barrel on a timer (cheap), like the crossbow turret.
-    self.t:every(0.08, function()
-      local arena = main.current
-      if not arena or self.stuck or self.returning or self.mortar then return end
-      local target = arena.get_nearest_brick and arena:get_nearest_brick(self.x, self.y)
-      if target then self.aim_want = math.atan2(target.y - self.y, target.x - self.x) end
-    end)
-    -- Idle gunsmoke drizzle off the barrel.
+    -- Idle gunsmoke drizzle off the barrels.
     self.t:every(0.07, function()
       if self.stuck or self.returning or self.mortar then return end
-      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y - self.r_size*0.4,
-                color = Color(0.30, 0.28, 0.26, 1), rs = random:float(1.2, 2.2), alpha = random:float(0.12, 0.22),
-                vx = random:float(-6, 6), vy = random:float(-18, -6), duration = random:float(0.4, 0.7)}
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-3, 3), y = self.y - self.r_size*0.4,
+                color = Color(0.30, 0.28, 0.26, 1), rs = random:float(1.0, 2.0), alpha = random:float(0.1, 0.2),
+                vx = random:float(-6, 6), vy = random:float(-16, -6), duration = random:float(0.4, 0.7)}
+    end)
+  end
+
+  -- Hive "Locust Cloud" skin: a NON-solid roiling swarm of mini-locusts loosely
+  -- held in a ball around a dark dense core. On a vent the cloud bulges toward the
+  -- target and sprays. It sheds a smear of stray locusts as its trail.
+  --   swarm_t        idle clock (silhouette pulse + glints)
+  --   swarm_motes    the churning mini-locusts (advanced in update, drawn in draw_swarm)
+  --   swarm_cast_t/a brief bulge toward the last vent target
+  --   locust_frenzy  feeding-frenzy timer (set by a locust kill in enemies.lua)
+  --   swarm_dart_t   twitchy heading-scramble countdown (see active-motion)
+  if s.skin == 'swarm' then
+    self.swarm_t       = random:float(0, 2*math.pi)
+    self.swarm_cast_t  = 0
+    self.swarm_cast_a  = 0
+    self.locust_frenzy = 0
+    self.swarm_dart_t  = random:float(0, s.dart or 0.32)
+    self.swarm_motes   = {}
+    for i = 1, 40 do
+      self.swarm_motes[i] = {a = random:float(0, 2*math.pi), rad = random:float(2, 11),
+                             sp = random:float(1, 3)*(random:bool(50) and 1 or -1),
+                             j = random:float(0, 2*math.pi), rr = random:float(0.55, 1)}
+    end
+    -- Trail: a smear of stray locusts peels off and scatters behind.
+    self.t:every(0.05, function()
+      if self.stuck or self.returning or self.mortar then return end
+      SporeMote{group = main.current.effects, x = self.x + random:float(-4, 4), y = self.y + random:float(-4, 4),
+                color = Color(0.16, 0.20, 0.08, 1), vx = random:float(-22, 22), vy = random:float(-22, 22),
+                rs = random:float(0.8, 1.5), alpha = random:float(0.3, 0.55), duration = random:float(0.3, 0.6)}
     end)
   end
 
@@ -648,6 +744,14 @@ function BallHero:init(args)
     -- the drain instead of statically sticking (a fixed-rotation ball sticks
     -- once surface friction exceeds the bat's slope).
     self:set_fixed_rotation(false)
+  end
+
+  -- Pyromancer: let the fireball SPIN (real physics) instead of locking rotation at
+  -- 0 -- unlock the body and give it an initial tumble; bounces re-kick the spin
+  -- (see update). Visual only: a circle body spins without affecting collisions.
+  if s.skin == 'flame' and self.body then
+    self:set_fixed_rotation(false)
+    self.body:setAngularVelocity(random:float(-8, 8))
   end
 
   -- Per-bounce ability cooldown for the on-bounce exceptions that need it
@@ -1159,16 +1263,22 @@ BEHAVIORS.frost_aura = function(self, s)
 end
 
 
-BEHAVIORS.dot_cloud = function(self, s)
-  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
+-- Witch "Death Pool" (SNKRX witch port; player.lua:444 -> DotArea). Every s.cd
+-- seconds the witch drops a roaming VoidPool at its position; the pool drifts +
+-- ricochets off the walls dealing void DoT, and at level 3 spits chaining
+-- projectiles (see VoidPool in effects.lua). Damage scales off current_dmg.
+BEHAVIORS.death_pool = function(self, s)
+  self.t:every(s.cd, function()
     if self.stuck or self.returning then return end
     local arena = main.current
-    local t = arena:get_random_brick_within(self.x, self.y, s.range)
-    local tx, ty = self.x, self.y
-    if t then tx, ty = t.x, t.y end
-    arena:burn_area(tx, ty, s.cloud_radius, self:current_dmg()*(s.dps_mult or 0.4), s.cloud_duration)
-    DotCloud{group = arena.effects, x = tx, y = ty, color = self.color, rs = s.cloud_radius, duration = s.cloud_duration}
-    dot1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
+    if not (arena and arena.main and arena.main.world) then return end
+    VoidPool{group = arena.effects, x = self.x, y = self.y, color = self.color,
+             rs = s.pool_rs or 44, dmg = self:current_dmg()*(s.dps_mult or 0.7)*(s.tick or 0.25),
+             tick = s.tick or 0.25, duration = random:float(s.dur_min or 11, s.dur_max or 15),
+             level = self.level, shoot_dmg = self:current_dmg()*(s.shoot_mult or 2.5)}
+    self.spring:pull(0.35)
+    self.witch_cast_t = 0.3
+    dot1:play{volume = 0.3, pitch = random:float(0.9, 1.05)}
   end, 0, nil, 'attack')
 end
 
@@ -1344,68 +1454,46 @@ end
 
 BEHAVIORS.cannon_shot = function(self, s)
   self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
-    self:shoot_cannonball(s)
+    self:shoot_mortar(s)
   end, 0, nil, 'attack')
 end
 
 
--- Fire a heavy exploding cannonball at the nearest brick (SNKRX cannoneer,
--- player.lua:326). The shell flies slowly and DETONATES into a wide splash on
--- impact (the explosion lives in projectile.lua's cannon_explode). Firing kicks
--- the barrel into recoil, belches a muzzle flash + smoke, and shoves the BALL
--- backward along its heading -- a real cannon recoil that nudges its path.
-function BallHero:shoot_cannonball(s)
+-- Fire a MORTAR shell from the NEXT barrel in the round-robin. Picks the nearest
+-- brick as the impact point and spawns a MortarShell (effects.lua) that launches UP
+-- off the top of the screen, paints a red target scope on the spot during the hang,
+-- then drops back IN and DETONATES into a wide splash. The firing barrel pops + flares
+-- (tri_pop) and belches smoke; called ~once a second so the three barrels cycle.
+function BallHero:shoot_mortar(s)
   if self.stuck or self.returning then return end
   local arena  = main.current
   if not arena then return end
-  local target = arena:get_nearest_brick_within(self.x, self.y, s.range or 150)
+  local target = arena:get_nearest_brick_within(self.x, self.y, s.range or 240)
   if not target then return end
 
-  local hx, hy = self.x, self.y
-  local ang    = math.atan2(target.y - hy, target.x - hx)
-  self.aim_want = ang   -- snap the barrel onto the shot
+  -- Advance the round-robin barrel and fire from its circle's world position.
+  self.tri_idx = ((self.tri_idx or 0) % 3) + 1
+  self.tri_pop = self.tri_pop or {0, 0, 0}
+  self.tri_pop[self.tri_idx] = 1
+  local ox, oy = self:tri_offset(self.tri_idx)
+  local fx, fy = self.x + ox, self.y + oy
+  local tx, ty = target.x, target.y
+
   -- Blast damage read live so charge / ally / loadout buffs apply per shell.
-  local dmg     = self:current_dmg()*(s.blast_mult or 1.7)
-  local bombard = ((self.level or 1) >= 3) and (s.bombard or 4) or 0
-  local color   = self.color
-  -- Box2D world is locked during collision callbacks; spawn the shell next frame.
-  arena.t:after(0, function()
-    if arena.main and arena.main.world then
-      Projectile{
-        group        = arena.main,
-        x = hx, y = hy, r = ang,
-        type         = 'cannonball',
-        dmg          = dmg,
-        speed        = s.ball_speed or 150,
-        blast_radius = s.blast_radius or 56,
-        bombard      = bombard,
-        color        = color,
-      }
-    end
-  end)
+  local dmg     = self:current_dmg()*(s.blast_mult or 1.0)
+  local bombard = ((self.level or 1) >= 3) and (s.bombard or 2) or 0
+  MortarShell{group = arena.effects, x = fx, y = fy, tx = tx, ty = ty,
+              dmg = dmg, blast_radius = s.blast_radius or 50, bombard = bombard,
+              color = self.color, delay = s.shell_delay or 0.8}
 
-  -- Recoil: kick the ball backward along its heading (normalize_speed restores
-  -- the magnitude next frame, so the kick mostly shoves the heading off-axis).
-  if self.body then
-    local vx, vy = self:get_velocity()
-    if vx then
-      local kick = s.recoil or 90
-      self:set_velocity(vx - math.cos(ang)*kick, vy - math.sin(ang)*kick)
-    end
+  -- Muzzle feedback: pop the body + belch smoke UP out of the firing barrel.
+  self.spring:pull(0.07)
+  for _ = 1, 3 do
+    SmokePuff{group = arena.effects, x = fx + random:float(-2, 2), y = fy - 4,
+              color = Color(0.34, 0.32, 0.30, 1), rs = random:float(1.5, 3), alpha = random:float(0.3, 0.5),
+              vx = random:float(-18, 18), vy = random:float(-55, -24), duration = random:float(0.35, 0.6)}
   end
-
-  -- Muzzle feedback: recoil + flash timer, smoke from the muzzle, a pop + thud.
-  self.cannon_recoil_t = 0.22
-  self.spring:pull(0.12)
-  local mx, my = hx + math.cos(ang)*self.r_size*2.2, hy + math.sin(ang)*self.r_size*2.2
-  for _ = 1, 4 do
-    SmokePuff{group = arena.effects, x = mx, y = my,
-              color = Color(0.34, 0.32, 0.30, 1), rs = random:float(2, 4), alpha = random:float(0.3, 0.5),
-              vx = math.cos(ang)*random:float(20, 60) + random:float(-10, 10),
-              vy = math.sin(ang)*random:float(20, 60) + random:float(-10, 10),
-              duration = random:float(0.35, 0.6)}
-  end
-  shoot1:play{volume = 0.3, pitch = random:float(0.7, 0.85)}
+  shoot1:play{volume = 0.28, pitch = random:float(0.7, 0.95)}
 end
 
 
@@ -1445,6 +1533,45 @@ BEHAVIORS.pet_spawn = function(self, s)
     end
     critter1:play{volume = 0.25, pitch = random:float(0.95, 1.05)}
   end, 0, nil, 'attack')
+end
+
+
+-- Hive "Swarm Pressure": a constant drizzle (small cd) rather than a big timed
+-- burst. Each tick flings a few locusts at random bricks in a wide radius; the
+-- count scales with how densely bricks are clustered there, and a feeding frenzy
+-- (set by a locust kill in enemies.lua) adds extras for a beat.
+BEHAVIORS.swarm_pressure = function(self, s)
+  self.t:every(s.cd, function()
+    if self.stuck or self.returning then return end
+    self:emit_locusts(s)
+  end, 0, nil, 'attack')
+end
+
+
+function BallHero:emit_locusts(s)
+  local arena = main.current
+  if not (arena and arena.main and arena.main.world) then return end
+  local range = s.range or 150
+  local pool  = arena:get_bricks_within(self.x, self.y, range)
+  if #pool == 0 then return end
+  -- Pressure: 1 base + up to 2 more from a dense cluster + a frenzy bonus.
+  local count = 1 + math.min(2, math.floor((#pool - 1)/3))
+  if (self.locust_frenzy or 0) > 0 then count = count + 2 end
+  local dmg = (s.locust_dmg or 5)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)
+  local hx, hy = self.x, self.y
+  for _ = 1, count do
+    local tg = pool[random:int(1, #pool)]
+    local a  = math.atan2(tg.y - hy, tg.x - hx) + random:float(-0.5, 0.5)
+    arena.t:after(0, function()
+      if not (arena.main and arena.main.world) then return end
+      Locust{group = arena.main, x = hx, y = hy, r = a, parent = self, color = self.color,
+             dmg = dmg, speed = s.locust_speed or 155, ric = random:bool(35) and 1 or 0}
+    end)
+  end
+  -- The cloud bulges toward the nearest target for a beat (see draw_swarm).
+  local near = arena:get_nearest_brick_within(hx, hy, range)
+  if near then self.swarm_cast_a = math.atan2(near.y - hy, near.x - hx); self.swarm_cast_t = 0.18 end
+  if random:bool(22) then critter1:play{volume = 0.16, pitch = random:float(1.05, 1.25)} end
 end
 
 
@@ -1891,6 +2018,32 @@ function BallHero:update(dt)
     if (self.frost_flash_t or 0) > 0 then self.frost_flash_t = self.frost_flash_t - dt end
   end
 
+  -- Pyromancer skin: advance the flicker clock, decay the bounce flare, and flare +
+  -- spin-kick on each bounce -- the burn mechanic itself is untouched.
+  if self.stats.skin == 'flame' then
+    self.flame_t = (self.flame_t or 0) + dt
+    if (self.flame_flare_t or 0) > 0 then self.flame_flare_t = self.flame_flare_t - dt end
+    if (self.bounces or 0) ~= (self._flame_last_bounces or 0) then
+      self._flame_last_bounces = self.bounces or 0
+      self.flame_flare_t = 0.2
+      -- Impact spin: each bounce re-kicks the body's spin (real-physics tumble).
+      if self.body then self.body:setAngularVelocity(random:float(-12, 12)) end
+      if main.current and not self.stuck and not self.returning then
+        for _ = 1, 4 do
+          SmokePuff{group = main.current.effects, x = self.x, y = self.y,
+                    color = Color(1, 0.7, 0.2, 1), rs = random:float(0.8, 1.6), alpha = 0.8,
+                    vx = random:float(-30, 30), vy = random:float(-30, -8), duration = random:float(0.25, 0.5)}
+        end
+      end
+    end
+  end
+
+  -- Witch skin: advance the idle clock and decay the cast flash.
+  if self.stats.skin == 'witch' then
+    self.witch_t = (self.witch_t or 0) + dt
+    if (self.witch_cast_t or 0) > 0 then self.witch_cast_t = self.witch_cast_t - dt end
+  end
+
   -- Stormweaver skin: advance the idle clock + spoke-ring spin and decay the
   -- discharge flare. The spokes + sparks crackle on the init timer; here we just
   -- run the clocks the draw reads.
@@ -1900,16 +2053,28 @@ function BallHero:update(dt)
     if (self.cast_flash_t or 0) > 0 then self.cast_flash_t = self.cast_flash_t - dt end
   end
 
-  -- Cannon skin (cannoneer): swivel the heavy barrel toward the latest target
-  -- (eases back to up while stuck), advance the heat clock, decay the recoil
-  -- kick + muzzle flash. The barrel turns a touch slower than the crossbow.
+  -- Cannoneer "Triple Mortar" skin: advance the idle clock, slowly spin the 3-barrel
+  -- cluster, and decay each barrel's fire-pop (the round-robin firing is in shoot_mortar).
   if self.stats.skin == 'cannon' then
     self.cannon_t = (self.cannon_t or 0) + dt
-    if (self.cannon_recoil_t or 0) > 0 then self.cannon_recoil_t = self.cannon_recoil_t - dt end
-    local want = self.stuck and -math.pi/2 or (self.aim_want or -math.pi/2)
-    local diff = math.loop(want - (self.aim_a or 0), 2*math.pi)
-    if diff > math.pi then diff = diff - 2*math.pi end
-    self.aim_a = (self.aim_a or 0) + diff*math.min(1, 8*dt)
+    self.tri_a    = (self.tri_a or 0) + 0.5*dt
+    if self.tri_pop then
+      for i = 1, 3 do
+        if (self.tri_pop[i] or 0) > 0 then self.tri_pop[i] = self.tri_pop[i] - dt*4 end
+      end
+    end
+  end
+
+  -- Hive skin (locust cloud): roil the swarm motes, decay the vent-bulge + the
+  -- feeding-frenzy timer. The motes are drawn in draw_swarm; here we just churn them.
+  if self.stats.skin == 'swarm' then
+    self.swarm_t = (self.swarm_t or 0) + dt
+    if (self.swarm_cast_t or 0) > 0 then self.swarm_cast_t = self.swarm_cast_t - dt end
+    if (self.locust_frenzy or 0) > 0 then self.locust_frenzy = self.locust_frenzy - dt end
+    for _, m in ipairs(self.swarm_motes or {}) do
+      m.a = m.a + m.sp*dt
+      m.j = m.j + dt*6
+    end
   end
 
   if self.stuck then
@@ -1978,12 +2143,49 @@ function BallHero:update(dt)
     end
   end
 
+  -- Pyromancer buoyancy: a gentle UPWARD lean (flames rise) -- the opposite of the
+  -- bomber's droop, and NOT a weave. Just a steady float toward the top where the
+  -- bricks are. normalize_speed re-corrects the magnitude, so only the heading lifts.
+  if self.stats.skin == 'flame' and self.body then
+    local vx, vy = self:get_velocity()
+    if vx then self:set_velocity(vx, vy - (self.flame_buoyancy or 24)*dt) end
+  end
+
+  -- Witch drift: a gentle CONSTANT curve (one direction) so the ball floats in lazy
+  -- arcs rather than straight lines -- ethereal, and NOT a back-and-forth weave.
+  if self.stats.skin == 'witch' and self.body then
+    local vx, vy = self:get_velocity()
+    if vx and (vx ~= 0 or vy ~= 0) then
+      local sp = math.sqrt(vx*vx + vy*vy)
+      local na = math.atan2(vy, vx) + (self.witch_curve or 0.5)*dt
+      self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+    end
+  end
+
   -- Cannon heavy lob: a stronger downward "weight" than the bomber so its arcs sag
   -- like a hurled siege ball -- its signature ponderous trajectory. normalize_speed
   -- re-corrects the magnitude next frame, so only the heading droops.
   if self.stats.skin == 'cannon' and self.body then
     local vx, vy = self:get_velocity()
     if vx then self:set_velocity(vx, vy + (self.cannon_gravity or 32)*dt) end
+  end
+
+  -- Hive locust-swarm movement: a restless, scattering drift. A continuous fine
+  -- jitter plus a periodic sharp DART (random heading kick every ~`dart` seconds)
+  -- make the path twitchy and unpredictable. Direction-only, so normalize_speed
+  -- (magnitude) never fights it; base speed is high, so it reads fast + erratic.
+  if self.stats.skin == 'swarm' and self.body then
+    self.swarm_dart_t = (self.swarm_dart_t or 0) - dt
+    local vx, vy = self:get_velocity()
+    if vx and (vx ~= 0 or vy ~= 0) then
+      local sp = math.sqrt(vx*vx + vy*vy)
+      local na = math.atan2(vy, vx) + random:float(-2.2, 2.2)*dt
+      if self.swarm_dart_t <= 0 then
+        self.swarm_dart_t = (self.stats.dart or 0.32)*random:float(0.6, 1.4)
+        na = na + random:float(-1, 1)*0.9
+      end
+      self:set_velocity(math.cos(na)*sp, math.sin(na)*sp)
+    end
   end
 
   -- Stormweaver erratic crackle: the heading stutters along a fast, sign-flipping
@@ -2340,6 +2542,14 @@ function BallHero:draw()
     -- Cryomancer: a faceted ice crystal -- a six-spoked snowflake star over a cold
     -- aura; spokes flare + it flashes when its frost field bites.
     self:draw_frost(s)
+  elseif self.stats.skin == 'flame' then
+    -- Pyromancer: a living fireball -- a spinning molten core streaming flame tongues
+    -- out behind its motion (a trailing comet); trailing embers + smoke.
+    self:draw_flame(s)
+  elseif self.stats.skin == 'witch' then
+    -- Witch: a dark void orb -- glowing eye, void aura, wreathed in shifting arcane
+    -- motes close to the core; it flashes on each death-pool drop.
+    self:draw_witch(s)
   elseif self.stats.skin == 'stormweaver' then
     -- Stormweaver: a caged-lightning orb -- a white-hot nucleus, crackling rim
     -- arcs and a breathing static aura; flares + discharges chain bolts on cast.
@@ -2348,6 +2558,9 @@ function BallHero:draw()
     -- Cannoneer: an iron siege mortar -- heavy base + a swiveling barrel that
     -- recoils + muzzle-flashes on fire, with a reload ember and a heat-haze aura.
     self:draw_cannon(s)
+  elseif self.stats.skin == 'swarm' then
+    -- Hive: a roiling cloud of locusts around a dark core; bulges + sprays on vent.
+    self:draw_swarm(s)
   else
     graphics.circle(self.x, self.y, self.r_size + 0.5, bg[-2])
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
@@ -2842,61 +3055,106 @@ function BallHero:draw_stormweaver(s)
 end
 
 
--- The cannoneer's siege-mortar body: a heavy iron base carrying a thick barrel
--- that swivels to the nearest brick (aim_a). A reload ember at the muzzle
--- brightens as the cooldown fills; on fire the barrel recoils backward along its
--- axis and a muzzle flash blooms (cannon_recoil_t). The physics body underneath is
--- the same r_size circle, so bounces are unchanged.
+-- The three barrel-circle offsets (world-relative) for the Triple Mortar, evenly
+-- spaced 120 deg apart and slowly spun by tri_a. i = 1..3 is the round-robin order.
+function BallHero:tri_offset(i)
+  local d = self.r_size*0.62
+  local a = (self.tri_a or 0) - math.pi/2 + (i - 1)*(2*math.pi/3)
+  return math.cos(a)*d, math.sin(a)*d
+end
+
+
+-- The cannoneer's "Triple Mortar" body: three barrel-circles arranged in a TRIANGLE
+-- around a small hub (a multi-barrel turret), slowly spinning. They fire in turn: the
+-- barrel that just went off (tri_pop) swells + muzzle-flashes, and the next one up
+-- glows a reload ember as the cd fills. Physics body is the same r_size circle.
 function BallHero:draw_cannon(s)
   s = s or 1
   local rs = self.r_size
-  local a  = self.aim_a or -math.pi/2
   local c  = self.color
 
-  -- Reload progress 0..1 from the attack cooldown trigger.
+  -- Reload progress 0..1 from the attack cooldown trigger (the next barrel's ember).
   local prog = 1
   local tr   = self.t.triggers and self.t.triggers.attack
   if tr and tr.delay and tr.delay > 0 then
     prog = math.clamp(tr.timer/(tr.delay*(tr.multiplier or 1)), 0, 1)
   end
 
-  -- Heat-haze aura: brightens as the next shell loads, pulses when ready.
-  local glow = 0.08 + 0.18*prog
-  if prog >= 1 then glow = 0.28 + 0.12*math.sin(love.timer.getTime()*6) end
-  graphics.circle(self.x, self.y, rs*1.7, Color(c.r, c.g, c.b, glow))
+  -- Heat-haze aura.
+  local glow = 0.08 + 0.16*prog
+  if prog >= 1 then glow = 0.26 + 0.12*math.sin(love.timer.getTime()*6) end
+  graphics.circle(self.x, self.y, rs*1.6, Color(c.r, c.g, c.b, glow))
 
-  -- Iron base (the ball body) with a coloured rim + metal highlight.
-  graphics.circle(self.x, self.y, rs + 0.5, bg[-2])
-  graphics.circle(self.x, self.y, rs*s, Color(0.26, 0.24, 0.26, 1))
-  graphics.circle(self.x, self.y, rs*s, c, 1)
-  graphics.circle(self.x - rs*0.32, self.y - rs*0.32, math.max(1, rs*0.3), fg[5])
+  -- Central hub binding the three barrels.
+  graphics.circle(self.x, self.y, rs*0.5, Color(0.22, 0.20, 0.22, 1))
 
-  -- Barrel: a thick tube along the aim, sliding back into recoil on fire.
-  graphics.push(self.x, self.y, a, s, s)
-    local kick = 0
-    if (self.cannon_recoil_t or 0) > 0 then kick = -(self.cannon_recoil_t/0.22)*rs*0.7 end
-    local x0  = self.x + kick   -- local frame: +x is the aim direction
-    local y0  = self.y
-    local len = rs*2.0
-    local bw  = rs*0.95
-    -- Tube + dark outline.
-    graphics.rectangle(x0 + len*0.5, y0, len, bw, 2, 2, Color(0.22, 0.20, 0.22, 1))
-    graphics.rectangle(x0 + len*0.5, y0, len, bw, 2, 2, bg[-2], 1)
-    -- Reinforcing band near the breech.
-    graphics.rectangle(x0 + rs*0.5, y0, rs*0.35, bw + 1.5, 1, 1, Color(0.32, 0.30, 0.32, 1))
-    -- Muzzle ring at the front.
-    local mx = x0 + len
-    graphics.circle(mx, y0, bw*0.6, Color(0.12, 0.11, 0.12, 1))
-    graphics.circle(mx, y0, bw*0.6, c, 1)
-    -- Muzzle flash on fire, or a reload ember glowing as the shell loads.
-    local flash = math.clamp((self.cannon_recoil_t or 0)/0.22, 0, 1)
-    if flash > 0.01 then
-      graphics.circle(mx + rs*0.4, y0, rs*(0.5 + flash*1.2), Color(1, 0.85, 0.4, flash*0.9))
-      graphics.circle(mx + rs*0.2, y0, rs*(0.3 + flash*0.6), Color(1, 1, 0.8, flash))
-    else
-      graphics.circle(mx, y0, 1.6, Color(1, 0.6 + 0.3*prog, 0.3, 0.4 + 0.5*prog))
+  -- The three barrel-circles. The NEXT to fire is the round-robin successor.
+  local next_i = ((self.tri_idx or 0) % 3) + 1
+  for i = 1, 3 do
+    local ox, oy = self:tri_offset(i)
+    local cx, cy = self.x + ox, self.y + oy
+    local pop = math.clamp((self.tri_pop and self.tri_pop[i]) or 0, 0, 1)
+    local br  = rs*0.62*(1 + pop*0.28)
+    -- Barrel body.
+    graphics.circle(cx, cy, br + 0.5, bg[-2])
+    graphics.circle(cx, cy, br, Color(0.26, 0.24, 0.26, 1))
+    graphics.circle(cx, cy, br, c, 1)
+    -- Dark muzzle hole.
+    graphics.circle(cx, cy, br*0.45, Color(0.10, 0.10, 0.11, 1))
+    -- Reload ember on the barrel about to fire.
+    if i == next_i and pop <= 0.01 then
+      graphics.circle(cx, cy, br*0.4, Color(1, 0.6 + 0.3*prog, 0.3, 0.3 + 0.5*prog))
     end
-  graphics.pop()
+    -- Muzzle flash on the barrel that just fired.
+    if pop > 0.01 then
+      graphics.circle(cx, cy, br*(0.5 + pop*1.0), Color(1, 0.85, 0.4, pop*0.9))
+      graphics.circle(cx, cy, br*(0.3 + pop*0.55), Color(1, 1, 0.8, pop))
+    end
+    -- Metal highlight.
+    graphics.circle(cx - br*0.3, cy - br*0.3, math.max(0.8, br*0.28), fg[5])
+  end
+end
+
+
+-- The Hive's body: a NON-solid roiling cloud of mini-locusts loosely held in a ball
+-- around a dark dense core, wrapped in a hazy aura with flickering green wing-glints.
+-- The silhouette pulses; on a vent (swarm_cast_t) the whole cloud bulges toward the
+-- target. No solid shell -- the physics body underneath is still the r_size circle.
+function BallHero:draw_swarm(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local t  = self.swarm_t or 0
+  local cast = math.clamp((self.swarm_cast_t or 0)/0.18, 0, 1)
+  local pulse = 1 + 0.12*math.sin(t*4) + cast*0.15
+  -- Bulge offset toward the last vent target.
+  local bx = (cast > 0) and math.cos(self.swarm_cast_a or 0)*cast*5 or 0
+  local by = (cast > 0) and math.sin(self.swarm_cast_a or 0)*cast*5 or 0
+
+  -- Hazy dark aura + flickering green wing-glints orbiting in the haze. Kept tight
+  -- so the swarm reads as a COMPACT, dense knot of bugs (same mote count, smaller radius).
+  graphics.circle(self.x, self.y, rs*1.7*pulse, Color(0.06, 0.08, 0.03, 0.45))
+  for i = 1, 5 do
+    local a = t*3 + i*1.3
+    graphics.circle(self.x + math.cos(a)*rs*1.35, self.y + math.sin(a)*rs*1.25, 0.8, Color(c.r, c.g, c.b, 0.5))
+  end
+
+  -- Dense dark core.
+  graphics.circle(self.x + bx, self.y + by, rs*0.95*pulse, Color(0.04, 0.05, 0.02, 0.9))
+
+  -- The roiling mini-locusts: tiny dashes, mostly dark olive with the odd bright one.
+  for _, m in ipairs(self.swarm_motes or {}) do
+    local rad = m.rad*pulse + math.sin(m.j)*1.0
+    local mx  = self.x + bx + math.cos(m.a)*rad
+    local my  = self.y + by + math.sin(m.a)*rad*0.95
+    local a2  = m.a + math.pi/2
+    local col = (m.rr > 0.85) and Color(c.r, c.g, c.b, 0.85) or Color(0.18, 0.20, 0.10, 0.95)
+    graphics.line(mx - math.cos(a2)*1.3, my - math.sin(a2)*1.3,
+                  mx + math.cos(a2)*1.3, my + math.sin(a2)*1.3, col, 1.3)
+  end
+
+  -- Faint inner glow so it still reads as the hero's colour; flares on a vent.
+  graphics.circle(self.x + bx, self.y + by, rs*0.6, Color(c.r, c.g, c.b, 0.2 + cast*0.3))
 end
 
 
@@ -3048,6 +3306,107 @@ function BallHero:draw_frost(s)
   -- White glint + a white-hot center on a bite.
   graphics.circle(self.x - rs*0.25*sc, self.y - rs*0.28*sc, math.max(1, rs*0.22), Color(1, 1, 1, 0.85))
   if flash > 0 then graphics.circle(self.x, self.y, rs*0.4*sc, Color(1, 1, 1, flash*0.7)) end
+end
+
+
+-- The pyromancer's "Inferno" body: a living fireball. A molten orange core (the ball
+-- body) wrapped in dancing flame tongues that always lick UPWARD (flames rise) and
+-- waver on their own phases, over a flickering heat aura, with a white-hot center
+-- that pulses. Flares bigger + brighter for a beat after each bounce (flame_flare_t).
+-- VISUAL only -- the burn-on-bounce attack is unchanged; same r_size physics circle.
+function BallHero:draw_flame(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local t  = self.flame_t or 0
+  local flare = math.clamp((self.flame_flare_t or 0)/0.2, 0, 1)
+  -- Fast flame flicker (layered sines, deterministic).
+  local fl = math.clamp(0.5 + 0.3*math.sin(t*16) + 0.2*math.sin(t*27 + 1.7), 0, 1)
+  local heat = 1 + flare*0.4
+
+  -- Trail direction = OPPOSITE the ball's travel, so the flames stream out BEHIND it
+  -- like a comet (falls back to straight up when nearly still).
+  local ta = -math.pi/2
+  if self.body then
+    local vx, vy = self:get_velocity()
+    if vx and (vx*vx + vy*vy) > 100 then ta = math.atan2(-vy, -vx) end
+  end
+  local ca, sa   = math.cos(ta), math.sin(ta)
+  local pca, psa = math.cos(ta + math.pi/2), math.sin(ta + math.pi/2)
+
+  -- Heat-haze aura, flickering + flaring.
+  graphics.circle(self.x, self.y, (rs*1.8 + rs*0.5*fl + flare*6)*s,
+                  Color(c.r, c.g*0.35 + 0.08, 0.05, 0.12 + 0.08*fl + flare*0.22))
+
+  -- Flame tongues streaming out BEHIND the ball; each a tapered triangle whose tip
+  -- wavers perpendicular to the trail. `off` spreads them across the plume width.
+  local function tongue(off, baseW, len, col, phase, spd)
+    local waver = math.sin(t*spd + phase)*len*0.18
+    local b1x, b1y = self.x + pca*(off + baseW), self.y + psa*(off + baseW)
+    local b2x, b2y = self.x + pca*(off - baseW), self.y + psa*(off - baseW)
+    local tx  = self.x + ca*len*heat + pca*(off + waver)
+    local ty  = self.y + sa*len*heat + psa*(off + waver)
+    graphics.polygon({b1x, b1y, b2x, b2y, tx, ty}, col)
+  end
+  local red_c    = Color(c.r, c.g, c.b, 0.95)
+  local orange_c = Color(1, 0.55, 0.12, 0.95)
+  -- Outer red tongues (longer).
+  tongue(-rs*0.7*s, rs*0.45*s, rs*2.4*s*(0.85 + 0.3*fl), red_c, 0.0, 13)
+  tongue( rs*0.7*s, rs*0.45*s, rs*2.4*s*(0.85 + 0.3*fl), red_c, 2.1, 11)
+  tongue( 0,        rs*0.55*s, rs*3.1*s*(0.90 + 0.25*fl), red_c, 1.0, 15)
+  -- Inner orange tongues (shorter, hotter).
+  tongue(-rs*0.4*s, rs*0.33*s, rs*1.6*s*(0.85 + 0.3*fl), orange_c, 0.7, 17)
+  tongue( rs*0.4*s, rs*0.33*s, rs*1.6*s*(0.85 + 0.3*fl), orange_c, 1.9, 14)
+  tongue( 0,        rs*0.38*s, rs*2.2*s*(0.90 + 0.25*fl), orange_c, 0.3, 19)
+
+  -- Molten core (the ball body), pulsing white-hot, with a hot-spot that ORBITS the
+  -- core as the body physically SPINS (self:get_angle()) -- a tumbling fireball.
+  local spin = (self.body and self:get_angle()) or 0
+  graphics.circle(self.x, self.y, rs*s + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*s, Color(1, 0.45, 0.10, 1))
+  graphics.circle(self.x, self.y, rs*0.55*s*(0.9 + 0.2*fl), Color(1, 0.8, 0.25, 1))
+  graphics.circle(self.x + math.cos(spin)*rs*0.32*s, self.y + math.sin(spin)*rs*0.32*s,
+                  rs*0.24*s, Color(1, 1, 0.85, 0.95))
+end
+
+
+-- The witch's "Hexcraft" body: a dark void orb with a glowing void eye, wrapped in a
+-- soft void aura and WREATHED in shifting arcane motes that drift + flicker close to
+-- the core for a restless, mystic feel. The body flashes for a beat on each
+-- death-pool drop (witch_cast_t). Same r_size physics circle underneath.
+function BallHero:draw_witch(s)
+  s = s or 1
+  local rs = self.r_size
+  local c  = self.color
+  local t  = self.witch_t or 0
+  local cast = math.clamp((self.witch_cast_t or 0)/0.3, 0, 1)
+  local breathe = 0.5 + 0.5*math.sin(t*2)
+  local sc = s*(1 + cast*0.12)
+
+  -- Void aura.
+  graphics.circle(self.x, self.y, rs*(1.7 + 0.25*breathe)*sc + cast*5,
+                  Color(c.r, c.g, c.b, 0.10 + 0.05*breathe + cast*0.2))
+
+  -- Void orb body + glowing eye.
+  graphics.circle(self.x, self.y, rs*sc + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*sc, Color(c.r*0.55, c.g*0.4, c.b*0.65, 1))
+  graphics.circle(self.x, self.y, rs*0.42*sc*(0.9 + 0.2*breathe), Color(c.r, c.g, c.b, 1))
+  graphics.circle(self.x, self.y, rs*0.18*sc, Color(1, 0.9, 1, 0.85))
+
+  -- Shifting mystic motes hugging the core: each drifts on its own clock (its angle
+  -- AND orbit radius both shift) and flickers, so the orb is wreathed in restless
+  -- arcane dust. Drawn over the body so they shimmer across its surface + rim.
+  local mote_c = Color(math.min(1, c.r*1.4), c.g*0.85, math.min(1, c.b*1.5), 1)
+  for i = 1, 8 do
+    local seed = i*1.9
+    local a    = i*math.pi/4 + t*(0.5 + (i % 3)*0.3) + 0.4*math.sin(t*1.7 + seed)
+    local rad  = rs*(0.78 + 0.4*math.sin(t*1.3 + seed))*sc
+    local px, py = self.x + math.cos(a)*rad, self.y + math.sin(a)*rad
+    local fl   = 0.5 + 0.5*math.sin(t*5 + seed*2.1)
+    local r    = (0.7 + 0.7*fl)*sc
+    graphics.circle(px, py, r*1.9, Color(c.r, c.g, c.b, (0.22 + cast*0.18)*fl))
+    graphics.circle(px, py, r, Color(mote_c.r, mote_c.g, mote_c.b, 0.45 + 0.45*fl))
+  end
 end
 
 

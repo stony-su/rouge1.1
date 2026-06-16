@@ -270,6 +270,11 @@ function Paddle:draw()
     return
   end
 
+  if self.paddle_skin == 'vampire' then
+    self:draw_vampire_paddle(s, body_color)
+    return
+  end
+
   graphics.push(self.x, self.y, 0, s, 1/s)
     graphics.rectangle(self.x, self.y, self.w, self.h, 2, 2, body_color)
     graphics.rectangle(self.x, self.y - self.h/2, self.w, 1, nil, nil, fg[5])
@@ -347,6 +352,35 @@ function Paddle:draw_boomerang_arm(hx, hy, tx, ty, th, color)
   graphics.pop()
   graphics.circle(tx, ty, th*0.5, color)        -- rounded tip
   graphics.circle(tx, ty, th*0.24, fg[5])       -- tip cap glint
+end
+
+
+-- The Vampire paddle: a dark, glossy blood-slab that breathes a crimson glow,
+-- with two fangs hanging beneath the centre and a blood drip that forms, falls
+-- and fades on a loop. Purely cosmetic — same flat hitbox as the standard bar.
+function Paddle:draw_vampire_paddle(s, color)
+  local t      = love.timer.getTime()
+  local x, y   = self.x, self.y
+  local w, h   = self.w, self.h
+  local pulse  = 0.5 + 0.5*math.sin(t*3)
+  graphics.push(x, y, 0, s, 1/s)
+    -- breathing crimson glow aura
+    graphics.rectangle(x, y, w + 5 + pulse*2, h + 5, (h + 5)/2, (h + 5)/2,
+                       Color(color.r, color.g*0.15, color.b*0.15, 0.16 + 0.12*pulse))
+    -- dark glossy body + bright blood top band + edge
+    graphics.rectangle(x, y, w, h, 2, 2, Color(color.r*0.62, color.g*0.16, color.b*0.18, 1))
+    graphics.rectangle(x, y - h*0.16, w, h*0.42, 1, 1,
+                       Color(math.min(1, color.r*1.15), color.g*0.28, color.b*0.30, 1))
+    graphics.rectangle(x, y - h/2, w*0.96, 1, nil, nil, fg[5])
+    -- two fangs hanging beneath the centre
+    local fy = y + h/2
+    graphics.polygon({x - 3.5, fy, x - 1, fy, x - 2.25, fy + 4.5}, Color(1, 1, 1, 0.92))
+    graphics.polygon({x + 1, fy, x + 3.5, fy, x + 2.25, fy + 4.5}, Color(1, 1, 1, 0.92))
+    -- a blood drip that forms at a fang, falls and fades on a loop
+    local drip = (t*0.8) % 1
+    graphics.circle(x - 2.25, fy + 3 + drip*7, math.max(0.6, 1.4*(1 - drip)),
+                    Color(color.r, color.g*0.18, color.b*0.20, 1 - drip))
+  graphics.pop()
 end
 
 

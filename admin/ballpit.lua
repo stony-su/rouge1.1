@@ -755,7 +755,7 @@ function BallPit:reset_run()
     flipper_gap = pdef.sig.gap, flip_window = pdef.sig.flip_window,
     flipper_sig = pdef.sig,
     move_mode = (pdef.signature == 'glacier') and 'ice' or nil,
-    paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang'})[pdef.signature],
+    paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang', vampire = 'vampire'})[pdef.signature],
   }
 
   -- Pinball Lobber: damp the side/top walls so balls shed energy on a wall hit
@@ -783,6 +783,11 @@ function BallPit:reset_run()
     self.player_hp     = pdef.hp
     self.player_hp_max = pdef.hp
   end
+  -- Vampire blood-bar feedback state: a smoothed displayed fill, a heal-flash
+  -- timer, and the in-flight lifesteal droplets (see the vampire_* helpers).
+  self.hp_display     = self.player_hp
+  self.hp_flash       = 0
+  self.blood_droplets = {}
   self.run_kills     = 0
   self.xp            = 0
   self.level         = 1
@@ -1361,6 +1366,7 @@ function BallPit:update(dt)
         self:trigger_game_over()
         return
       end
+      self:update_vampire(sdt)
     end
 
     -- Aim is adjustable whenever space is held OR a ball is stuck on the paddle.
@@ -1572,6 +1578,126 @@ function BallPit:draw_admin_button()
 end
 
 
+-- ===== Vampire loadout: blood bar + lifesteal droplets =====
+
+-- The blood bar's screen rect: left x, centre y, width, height. Longer than the
+-- old 64px stub so the 0-100 pool reads with real precision. Shared by the draw,
+-- the droplet target and the XP-bar offset so they always line up.
+function BallPit:blood_bar_rect()
+  return self.x1 + 6, self.y1 - 8, 104, 7
+end
+
+
+-- Where lifesteal droplets fly to: the live surface of the blood (the fill
+-- front), so they look like they top the pool up where it meets air.
+function BallPit:blood_bar_target()
+  local x, yc, w = self:blood_bar_rect()
+  local pct = math.clamp((self.hp_display or self.player_hp)/self.player_hp_max, 0, 1)
+  return x + w*pct, yc
+end
+
+
+-- Lifesteal: a kill sprays a few blood droplets from the kill point. They
+-- scatter, then home to the blood bar and top it up on arrival (update_vampire
+-- -> vampire_absorb).
+function BallPit:vampire_spawn_blood(x, y, amount)
+  self.blood_droplets = self.blood_droplets or {}
+  local n = 3
+  for _ = 1, n do
+    table.insert(self.blood_droplets, {
+      x = x + random:float(-4, 4), y = y + random:float(-4, 4),
+      vx = random:float(-70, 70), vy = random:float(-100, -30),
+      amount = amount/n, scatter = random:float(0.10, 0.22),
+      r = random:float(1.6, 2.8), tint = random:float(0.8, 1.0), t = 0,
+    })
+  end
+end
+
+
+-- Per-frame: smooth the displayed fill toward the real HP, decay the heal
+-- flash, and fly the droplets to the bar. Driven from the drain block so it
+-- shares the menu / upgrade-picker auto-pause.
+function BallPit:update_vampire(dt)
+  self.hp_display = self.hp_display or self.player_hp
+  self.hp_display = self.hp_display + (self.player_hp - self.hp_display)*math.min(1, 12*dt)
+  self.hp_flash   = math.max(0, (self.hp_flash or 0) - dt*2.5)
+  local list = self.blood_droplets
+  if not (list and #list > 0) then return end
+  local tx, ty = self:blood_bar_target()
+  for i = #list, 1, -1 do
+    local d = list[i]
+    d.t = d.t + dt
+    if d.t < d.scatter then
+      d.vy = d.vy + 320*dt
+      d.x, d.y = d.x + d.vx*dt, d.y + d.vy*dt
+    else
+      local dx, dy = tx - d.x, ty - d.y
+      local dist = math.sqrt(dx*dx + dy*dy)
+      if dist < 5 then
+        self:vampire_absorb(d.amount)
+        table.remove(list, i)
+      else
+        local sp = math.min(560, 170 + dist*5)
+        d.x, d.y = d.x + (dx/dist)*sp*dt, d.y + (dy/dist)*sp*dt
+      end
+    end
+  end
+end
+
+
+-- A droplet reaches the bar: top up the pool and kick the heal flash.
+function BallPit:vampire_absorb(amount)
+  self.player_hp = math.min(self.player_hp_max, self.player_hp + amount)
+  self.hp_flash  = 1
+end
+
+
+-- The fancy blood bar: a dark vial holding a sloshing red pool with a wavy
+-- meniscus, rising bubbles, a glass specular streak, a low-HP danger pulse and a
+-- heal-flash glow. Draws the in-flight lifesteal droplets on top.
+function BallPit:draw_blood_bar()
+  local x, yc, w, h = self:blood_bar_rect()
+  local t  = love.timer.getTime()
+  local cx = x + w/2
+  graphics.rectangle(cx, yc, w + 4, h + 4, (h + 4)/2, (h + 4)/2, Color(0.12, 0.02, 0.03, 1))  -- casing
+  graphics.rectangle(cx, yc, w, h, h/2, h/2, bg[-2])                                           -- empty vial
+  local pct = math.clamp((self.hp_display or self.player_hp)/self.player_hp_max, 0, 1)
+  if pct > 0 then
+    local fw  = math.max(h, w*pct)
+    local fcx = x + fw/2
+    local low = (pct < 0.25) and (0.55 + 0.45*math.sin(t*11)) or 1
+    local base = Color(0.5*low, 0.02, 0.05, 1)
+    local lite = Color(math.min(1, 0.85*low), 0.12, 0.14, 1)
+    graphics.rectangle(fcx, yc, fw, h, h/2, h/2, base)
+    graphics.rectangle(fcx, yc - h*0.16, fw, h*0.42, h*0.2, h*0.2, lite)   -- upper volume band
+    for i = 1, 3 do                                                        -- rising bubbles
+      local bx = x + (i/4)*fw
+      local by = yc + h*0.3 - ((t*8 + i*3) % (h*1.2))
+      graphics.circle(bx, by, 0.8, Color(1, 0.5, 0.5, 0.4))
+    end
+    local front = x + fw                                                   -- wavy meniscus
+    for i = -1, 1 do
+      graphics.circle(front + math.sin(t*6 + i*1.7)*1.1, yc + i*(h*0.24), h*0.34, lite)
+    end
+    local fl = self.hp_flash or 0                                          -- heal flash + splash ring
+    if fl > 0 then
+      graphics.rectangle(fcx, yc, fw + 3, h + 3, (h + 3)/2, (h + 3)/2, Color(1, 0.55, 0.55, 0.5*fl), 1)
+      graphics.circle(front, yc, h*(0.6 + (1 - fl)*1.4), Color(1, 0.6, 0.6, 0.5*fl), 1)
+    end
+  end
+  graphics.rectangle(cx, yc - h*0.3, w*0.96, 1, nil, nil, Color(1, 1, 1, 0.16))                -- glass streak
+  graphics.polygon({x - 1, yc - 2.5, x + 2, yc - 2.5, x + 0.5, yc + 2}, Color(1, 1, 1, 0.85))  -- fang/drop marker
+
+  if self.blood_droplets then                                              -- in-flight lifesteal droplets
+    for _, d in ipairs(self.blood_droplets) do
+      graphics.circle(d.x, d.y + 0.6, d.r, Color(0.2, 0, 0, 0.35))
+      graphics.circle(d.x, d.y, d.r, Color(0.7*d.tint, 0.04, 0.06, 1))
+      graphics.circle(d.x - d.r*0.3, d.y - d.r*0.3, math.max(0.5, d.r*0.4), Color(1, 0.6, 0.6, 0.8))
+    end
+  end
+end
+
+
 function BallPit:draw_hud()
   -- Frame around playfield.
   graphics.rectangle((self.x1 + self.x2)/2, (self.y1 + self.y2)/2,
@@ -1590,13 +1716,7 @@ function BallPit:draw_hud()
   -- 0-100 bar instead.
   local hp_bar_mode = self.run_mods and self.run_mods.hp_mode == 'bar'
   if hp_bar_mode then
-    local hbw, hbh = 64, 6
-    local hbx = self.x1 + 6
-    graphics.rectangle(hbx + hbw/2, self.y1 - 8, hbw, hbh, 1, 1, bg[-2])
-    local hpct = math.clamp(self.player_hp/self.player_hp_max, 0, 1)
-    if hpct > 0 then
-      graphics.rectangle(hbx + hbw*hpct/2, self.y1 - 8, hbw*hpct, hbh, 1, 1, red[0])
-    end
+    self:draw_blood_bar()
   else
     for i = 1, self.player_hp_max do
       local color = i <= self.player_hp and red[0] or bg[2]
@@ -1604,9 +1724,11 @@ function BallPit:draw_hud()
     end
   end
 
-  -- XP bar. Starts past however wide the HP readout is (Aegis runs 7 hearts)
-  -- and leaves a ~70px strip on the right for the combo meter.
-  local bx = hp_bar_mode and (self.x1 + 80) or (self.x1 + 20 + self.player_hp_max*10)
+  -- XP bar. Starts past however wide the HP readout is (Aegis runs 7 hearts,
+  -- the Vampire blood bar is longer still) and leaves a ~70px strip on the
+  -- right for the combo meter.
+  local hb_x, _, hb_w = self:blood_bar_rect()
+  local bx = hp_bar_mode and (hb_x + hb_w + 14) or (self.x1 + 20 + self.player_hp_max*10)
   local bw = (self.x2 - 80) - bx
   graphics.rectangle(bx + bw/2, self.y1 - 8, bw, 4, nil, nil, bg[-2])
   local pct = math.clamp(self.xp/self.xp_to_next, 0, 1)
@@ -1643,10 +1765,11 @@ function BallPit:on_brick_killed(brick)
 
   local mods = self.run_mods
   if mods then
-    -- Vampire lifesteal: kills refill the draining bar.
+    -- Vampire lifesteal: kills spray blood droplets that fly from the kill to
+    -- the blood bar and top it up on arrival (see vampire_spawn_blood) — the
+    -- refill is shown travelling in, not just ticking up.
     if mods.hp_mode == 'bar' then
-      self.player_hp = math.min(self.player_hp_max,
-                                self.player_hp + (mods.sig.heal_per_kill or 3))
+      self:vampire_spawn_blood(brick.x, brick.y, mods.sig.heal_per_kill or 3)
     end
     -- Mitosis: each kill splits off a short-lived clone ball.
     if mods.signature == 'mitosis' then self:mitosis_on_kill() end
@@ -2066,11 +2189,11 @@ function BallPit:hero_ability_blurb(c)
     -- Force area
     psykino      = 'knockback',
 
-    -- Ally damage buffs
-    stormweaver  = '+50% ally dmg',
+    -- Chain lightning
+    stormweaver  = 'chain lightning',
 
-    -- Pet summons
-    infestor     = '3 pets / 10s',
+    -- Hive / locust swarm
+    infestor     = 'locust swarm',
 
     -- Misc
     gambler      = 'lucky strikes',
@@ -2078,11 +2201,13 @@ function BallPit:hero_ability_blurb(c)
     -- Volcano
     vulcanist    = 'plants volcano',
 
+    -- Cannon (ranged AoE)
+    cannoneer    = 'cannon blast',
+
     -- On-bounce specials
     wizard       = 'chain on hit',
     cryomancer   = 'freeze on hit',
     pyromancer   = 'burn on hit',
-    cannoneer    = 'boom on hit',
   }
   return blurbs[c] or 'ball-hero'
 end

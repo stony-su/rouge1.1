@@ -292,6 +292,105 @@ function FrostArea:draw()
 end
 
 
+-- VoidPool (SNKRX witch port: player.lua:444 / DotArea "Death Pool"). A roaming
+-- purple void field that DRIFTS and RICOCHETS off the arena walls, dealing void DoT
+-- to every enemy it rolls over for `duration` seconds before fading. Level 3
+-- ("Death Pool") makes it periodically spit a chaining projectile at the nearest
+-- brick. Same rotating-circle look as the frost field, but it moves independently
+-- instead of following a ball.
+VoidPool = Object:extend()
+VoidPool:implement(GameObject)
+function VoidPool:init(args)
+  self:init_game_object(args)
+  self.rs        = self.rs or 44
+  self.color     = self.color or purple[0]
+  self.dmg       = self.dmg or 4          -- damage per TICK to enemies inside
+  self.tick      = self.tick or 0.25
+  self.duration  = self.duration or 13
+  self.level     = self.level or 1
+  self.shoot_dmg = self.shoot_dmg or 10
+  self.v         = random:float(40, 80)
+  self.r         = random:table{math.pi/4, 3*math.pi/4, -math.pi/4, -3*math.pi/4}
+  self.vr        = random:float(0, 2*math.pi)
+  self.dvr       = random:table{-1, 1}*random:float(0.6, 1.1)
+  self.pulse     = random:float(0, 6.28)
+  self.hit_pulse = 0
+  self.appear    = 0
+  self.alpha     = 1
+  self.t:tween(0.25, self, {appear = 1}, math.cubic_in_out)
+  self.t:after(self.duration - 0.5, function()
+    self.t:tween(0.5, self, {alpha = 0}, math.linear, function() self.dead = true end)
+  end)
+  self.t:every(self.tick, function() self:pool_tick() end)
+  if self.level >= 3 then self.t:every(1.2, function() self:pool_shoot() end) end
+end
+function VoidPool:update(dt)
+  self:update_game_object(dt)
+  self.pulse     = self.pulse + dt
+  self.vr        = self.vr + self.dvr*dt
+  self.hit_pulse = math.max(0, self.hit_pulse - dt*3)
+  -- Roam + ricochet off the arena walls (SNKRX witch DotArea).
+  local arena = main.current
+  if not arena then return end
+  self.x = self.x + self.v*math.cos(self.r)*dt
+  self.y = self.y + self.v*math.sin(self.r)*dt
+  local m = self.rs*0.5
+  if self.x <= arena.x1 + m or self.x >= arena.x2 - m then
+    self.r = math.pi - self.r
+    self.x = math.clamp(self.x, arena.x1 + m, arena.x2 - m)
+  end
+  if self.y <= arena.y1 + m or self.y >= arena.y2 - m then
+    self.r = -self.r
+    self.y = math.clamp(self.y, arena.y1 + m, arena.y2 - m)
+  end
+end
+function VoidPool:pool_tick()
+  local arena = main.current
+  if not (arena and arena.main) then return end
+  local hit_any = false
+  for _, o in ipairs(arena.main.objects) do
+    if not o.dead and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+      if math.distance(self.x, self.y, o.x, o.y) <= self.rs then
+        hit_any = true
+        if o.take_damage then o:take_damage(self.dmg, self.color, true) end
+        if random:bool(22) then
+          SmokePuff{group = arena.effects, x = o.x + random:float(-4, 4), y = o.y + random:float(-4, 4),
+                    color = Color(self.color.r, self.color.g*0.5, self.color.b, 1), rs = random:float(0.8, 1.5),
+                    alpha = 0.7, vx = random:float(-8, 8), vy = random:float(-10, 8), duration = random:float(0.3, 0.6)}
+        end
+      end
+    end
+  end
+  if hit_any then self.hit_pulse = 1; dot1:play{volume = 0.2, pitch = random:float(0.85, 1.05)} end
+end
+function VoidPool:pool_shoot()
+  local arena = main.current
+  if not (arena and arena.main and arena.main.world) then return end
+  local target = arena:get_nearest_brick_within(self.x, self.y, 180)
+  if not target then return end
+  local r = math.atan2(target.y - self.y, target.x - self.x)
+  Projectile{group = arena.main, x = self.x, y = self.y, r = r, type = 'knife',
+             dmg = self.shoot_dmg, speed = 230, color = self.color, chain = 1}
+  _G[random:table{'scout1', 'scout2'}]:play{pitch = random:float(0.95, 1.05), volume = 0.3}
+end
+function VoidPool:draw()
+  local c  = self.color
+  local rs = self.rs*(self.appear or 1)*(1 + (self.hit_pulse or 0)*0.06)
+  local a  = self.alpha or 1
+  local pulse = 0.5 + 0.5*math.sin((self.pulse or 0)*2.5)
+  graphics.circle(self.x, self.y, rs, Color(c.r, c.g, c.b, (0.07 + 0.04*pulse + (self.hit_pulse or 0)*0.05)*a))
+  graphics.circle(self.x, self.y, rs, Color(c.r, c.g, c.b, (0.2 + 0.15*(self.hit_pulse or 0))*a), 1)
+  for i = 1, 4 do
+    local b = self.vr + (i - 1)*math.pi/2 + math.pi/4
+    graphics.arc('open', self.x, self.y, rs, b - math.pi/8, b + math.pi/8, Color(c.r, c.g, c.b, a), 3)
+  end
+  for i = 1, 3 do
+    local b = -self.vr*1.4 + (i - 1)*2*math.pi/3
+    graphics.arc('open', self.x, self.y, rs*0.6, b - 0.22, b + 0.22, Color(c.r, c.g, c.b, 0.55*a), 1.5)
+  end
+end
+
+
 -- BombDrop (bomber "reactor core" rework). A planted UNSTABLE CONTAINMENT CELL:
 -- a hexagonal casing with rotating containment brackets straining around a pulsing
 -- plasma core -- deliberately distinct from the bomber ball's round vented core.
@@ -858,6 +957,113 @@ function StormSpark:draw()
   local k      = self.len*0.35
   graphics.line(self.x - ca*hl, self.y - sa*hl, self.x - sa*k, self.y + ca*k, c, 1)
   graphics.line(self.x - sa*k,  self.y + ca*k,  self.x + ca*hl, self.y + sa*hl, c, 1)
+end
+
+
+-- MortarShell: the cannoneer's artillery shell. Launches straight UP off the top of
+-- the screen, hangs while a RED target SCOPE marks the impact spot, then drops back
+-- IN onto that spot and DETONATES into a wide splash (do_splash) -- with a level-3
+-- aftershock bombardment. A pure logic/visual entity (no physics): it integrates its
+-- own arc and fades at the top edge so it reads as leaving + re-entering the arena.
+MortarShell = Object:extend()
+MortarShell:implement(GameObject)
+function MortarShell:init(args)
+  self:init_game_object(args)
+  self.color        = self.color or orange[0]
+  self.tx           = self.tx or self.x
+  self.ty           = self.ty or self.y
+  self.dmg          = self.dmg or 20
+  self.blast_radius = self.blast_radius or 56
+  self.bombard      = self.bombard or 0
+  self.delay        = self.delay or 1.0
+  self.age          = 0
+  self.exploded     = false
+  self.lx, self.ly  = self.x, self.y
+  local arena = main.current
+  self.top_y      = (arena and arena.y1 or 0) + 2
+  self.launch_dur = 0.22
+  self.fall_dur   = math.min(0.45, self.delay*0.5)
+  -- A launch puff at the muzzle as the shell leaves the tube.
+  for _ = 1, 4 do
+    SmokePuff{group = self.group, x = self.lx + random:float(-3, 3), y = self.ly - 8,
+              color = Color(0.34, 0.32, 0.30, 1), rs = random:float(2, 4), alpha = random:float(0.35, 0.55),
+              vx = random:float(-20, 20), vy = random:float(-50, -24), duration = random:float(0.4, 0.7)}
+  end
+end
+
+function MortarShell:update(dt)
+  self:update_game_object(dt)
+  self.age = self.age + dt
+  if not self.exploded and self.age >= self.delay then self:land() end
+end
+
+function MortarShell:land()
+  self.exploded = true
+  local arena = main.current
+  if arena then
+    arena:do_splash(self.tx, self.ty, self.blast_radius, self.dmg, self.color)
+    explosion1:play{volume = 0.5, pitch = random:float(0.9, 1.0)}
+    for _ = 1, 6 do
+      SmokePuff{group = self.group, x = self.tx + random:float(-self.blast_radius*0.4, self.blast_radius*0.4),
+                y = self.ty + random:float(-self.blast_radius*0.4, self.blast_radius*0.4),
+                color = Color(0.30, 0.28, 0.26, 1), rs = random:float(3, 6), alpha = random:float(0.3, 0.5),
+                vx = random:float(-22, 22), vy = random:float(-44, -10), duration = random:float(0.5, 0.9)}
+    end
+    -- Level-3 bombardment: a few weaker aftershocks walk outward over ~0.9s.
+    if self.bombard > 0 then
+      local n, r, dmg, col = self.bombard, self.blast_radius, self.dmg, self.color
+      local tx, ty = self.tx, self.ty
+      for i = 1, n do
+        local bx, by = tx + random:float(-44, 44), ty + random:float(-44, 44)
+        arena.t:after(i*0.18, function()
+          local a = main.current
+          if not (a and a.world) then return end
+          a:do_splash(bx, by, r*0.7, dmg*0.5, col)
+          explosion1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
+        end)
+      end
+    end
+  end
+  self.dead = true
+end
+
+function MortarShell:draw()
+  local age  = self.age
+  local prog = math.clamp(age/self.delay, 0, 1)
+  local r    = red[0]
+
+  -- RED TARGET SCOPE at the impact point, painted the whole flight: a pulsing marker
+  -- ring, a contracting "incoming" ring that closes in as impact nears, crosshair
+  -- ticks, and a centre dot -- artillery lock-on.
+  local pulse = 0.55 + 0.45*math.sin(age*16)
+  graphics.circle(self.tx, self.ty, 14, Color(r.r, r.g, r.b, 0.35 + 0.25*pulse), 1.5)
+  graphics.circle(self.tx, self.ty, 26*(1 - prog) + 4, Color(r.r, r.g, r.b, 0.5*pulse), 1.5)
+  for i = 0, 3 do
+    local ca, sa = math.cos(i*math.pi/2), math.sin(i*math.pi/2)
+    graphics.line(self.tx + ca*5, self.ty + sa*5, self.tx + ca*12, self.ty + sa*12, Color(r.r, r.g, r.b, 0.7), 1.5)
+  end
+  graphics.circle(self.tx, self.ty, 1.6, Color(r.r, r.g, r.b, 0.9))
+
+  -- The shell: rises off the top (fading out near the edge), hangs out of view, then
+  -- drops back in (fading in) and accelerates onto the target -- with a growing shadow.
+  local sx, sy, vis
+  if age < self.launch_dur then
+    local k = age/self.launch_dur
+    sx, sy = self.lx, self.ly + (self.top_y - self.ly)*(1 - (1 - k)*(1 - k))
+    vis = 1 - math.clamp((k - 0.6)/0.4, 0, 1)
+  elseif age > self.delay - self.fall_dur then
+    local k = (age - (self.delay - self.fall_dur))/self.fall_dur
+    sx, sy = self.tx, self.top_y + (self.ty - self.top_y)*(k*k)
+    vis = math.clamp(k/0.35, 0, 1)
+    graphics.circle(self.tx, self.ty, self.blast_radius*0.25*k, Color(0, 0, 0, 0.28*k))   -- ground shadow
+  end
+  if sx then
+    local rising = age < self.launch_dur
+    graphics.circle(sx, sy, 3.2, Color(0.16, 0.15, 0.17, vis))
+    graphics.circle(sx, sy, 3.2, Color(self.color.r, self.color.g, self.color.b, 0.5*vis), 1)
+    graphics.line(sx, sy, sx, rising and (sy + 7) or (sy - 8), Color(self.color.r, self.color.g, self.color.b, 0.4*vis), 1.5)
+    graphics.circle(sx, sy + (rising and -2.4 or 2.4), 1.2, Color(1, 0.85, 0.4, vis))   -- hot tip
+  end
 end
 
 
