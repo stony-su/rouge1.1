@@ -574,6 +574,15 @@ end
 
 function AllyCritter:on_brick_contact(brick)
   if brick.dead then return end
+  -- Hive (Infestation Contagion): the maggot SEEDS a self-spreading rot instead
+  -- of a flat bite — the plague is the damage. The rot eats this brick and
+  -- creeps to its neighbours (see Brick:apply_infest / infest_spread).
+  if self.infest and brick.apply_infest then
+    brick:apply_infest(1)   -- full potency; rot is necrotic green, not the bug's hue
+    spawn_burst(main.current.effects, self.x, self.y, Color(0.30, 0.42, 0.08, 0.9), 5, 50, 110)
+    self.dead = true
+    return
+  end
   -- Hive maggots carry their source hero's element onto the brick they hit.
   if self.effect == 'burn' and brick.apply_burn then
     brick:apply_burn(self.dmg*0.5, 2)

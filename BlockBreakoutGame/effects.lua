@@ -483,6 +483,43 @@ function PsyWell:draw()
 end
 
 
+-- ZapBeam (gambler "Lucky Strike" attack). An instant gold laser the die fires at a
+-- random brick. The DAMAGE lands immediately (in the behavior); this is the visual,
+-- and it STAYS ANCHORED to the die -- its start point follows the moving ball every
+-- frame (and its end follows the target brick) so the beam never disconnects the way
+-- a frozen one-shot line would when the fast die drifts past it.
+ZapBeam = Object:extend()
+ZapBeam:implement(GameObject)
+function ZapBeam:init(args)
+  self:init_game_object(args)
+  self.color = self.color or yellow2[0]
+  self.dur   = self.dur or 0.16
+  self.age   = 0
+  self.seed  = random:float(0, 100)
+  self.tx    = self.tx or self.x
+  self.ty    = self.ty or self.y
+end
+function ZapBeam:update(dt)
+  self:update_game_object(dt)
+  self.age = self.age + dt
+  if self.target and not self.target.dead then self.tx, self.ty = self.target.x, self.target.y end
+  if self.age >= self.dur or (self.src and self.src.dead) then self.dead = true end
+end
+function ZapBeam:draw()
+  local sx = (self.src and self.src.x) or self.x
+  local sy = (self.src and self.src.y) or self.y
+  local tx, ty = self.tx, self.ty
+  local k  = math.clamp(1 - self.age/self.dur, 0, 1)
+  local c  = self.color
+  local pw = 0.7 + 0.3*math.sin(self.age*70 + self.seed)   -- subtle width shimmer
+  graphics.line(sx, sy, tx, ty, Color(c.r, c.g, c.b, 0.22*k), 5*pw)   -- soft glow
+  graphics.line(sx, sy, tx, ty, Color(c.r, c.g, c.b, 0.9*k), 2)        -- bright beam
+  graphics.line(sx, sy, tx, ty, Color(1, 1, 0.9, 0.85*k), 1)          -- white-hot core
+  graphics.circle(sx, sy, 2.2*k, Color(1, 1, 0.9, 0.6*k))             -- muzzle glow at the die
+  graphics.circle(tx, ty, 2 + 3.5*k, Color(c.r, c.g, c.b, 0.7*k))     -- impact flash on the brick
+end
+
+
 -- BombDrop (bomber "reactor core" rework). A planted UNSTABLE CONTAINMENT CELL:
 -- a hexagonal casing with rotating containment brackets straining around a pulsing
 -- plasma core -- deliberately distinct from the bomber ball's round vented core.

@@ -275,6 +275,21 @@ function Paddle:draw()
     return
   end
 
+  if self.paddle_skin == 'hive' then
+    self:draw_hive_paddle(s, body_color)
+    return
+  end
+
+  if self.paddle_skin == 'tesla' then
+    self:draw_tesla_paddle(s, body_color)
+    return
+  end
+
+  if self.paddle_skin == 'glacier' then
+    self:draw_glacier_paddle(s, body_color)
+    return
+  end
+
   graphics.push(self.x, self.y, 0, s, 1/s)
     graphics.rectangle(self.x, self.y, self.w, self.h, 2, 2, body_color)
     graphics.rectangle(self.x, self.y - self.h/2, self.w, 1, nil, nil, fg[5])
@@ -384,6 +399,96 @@ function Paddle:draw_vampire_paddle(s, color)
 end
 
 
+-- The Hive paddle as a living nest: an amber comb of honey-cells with two bugs
+-- crawling along it and a rot spore drip oozing off the bottom — the colony
+-- that breeds the infesting maggots. Purely cosmetic; same flat hitbox.
+function Paddle:draw_hive_paddle(s, color)
+  local t      = love.timer.getTime()
+  local x, y   = self.x, self.y
+  local w, h   = self.w, self.h
+  local pulse  = 0.5 + 0.5*math.sin(t*2.5)
+  graphics.push(x, y, 0, s, 1/s)
+    -- warm nest glow that breathes
+    graphics.rectangle(x, y, w + 4 + pulse*2, h + 4, (h + 4)/2, (h + 4)/2,
+                       Color(color.r, color.g*0.55, 0.08, 0.16 + 0.10*pulse))
+    -- comb body
+    graphics.rectangle(x, y, w, h, 2, 2, color)
+    -- a row of honey-cells
+    local n = math.max(3, math.floor(w/8))
+    for i = 1, n do
+      local hx = x - w/2 + (i - 0.5)*(w/n)
+      graphics.circle(hx, y, h*0.32, Color(color.r*0.55, color.g*0.40, 0.06, 1))
+    end
+    graphics.rectangle(x, y - h/2, w*0.95, 1, nil, nil, fg[5])
+    -- two bugs crawling back and forth along the comb
+    for i = 0, 1 do
+      local bx = x + math.sin(t*1.3 + i*3.1)*(w*0.42)
+      graphics.circle(bx, y - h*0.10, 1.6, Color(0.10, 0.10, 0.08, 1))
+    end
+    -- a rot spore drip that forms, falls and fades on a loop
+    local drip = (t*0.6) % 1
+    graphics.circle(x + math.sin(t*0.9)*w*0.3, y + h/2 + drip*6,
+                    math.max(0.6, 1.3*(1 - drip)), Color(0.30, 0.42, 0.08, 1 - drip))
+  graphics.pop()
+end
+
+
+-- The Tesla paddle as a charged generator: a dark metallic bar with a bright
+-- coil terminal at the centre that crackles little arcs, wrapped in a breathing
+-- electric-blue glow. The conduction web (TeslaWeb) roots at this node.
+function Paddle:draw_tesla_paddle(s, color)
+  local t      = love.timer.getTime()
+  local x, y   = self.x, self.y
+  local w, h   = self.w, self.h
+  local pulse  = 0.5 + 0.5*math.sin(t*5)
+  graphics.push(x, y, 0, s, 1/s)
+    -- breathing electric glow
+    graphics.rectangle(x, y, w + 5 + pulse*3, h + 5, (h + 5)/2, (h + 5)/2,
+                       Color(color.r*0.5, color.g*0.7, 1.0, 0.16 + 0.12*pulse))
+    -- dark metallic body + charged top band + edge
+    graphics.rectangle(x, y, w, h, 2, 2, Color(color.r*0.7, color.g*0.8, color.b, 1))
+    graphics.rectangle(x, y - h*0.16, w, h*0.42, 1, 1, Color(0.55, 0.78, 1.0, 0.95))
+    graphics.rectangle(x, y - h/2, w*0.95, 1, nil, nil, fg[5])
+    -- coil terminal at the centre
+    local ty = y - h/2 - 1
+    graphics.circle(x, ty, 2.4, Color(0.85, 0.94, 1.0, 1))
+    -- little arcs flicking off the terminal
+    for i = 0, 2 do
+      if math.sin(t*20 + i*2.1) > 0.3 then
+        local a   = -math.pi/2 + (i - 1)*0.7 + math.sin(t*7 + i)*0.2
+        local len = 4 + 3*pulse
+        graphics.line(x, ty, x + math.cos(a)*len, ty + math.sin(a)*len, Color(0.7, 0.9, 1.0, 0.85), 1)
+      end
+    end
+  graphics.pop()
+end
+
+
+-- The Glacier paddle as an air-hockey mallet: a flat round striker (drawn as a
+-- vertically-squashed disc so it reads top-down on the thin paddle) with a
+-- frosted rim, a recessed ring and a bright central grip-knob, wrapped in a
+-- faint cold halo with a slow shimmer sweep. Cosmetic; the hitbox stays the bar.
+function Paddle:draw_glacier_paddle(s, color)
+  local t    = love.timer.getTime()
+  local x, y = self.x, self.y
+  local rx   = self.w/2
+  local yc   = (self.h/2 + 5)/rx   -- vertical squash -> flat top-down disc
+  graphics.push(x, y, 0, s, 1/s)
+    graphics.push(x, y, 0, 1, yc)
+      graphics.circle(x, y, rx + 2.5, Color(0.5, 0.78, 1.0, 0.16))                 -- cold halo
+      graphics.circle(x, y, rx, Color(color.r, color.g, color.b, 1))               -- disc body
+      graphics.circle(x, y, rx, Color(0.85, 0.95, 1.0, 0.55), 1)                   -- frosted rim
+      graphics.circle(x, y, rx*0.58, Color(0.16, 0.40, 0.62, 1))                   -- recessed ring well
+      graphics.circle(x, y, rx*0.36, Color(0.88, 0.96, 1.0, 1))                    -- central grip knob
+      graphics.circle(x - rx*0.12, y - rx*0.12, rx*0.16, Color(1, 1, 1, 0.95))     -- knob highlight
+      -- a slow shimmer sweep across the disc
+      local sx = x + math.sin(t*1.6)*rx*0.6
+      graphics.line(sx, y - rx*0.7, sx + 3, y + rx*0.7, Color(1, 1, 1, 0.14), 1)
+    graphics.pop()
+  graphics.pop()
+end
+
+
 -- Draw one flipper as a tapered bat (wide at the pivot, narrowing to a rounded
 -- tip) with a pivot bolt — reads like a real pinball flipper. Endpoints come
 -- from flipper_pose so the bat visibly kicks up while a flip is live.
@@ -447,6 +552,14 @@ function Paddle:on_ball_bounce(ball)
     ball.bounces         = 0
     ball.spring:pull(0.3)
     bounce1:play{volume = 0.35, pitch = 0.7}
+  elseif sig == 'glacier' then
+    -- Ice rink: the air-hockey mallet COOLS the puck — touching it zeroes the
+    -- glide charge, so its built-up speed + damage bleed back to base. The
+    -- reward is keeping pucks gliding out in the field, not juggling them here.
+    ball.glide_t         = 0
+    ball.speed_mult      = 1.0
+    ball.charge_dmg_mult = 1.0
+    bounce1:play{volume = 0.35, pitch = random:float(0.85, 1.0)}
   else
     -- Ramp the ball's speed multiplier. Capped so chains plateau instead of
     -- spiraling into uncontrollable speed.
@@ -480,9 +593,9 @@ function Paddle:on_ball_bounce(ball)
     spawn_bounce_sparks(main.current.effects, ball.x, ball.y, -math.pi/2, ball.color)
   end
 
-  -- Post-bounce signature hooks.
+  -- Post-bounce signature hooks. (Tesla is no longer bounce-gated — its
+  -- conduction web runs persistently from BallPit:tesla_tick.)
   if arena then
-    if sig == 'tesla' and arena.tesla_zap then arena:tesla_zap(ball) end
     if sig == 'hive' and arena.hive_spawn_maggot then arena:hive_spawn_maggot(ball) end
   end
 end

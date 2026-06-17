@@ -746,7 +746,7 @@ function BallPit:reset_run()
     flipper_gap = pdef.sig.gap, flip_window = pdef.sig.flip_window,
     flipper_sig = pdef.sig,
     move_mode = (pdef.signature == 'glacier') and 'ice' or nil,
-    paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang', vampire = 'vampire'})[pdef.signature],
+    paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang', vampire = 'vampire', hive = 'hive', tesla = 'tesla', glacier = 'glacier'})[pdef.signature],
   }
 
   -- Pinball Lobber: damp the side/top walls so balls shed energy on a wall hit
@@ -1338,6 +1338,8 @@ function BallPit:update(dt)
   self:tick_powerup_pity(dt)
   self:tick_levelup_pity(dt)
   self:tick_combo(dt)
+  self:tesla_tick(dt)   -- Tesla: persistent conduction web pulses (no-op otherwise)
+  self:glacier_tick(dt) -- Glacier: lay slick ice patches on the rink (no-op otherwise)
 
   -- Wave advance. Three cases:
   --   * Boss wave (10): never advances on time -- only once the boss is dead

@@ -7,6 +7,7 @@ require 'objects'
 require 'player'
 require 'enemies'
 require 'media'
+require 'admin_panel'
 
 
 function init()
@@ -1763,6 +1764,11 @@ end
 
 
 function update(dt)
+  -- Admin spawn panel (debug): toggled with RETURN in a run. While it's open the
+  -- game freezes so clicks pick heroes instead of steering the leader.
+  admin_panel_update(dt)
+  if admin_panel.open then return end
+
   main:update(dt)
 
   --[[
@@ -1836,6 +1842,7 @@ end
 function draw()
   shared_draw(function()
     main:draw()
+    admin_panel_draw()
   end)
 end
 

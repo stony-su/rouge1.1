@@ -22,6 +22,17 @@ local BRICK_W, BRICK_H = 18, 10
 local CELL_W, CELL_H = 22, 14
 local DEFAULT_SHAPE = {{0, 0}}
 
+-- Hive "Infestation Contagion" tuning. The rot eats a brick (fraction of max HP
+-- per second, scaled by potency), creeps to a fresh neighbour on a timer, and
+-- loses potency each hop so the plague FADES OUT after a few generations
+-- instead of chaining across the whole field. Below MIN_SPREAD potency the rot
+-- still ticks but no longer spreads.
+local INFEST_ROT_FRAC      = 0.16   -- slower burn-down (was 0.26)
+local INFEST_SPREAD_CD     = 1.3    -- creeps half as often (was 0.7)
+local INFEST_SPREAD_RADIUS = 26     -- tighter reach, fewer diagonals (was 30)
+local INFEST_SPREAD_DECAY  = 0.7    -- each hop is weaker, so the chain dies out
+local INFEST_MIN_SPREAD    = 0.4    -- potency floor below which it stops spreading
+
 -- Ranged variants hold their fire once they descend to within this vertical
 -- distance of the paddle. A shot from nearly point-blank is almost impossible
 -- to dodge ("hits too easily"), so close-up attackers go quiet and just press
@@ -107,6 +118,14 @@ function Brick:init(args)
   self.bleed_timer = 0       -- assassin bleed: a scaled, EXPIRING DoT (unlike the scorch above)
   self.bleed_dps   = 0
   self.bleed_color = nil
+
+  self.infest_timer    = 0    -- Hive infestation: a self-spreading rot DoT (see apply_infest)
+  self.infest_dps      = 0
+  self.infest_potency  = 0    -- decays each spread hop; gates whether the rot spreads on
+  self.infest_color    = nil
+  self.infest_t        = 0    -- rot animation clock
+  self.infest_spread_t = 0    -- countdown to the next creep-to-neighbour
+  self.infested        = false
 
   -- Jester "Pandemonium" hex (SNKRX jester, player.lua:534 / enemies.lua:990): a
   -- mark that does NO damage on its own -- when a hexed brick DIES it bursts into
@@ -509,6 +528,27 @@ function Brick:update(dt)
     end
   end
 
+  -- Infestation rot (Hive): eats the brick to death and creeps to a neighbour
+  -- on a timer, so a single bite cascades into a plague. Spread runs before the
+  -- DoT tick so a brick that dies this frame still seeds via Brick:die's burst.
+  if self.infest_timer and self.infest_timer > 0 then
+    self.infest_t = (self.infest_t or 0) + dt
+    if random:bool(8) then
+      HitParticle{group = main.current.effects,
+        x = self.x + random:float(-self.w/3, self.w/3),
+        y = self.y + random:float(-self.h/3, self.h/3),
+        color = Color(0.22, 0.30, 0.06, 0.85),
+        v = random:float(8, 18), r = random:float(0, 2*math.pi),
+        w = 1.4, duration = random:float(0.4, 0.8)}
+    end
+    self.infest_spread_t = (self.infest_spread_t or 0) - dt
+    if self.infest_spread_t <= 0 then
+      self.infest_spread_t = INFEST_SPREAD_CD + random:float(-0.15, 0.2)
+      self:infest_spread()
+    end
+    self:take_damage(self.infest_dps*dt, self.infest_color, true)
+  end
+
   -- Curse: vulnerability mark applied by launcher/jester/etc. Ticks down,
   -- reverts the damage multiplier to 1 when expired.
   if self.curse_timer and self.curse_timer > 0 then
@@ -555,6 +595,28 @@ function Brick:draw()
       local cy = self.y + (c[2] - self.shape_cy) * CELL_H
       graphics.rectangle(cx, cy, BRICK_W, BRICK_H, 1, 1, body_color)
       graphics.rectangle(cx, cy, BRICK_W - 2, BRICK_H - 2, nil, nil, dark_color)
+    end
+
+    -- Infestation rot: a creeping necrotic blight that blackens the brick from
+    -- within and roils harder as it dies. Coverage tracks missing HP, so the
+    -- rot doubles as a damage readout (see apply_infest / Brick:update).
+    if self.infest_timer and self.infest_timer > 0 then
+      local it  = self.infest_t or 0
+      local cov = math.max(0.2, 1 - hp_pct)
+      for ci, c in ipairs(self.shape_cells) do
+        local cx = self.x + (c[1] - self.shape_cx) * CELL_W
+        local cy = self.y + (c[2] - self.shape_cy) * CELL_H
+        graphics.rectangle(cx, cy, BRICK_W - 2, BRICK_H - 2, nil, nil, Color(0.12, 0.16, 0.05, 0.40 + 0.45*cov))
+        local n = 2 + math.floor(cov*4)
+        for k = 1, n do
+          local ph = it*2 + ci*1.7 + k*2.3
+          local bx = cx + math.sin(ph)*BRICK_W*0.30
+          local by = cy + math.cos(ph*0.8)*BRICK_H*0.28
+          local br = (0.7 + 0.45*math.sin(ph*1.3))*(1 + cov)
+          graphics.circle(bx, by, br, Color(0.26, 0.36, 0.07, 0.85))
+          graphics.circle(bx, by, br*0.5, Color(0.07, 0.09, 0.03, 0.9))
+        end
+      end
     end
 
     -- Ice-cube skin while the freeze powerup is active: each cell becomes a
@@ -858,6 +920,45 @@ function Brick:apply_bleed(dps, duration, color)
 end
 
 
+-- Hive "Infestation Contagion": seed a self-spreading rot. Like the scorch it
+-- never expires (it eats the brick to death), but it ALSO creeps to a fresh
+-- neighbour every INFEST_SPREAD_CD seconds. `potency` (1.0 from a maggot, ×DECAY
+-- per hop) scales how fast the rot eats AND gates further spread, so one bite
+-- fades into a few sickly neighbours rather than a runaway plague.
+function Brick:apply_infest(potency, color)
+  if self.dead then return end
+  potency = potency or 1
+  self.infest_dps     = math.max(self.infest_dps or 0, self.max_hp*INFEST_ROT_FRAC*potency)
+  self.infest_potency = math.max(self.infest_potency or 0, potency)
+  self.infest_timer   = math.huge
+  self.infest_color   = color or self.infest_color or Color(0.4, 0.6, 0.12, 1)
+  if (self.infest_spread_t or 0) <= 0 then self.infest_spread_t = INFEST_SPREAD_CD end
+  self.infested       = true
+end
+
+
+-- Creep the infestation to the nearest un-infested brick in reach -- but only
+-- while the rot is still potent, so weak (far-out) infestations fizzle.
+function Brick:infest_spread()
+  if self.dead or (self.infest_potency or 0) < INFEST_MIN_SPREAD then return end
+  local arena = main.current
+  if not (arena and arena.get_bricks_within) then return end
+  local best
+  for _, b in ipairs(arena:get_bricks_within(self.x, self.y, INFEST_SPREAD_RADIUS)) do
+    if b ~= self and not b.dead and not b.infested and b.apply_infest then
+      if not best or math.distance(self.x, self.y, b.x, b.y) < math.distance(self.x, self.y, best.x, best.y) then
+        best = b
+      end
+    end
+  end
+  if best then
+    best:apply_infest((self.infest_potency or 1)*INFEST_SPREAD_DECAY, self.infest_color)
+    if arena_zap_line then arena_zap_line(arena, self.x, self.y, best.x, best.y, self.infest_color or Color(0.4, 0.6, 0.12, 1)) end
+    spawn_burst(arena.effects, best.x, best.y, Color(0.26, 0.36, 0.07, 0.9), 3, 30, 70)
+  end
+end
+
+
 function Brick:die()
   local arena = main.current
   arena:on_brick_killed(self)
@@ -899,6 +1000,29 @@ function Brick:die()
         r = r + math.pi/2
       end
     end)
+  end
+
+  -- Infestation: a rotted brick bursts on death and can seed ONE more neighbour
+  -- -- but only while the rot is still potent, so the plague fades out instead
+  -- of chaining forever (see INFEST_SPREAD_DECAY / INFEST_MIN_SPREAD).
+  if self.infested then
+    local ix, iy = self.x, self.y
+    local pot    = (self.infest_potency or 1)*INFEST_SPREAD_DECAY
+    local icolor = self.infest_color or Color(0.4, 0.6, 0.12, 1)
+    spawn_burst(arena.effects, ix, iy, Color(0.22, 0.30, 0.06, 0.95), 8, 30, 80)
+    if pot >= INFEST_MIN_SPREAD then
+      arena.t:after(0, function()
+        if not (arena.main and arena.main.world) then return end
+        TelegraphRing{group = arena.effects, x = ix, y = iy, radius = INFEST_SPREAD_RADIUS, color = icolor, duration = 0.3}
+        for _, b in ipairs(arena:get_bricks_within(ix, iy, INFEST_SPREAD_RADIUS)) do
+          if b and not b.dead and not b.infested and b.apply_infest then
+            b:apply_infest(pot, icolor)
+            if arena_zap_line then arena_zap_line(arena, ix, iy, b.x, b.y, icolor) end
+            break
+          end
+        end
+      end)
+    end
   end
 
   -- Drop XP after world step (Box2D is locked mid-collision).

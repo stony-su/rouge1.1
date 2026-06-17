@@ -26,7 +26,7 @@ PADDLES.XP_FLAT = 14
 
 PADDLES.order = {
   'standard', 'pinball', 'aegis', 'mitosis', 'hive', 'vampire', 'boomerang',
-  'twincast', 'phantom', 'tesla', 'glacier', 'terrorist', 'cannon',
+  'twincast', 'tesla', 'terrorist', 'cannon',
 }
 
 PADDLES.defs = {
@@ -85,8 +85,8 @@ PADDLES.defs = {
     start_balls = {'infestor', 'infestor', 'infestor'},
     signature = 'hive',
     sig = {contact_zero = true, maggot_cap = 24, maggot_dmg_mult = 0.8, maggot_speed = 85},
-    blurb = 'Balls deal NO contact damage — every bounce spawns critters.',
-    sig_blurb = 'damage is volume, not impact',
+    blurb = 'Balls deal NO damage — maggots infest bricks with a spreading rot.',
+    sig_blurb = 'one bite blackens a brick; the plague creeps to its neighbours',
   },
   vampire = {
     id = 'vampire', name = 'Vampire', price = 1000, color_key = 'red',
@@ -115,15 +115,6 @@ PADDLES.defs = {
     blurb = 'Every hero arrives mirrored as a pair, abilities fire 2x as fast.',
     sig_blurb = 'XP crawls at half speed to pay for it',
   },
-  phantom = {
-    id = 'phantom', name = 'Phantom', price = 3500, color_key = 'purple',
-    size = 0.8, move = 1.0, ball = 1.0, charge = 1.0, aim = 1.0, dmg = 1.0,
-    xp = 1.0, combo = 1.0, hp = 4, hp_mode = 'hearts', xp_mode = 'scale',
-    start_balls = {'assassin', 'assassin'},
-    signature = 'phantom', sig = {blink_cd = 2.5},
-    blurb = 'E drops a ghost paddle anchor; E again teleports back to it.',
-    sig_blurb = 'the ghost still bounces balls',
-  },
   tesla = {
     id = 'tesla', name = 'Tesla', price = 4500, color_key = 'blue',
     size = 1.0, move = 1.0, ball = 0.8, charge = 0.8, aim = 0.9, dmg = 1.4,
@@ -132,15 +123,6 @@ PADDLES.defs = {
     signature = 'tesla', sig = {zap_dmg = 7, zap_width = 12, zap_cd = 0.25},
     blurb = 'Paddle bounces arc lightning between ALL live balls.',
     sig_blurb = 'damage scales with ball count',
-  },
-  glacier = {
-    id = 'glacier', name = 'Glacier', price = 5500, color_key = 'blue',
-    size = 1.0, move = 0.8, ball = 1.5, charge = 1.3, aim = 0.6, dmg = 1.1,
-    xp = 1.0, combo = 1.2, hp = 5, hp_mode = 'hearts', xp_mode = 'scale',
-    start_balls = {'cryomancer', 'cryomancer'},
-    signature = 'glacier', sig = {ice = true},
-    blurb = 'Pucks on ice: long gliding paths, every hit chills the block.',
-    sig_blurb = 'the paddle itself slides too',
   },
   terrorist = {
     id = 'terrorist', name = 'Terrorist', price = 6500, color_key = 'red',
@@ -237,6 +219,14 @@ function BallPit:setup_signature()
         if not alive then self:add_hero(character) end
       end
     end, nil, nil, 'mitosis_regrow')
+  elseif sigid == 'tesla' then
+    -- Persistent conduction web: spawn the always-on visual now; tesla_tick
+    -- keeps it alive and fires the steady damage pulses (see BallPit:update).
+    self.tesla_t   = 0
+    self.tesla_web = TeslaWeb{group = self.effects}
+  elseif sigid == 'glacier' then
+    -- Ice rink: glacier_tick lays slick patches over the run (see BallPit:update).
+    self.slick_t = SLICK_SPAWN_CD
   end
 end
 
@@ -323,7 +313,7 @@ function BallPit:hive_spawn_maggot(ball)
   self.t:after(0, function()
     if not (self.main and self.main.world) then return end
     AllyCritter{group = self.main, x = x, y = y, color = color,
-                speed = sig.maggot_speed or 85, dmg = dmg, effect = effect}
+                speed = sig.maggot_speed or 85, dmg = dmg, effect = effect, infest = true}
   end)
   if random:bool(30) then critter1:play{volume = 0.2, pitch = random:float(0.95, 1.1)} end
 end
@@ -339,41 +329,209 @@ local function point_segment_distance(px, py, ax, ay, bx, by)
 end
 
 
--- Tesla: arc lightning paddle -> ball -> ball ..., damaging every brick the
--- arcs pass near. Throttled by a short arena-side cooldown so a multi-ball
--- bounce burst doesn't fire it many times in one frame.
-function BallPit:tesla_zap(ball)
-  if self.tesla_cd then return end
-  local sig = (self.run_mods and self.run_mods.sig) or {}
-  self.tesla_cd = true
-  self.t:after(sig.zap_cd or 0.25, function() self.tesla_cd = false end, 'tesla_cd')
+-- Tesla "Chain Conduction": a PERSISTENT lightning web. The paddle is the
+-- generator; current runs paddle -> ball -> ball through every live ball and
+-- damages any brick a segment passes near, on a steady tick (no bounce needed),
+-- so damage scales with ball count + spreading the balls out. The crackling web
+-- itself is drawn every frame by the TeslaWeb effect below.
 
+-- Ordered conduction path: the paddle (generator) then every live ball.
+function BallPit:tesla_web_points()
   local pts = {{x = self.paddle.x, y = self.paddle.y}}
   for _, h in ipairs(self.heroes) do
     if h and not h.dead and not h.stuck and not h.returning and not h.mortar then
       pts[#pts + 1] = {x = h.x, y = h.y}
     end
   end
-  if #pts < 2 then return end
+  return pts
+end
 
-  local dmg    = (sig.zap_dmg or 7)*(self.run_mods.dmg or 1)
-  local width  = sig.zap_width or 12
-  local zapped = {}
+
+-- One damage pulse: every brick within zap_width of a web segment takes a tick
+-- (once per pulse). Driven by tesla_tick on a steady cadence; take_damage's own
+-- flash is the per-brick hit feedback.
+function BallPit:tesla_pulse()
+  local sig   = (self.run_mods and self.run_mods.sig) or {}
+  local pts   = self:tesla_web_points()
+  if #pts < 2 then return end
+  local dmg   = (sig.zap_dmg or 7)*((self.run_mods and self.run_mods.dmg) or 1)
+  local width = sig.zap_width or 12
+  local zapped, hit = {}, false
   for i = 1, #pts - 1 do
     local a, b = pts[i], pts[i + 1]
-    arena_zap_line(self, a.x, a.y, b.x, b.y, blue[0])
     for _, o in ipairs(self.main.objects) do
       if o:is(Brick) and not o.dead and not zapped[o.id] then
         if point_segment_distance(o.x, o.y, a.x, a.y, b.x, b.y) <= width then
           zapped[o.id] = true
           o:take_damage(dmg, blue[0])
+          hit = true
         end
       end
     end
   end
-  if next(zapped) and thunder1 then
-    thunder1:play{volume = 0.12, pitch = random:float(1.15, 1.35)}
+  if hit and thunder1 then thunder1:play{volume = 0.10, pitch = random:float(1.15, 1.35)} end
+end
+
+
+-- Per-frame driver (called unconditionally from BallPit:update). On a Tesla run
+-- it keeps the web effect alive and fires a damage pulse every zap_cd seconds.
+function BallPit:tesla_tick(dt)
+  if not (self.run_mods and self.run_mods.signature == 'tesla') then return end
+  if not (self.tesla_web and not self.tesla_web.dead) then
+    self.tesla_web = TeslaWeb{group = self.effects}
   end
+  local sig = self.run_mods.sig or {}
+  self.tesla_t = (self.tesla_t or 0) + dt
+  if self.tesla_t >= (sig.zap_cd or 0.25) then
+    self.tesla_t = 0
+    self:tesla_pulse()
+  end
+end
+
+
+-- A jagged lightning bolt between two points, drawn as a few segments that
+-- crackle/jitter over time. Two passes: a soft wide glow + a bright thin core.
+local function draw_tesla_bolt(x1, y1, x2, y2, t, seed)
+  local dx, dy = x2 - x1, y2 - y1
+  local len = math.sqrt(dx*dx + dy*dy)
+  if len < 1 then return end
+  local nx, ny = -dy/len, dx/len
+  local segs = math.clamp(math.floor(len/14) + 2, 3, 7)
+  local glow = Color(0.30, 0.62, 1.0, 0.5)
+  local core = Color(0.85, 0.95, 1.0, 0.95)
+  local px, py = x1, y1
+  for i = 1, segs do
+    local f  = i/segs
+    local off = (i < segs) and math.sin(t*32 + seed*2.7 + i*1.9)*math.min(7, len*0.10) or 0
+    local qx = x1 + dx*f + nx*off
+    local qy = y1 + dy*f + ny*off
+    graphics.line(px, py, qx, qy, glow, 3)
+    graphics.line(px, py, qx, qy, core, 1)
+    px, py = qx, qy
+  end
+end
+
+
+-- The always-on conduction web. Lives in arena.effects (so it shakes + layers
+-- with the rest of the juice) and re-reads the live conduction path every frame
+-- from BallPit:tesla_web_points, so it tracks the balls as they fly.
+TeslaWeb = Object:extend()
+TeslaWeb:implement(GameObject)
+
+function TeslaWeb:init(args)
+  self:init_game_object(args)
+end
+
+function TeslaWeb:update(dt)
+  self:update_game_object(dt)
+end
+
+function TeslaWeb:draw()
+  local arena = main.current
+  if not (arena and arena.tesla_web_points) then return end
+  local pts = arena:tesla_web_points()
+  if #pts < 2 then return end
+  local t = love.timer.getTime()
+  for i = 1, #pts - 1 do
+    local a, b = pts[i], pts[i + 1]
+    draw_tesla_bolt(a.x, a.y, b.x, b.y, t, i)            -- primary filament
+    draw_tesla_bolt(a.x, a.y, b.x, b.y, t*1.3 + 10, i + 5) -- a second, offset filament for body
+  end
+  -- Node terminals: a soft pulsing halo + bright core on the generator + balls.
+  for i, p in ipairs(pts) do
+    local pulse = 0.5 + 0.5*math.sin(t*9 + i*1.3)
+    graphics.circle(p.x, p.y, 3.5 + pulse*1.6, Color(0.4, 0.7, 1.0, 0.22))
+    graphics.circle(p.x, p.y, 1.6, Color(0.9, 0.97, 1.0, 0.9))
+  end
+end
+
+
+-- Glacier "Ice Rink": the paddle lays slick ice patches out on the rink that
+-- ricochet pucks off-centre, adding chaotic glide angles (which feed the
+-- glide-charge heat-up). Tuning: how often a patch drops, how many co-exist,
+-- their radius and lifetime.
+local SLICK_SPAWN_CD = 3.5
+local SLICK_CAP      = 4
+local SLICK_RS       = 18
+local SLICK_LIFE     = 9
+
+
+-- A slick ice patch on the rink. While alive it acts like a frictionless
+-- bumper: a puck that skates into it is flung back OUT from the patch centre
+-- with a small kick (per-ball cooldown so it doesn't buzz). Lives in the floor
+-- group so it draws UNDER the balls + paddle, like ice on the ground.
+SlickPatch = Object:extend()
+SlickPatch:implement(GameObject)
+
+function SlickPatch:init(args)
+  self:init_game_object(args)
+  self.rs       = self.rs or SLICK_RS
+  self.max_life = self.duration or SLICK_LIFE
+  self.life     = self.max_life
+  self.spin     = random:float(0, 2*math.pi)
+  self.hit_cd   = {}
+end
+
+function SlickPatch:update(dt)
+  self:update_game_object(dt)
+  self.life = self.life - dt
+  if self.life <= 0 then self.dead = true; return end
+  self.spin = self.spin + dt*0.6
+  local arena = main.current
+  if not arena then return end
+  for _, h in ipairs(arena.heroes) do
+    if h and not h.dead and h.body and not h.stuck and not h.returning then
+      local cd = self.hit_cd[h.id] or 0
+      if cd > 0 then
+        self.hit_cd[h.id] = cd - dt
+      else
+        local d = math.distance(self.x, self.y, h.x, h.y)
+        if d < self.rs and d > 0.5 then
+          -- ricochet: redirect the puck straight out from the patch + a kick
+          local vx, vy = h:get_velocity()
+          local sp = math.max(40, math.sqrt(vx*vx + vy*vy))*1.08
+          h:set_velocity((h.x - self.x)/d*sp, (h.y - self.y)/d*sp)
+          h.spring:pull(0.25)
+          self.hit_cd[h.id] = 0.5
+          spawn_burst(arena.effects, h.x, h.y, Color(0.7, 0.9, 1.0, 0.9), 4, 50, 120)
+          if frost1 then frost1:play{volume = 0.18, pitch = random:float(1.0, 1.2)} end
+        end
+      end
+    end
+  end
+end
+
+function SlickPatch:draw()
+  local fade = math.min(math.clamp(self.life/0.8, 0, 1), math.clamp((self.max_life - self.life)/0.4, 0, 1))
+  graphics.circle(self.x, self.y, self.rs, Color(0.45, 0.72, 0.95, 0.12*fade))      -- slick fill
+  graphics.circle(self.x, self.y, self.rs, Color(0.72, 0.90, 1.0, 0.42*fade), 1)    -- frosted rim
+  for i = 0, 2 do                                                                   -- shimmer streaks
+    local a = self.spin + i*2.1
+    graphics.line(self.x + math.cos(a)*self.rs*0.3, self.y + math.sin(a)*self.rs*0.3,
+                  self.x + math.cos(a)*self.rs*0.82, self.y + math.sin(a)*self.rs*0.82,
+                  Color(0.88, 0.96, 1.0, 0.28*fade), 1)
+  end
+end
+
+
+-- Per-frame driver (called unconditionally from BallPit:update). On a Glacier
+-- run it lays a fresh slick patch onto the rink every SLICK_SPAWN_CD seconds,
+-- capped at SLICK_CAP, somewhere in the field where pucks actually glide.
+function BallPit:glacier_tick(dt)
+  if not (self.run_mods and self.run_mods.signature == 'glacier') then return end
+  self.slick_t = (self.slick_t or 0) - dt
+  if self.slick_t > 0 then return end
+  self.slick_t = SLICK_SPAWN_CD
+  local n = 0
+  for _, o in ipairs(self.floor.objects) do
+    if o:is(SlickPatch) and not o.dead then n = n + 1 end
+  end
+  if n >= SLICK_CAP then return end
+  local line_y = (self.breach_line_y and self:breach_line_y()) or (self.y1 + (self.y2 - self.y1)*0.5)
+  local px = random:float(self.x1 + 26, self.x2 - 26)
+  local py = random:float(self.y1 + 40, line_y - 24)
+  SlickPatch{group = self.floor, x = px, y = py, rs = SLICK_RS, duration = SLICK_LIFE}
+  if frost1 then frost1:play{volume = 0.12, pitch = random:float(0.85, 0.98)} end
 end
 
 

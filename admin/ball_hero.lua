@@ -28,6 +28,13 @@ local RANGED_BEHAVIORS = {
   shoot_knife = true, random_shot = true, volcano = true,
 }
 
+-- Glacier "Ice Rink": a puck HEATS UP the longer it glides without touching the
+-- paddle -- speed and damage ramp from glide_t up to these caps over GLIDE_FULL
+-- seconds; a paddle bounce COOLS it back to base (see Paddle:on_ball_bounce).
+local GLIDE_FULL        = 6.0
+local GLIDE_SPEED_BONUS = 0.8   -- up to +80% glide speed at full heat
+local GLIDE_DMG_BONUS   = 1.0   -- up to +100% glide damage at full heat
+
 -- Per-character stats. r/base_speed/dmg/color are ball properties; the rest
 -- depend on `behavior`, which keys into the BEHAVIORS dispatch table below.
 -- Stats are adapted from SNKRX-master/player.lua: range mirrors that hero's
@@ -58,7 +65,7 @@ local HERO_STATS = {
   -- lane. Every brick it touches BLEEDS (player.lua:2356): a bleed_dur-second
   -- DoT worth dmg/2 normally, 4x dmg on a crit. The rogue "assassination" crit
   -- (crit_chance%, +10% per level) also doubles the strike. skin = 'shadow' is
-  -- the Shadowstalker look (smoke trail, breathing aura, blink-lunge slash).
+  -- the Shadowstalker look (dark orb, spinning steel blade-fang ring, inky trail).
   assassin    = {r = 5, base_speed = 200, dmg = 12, color = 'purple', behavior = 'assassinate', range = 64, cd = 2.0, speed = 320, pierce = 1000, crit_chance = 25, bleed_dur = 3, skin = 'shadow'},
 
   -- ----- Spellblade (SNKRX spellblade port; behavior = 'blade_storm') -----
@@ -164,22 +171,23 @@ local HERO_STATS = {
   infestor    = {r = 6, base_speed = 165, dmg = 5, color = 'green', behavior = 'swarm_pressure', skin = 'swarm',
                  cd = 0.13, range = 150, locust_dmg = 1.25, locust_speed = 155, dart = 0.32},
 
-  -- ----- Gambler-style random multi-strike -----
   -- ----- Gambler "Multicast" (SNKRX gambler port; behavior = 'gamble') -----
-  -- SNKRX player.lua:57 -- every cd seconds the gambler hits a SINGLE RANDOM brick for
-  -- a rolled payout: usually payout_mult x dmg, with a jackpot_chance shot at a big
-  -- jackpot_mult x dmg (the gamble). Level 3 ("Multicast"): a nested 60/40/20% chance
-  -- to cast 2/3/4 times. The ball is a tumbling lucky die: fast + bouncy, with erratic
-  -- "gambled" ricochets off bricks (skin = 'dice').
-  gambler     = {r = 6, base_speed = 170, dmg = 8, color = 'yellow2', behavior = 'gamble', cd = 2, range = 360, payout_mult = 3.0, jackpot_chance = 0.12, jackpot_mult = 9.0, skin = 'dice'},
+  -- SNKRX player.lua:57 -- every cd seconds the gambler ROLLS a die (1-6): the pip
+  -- count is how many instant LASER STRIKES it fires that cast, each zapping a random
+  -- brick for payout_mult x dmg. Each beam stays anchored to the die (tracks it) so it
+  -- never disconnects. A roll of 6 is the jackpot. Level 3 ("Multicast"): a nested
+  -- 60/40/20% chance to re-roll + fire again. The ball is a gold ball with a tumbling
+  -- die on top: fast + bouncy, with erratic "gambled" ricochets (skin='dice').
+  gambler     = {r = 7, base_speed = 170, dmg = 8, color = 'yellow2', behavior = 'gamble', cd = 2, range = 360, payout_mult = 3.0, skin = 'dice'},
 
   -- ----- Volcano (SNKRX vulcanist port; behavior = 'volcano') -----
   -- Every 12s, plants a Volcano at the midpoint between this ball and the
-  -- centre of the enemy mass; it erupts a 72px rotated-square blast once a
-  -- second 4 times (level 3: every 0.5s, 8 times — Lava Burst), then blinks
-  -- out. See Volcano/EruptionArea in effects.lua. skin draws the ball as the
-  -- rune-furnace ring instead of a plain ball.
-  vulcanist   = {r = 6, base_speed = 150, dmg = 14, color = 'red', behavior = 'volcano', cd = 12, area = 72, volcano_rs = 24, skin = 'rune'},
+  -- centre of the enemy mass; it erupts a rotated-square blast once a second 4
+  -- times (level 3: every 0.5s, 8 times — Lava Burst), then blinks out. The blast
+  -- `area` is 360 -- a 400% AoE buff over the old 72, now a near-screen-wide
+  -- eruption. See Volcano/EruptionArea in effects.lua. skin = 'rune' draws the ball
+  -- as a molten volcanic-rock orb.
+  vulcanist   = {r = 6, base_speed = 150, dmg = 14, color = 'red', behavior = 'volcano', cd = 12, area = 360, volcano_rs = 24, skin = 'rune'},
 
   -- ----- Mortar (SNKRX cannoneer port, reworked into ARTILLERY; behavior = 'cannon_shot') -----
   -- Lobs a shell straight UP and off the top of the screen; a RED target scope marks
@@ -373,11 +381,10 @@ function BallHero:init(args)
     end)
   end
 
-  -- Rune-furnace skin (vulcanist): a ring of volcanic stone whose 8 runes
-  -- ignite one by one as the 12s volcano timer fills, around a molten pupil
-  -- that seethes brighter with charge. ring_a spins lazily (whipped fast for
-  -- a beat on each cast — cast_flash_t); a molten afterimage trail — fading,
-  -- shrinking ghost rings with the spin angle baked in — drags behind it
+  -- Vulcanist skin: a molten volcanic-rock orb -- dark rock laced with glowing lava
+  -- veins around a bubbling crater core, brightening toward white-hot as the 12s
+  -- volcano timer fills. ring_a slowly churns the veins (whipped fast for a beat on
+  -- each cast — cast_flash_t); a fading ember-glow afterimage trail drags behind it
   -- (see draw_rune_furnace).
   if s.skin == 'rune' then
     self.ring_a       = random:float(0, 2*math.pi)
@@ -393,13 +400,15 @@ function BallHero:init(args)
     end)
   end
 
-  -- Shadowstalker skin (assassin): the inky smoke-clone trail, the breathing
-  -- shadow aura and the per-throw strike state. shadow_t is the idle "breathe"
-  -- clock (see update/draw); assassin_strike_t + strike_a drive the blink-lunge
-  -- cross-slash, armed in shoot_assassin_knife. shadow_trail samples recent
-  -- positions for the ghost clones, and each sample peels off a rising wisp.
+  -- Shadowstalker skin (assassin): a dark stealth orb ringed by a spinning trio
+  -- of steel blade-fangs (the spin cue + the assassin identity). shadow_t is the
+  -- idle "breathe" clock; spin_a is the blade rotation (lazy idle spin, whipped
+  -- fast for a beat on each throw -- see update). shadow_trail samples recent
+  -- positions for the faint inky ghosts; assassin_strike_t + assassin_crit (set
+  -- in shoot_assassin_knife) drive the per-throw strike flash.
   if s.skin == 'shadow' then
     self.shadow_t          = random:float(0, 2*math.pi)
+    self.spin_a            = random:float(0, 2*math.pi)
     self.assassin_strike_t = 0
     self.strike_a          = -math.pi/2
     self.shadow_trail      = {}
@@ -409,17 +418,7 @@ function BallHero:init(args)
         return
       end
       table.insert(self.shadow_trail, 1, {x = self.x, y = self.y})
-      if #self.shadow_trail > 6 then table.remove(self.shadow_trail) end
-      if random:bool(60) then
-        SmokePuff{
-          group = main.current.effects,
-          x = self.x + random:float(-1.5, 1.5), y = self.y,
-          color = Color(self.color.r*0.5, self.color.g*0.4, self.color.b*0.6, 1),
-          rs = self.r_size*0.55, alpha = 0.30,
-          vx = random:float(-6, 6), vy = random:float(-22, -12),
-          duration = random:float(0.4, 0.7),
-        }
-      end
+      if #self.shadow_trail > 5 then table.remove(self.shadow_trail) end
     end)
   end
 
@@ -918,6 +917,14 @@ end
 -- pinball_serve and Paddle:flip_launch.
 function BallHero:is_pinball()
   return self.run_mods and self.run_mods.signature == 'flippers'
+end
+
+
+-- True for balls in a Glacier run — they ride the "ice rink": a glide-charge
+-- that ramps speed + damage the longer they stay off the paddle (see update /
+-- Paddle:on_ball_bounce) on top of the existing low-friction puck glide.
+function BallHero:is_glacier()
+  return self.run_mods and self.run_mods.signature == 'glacier'
 end
 
 
@@ -1653,47 +1660,52 @@ end
 -- is a nested 60/40/20% chance to cast 2/3/4 times. The random target + rolled payout
 -- are the whole fantasy; the die re-rolls its face + flashes on each cast.
 BEHAVIORS.gamble = function(self, s)
-  local function cast(pitch_bump)
+  local function cast()
     if self.stuck or self.returning then return end
     local arena = main.current
-    if not (arena and arena.main) then return end
-    local pool = arena:get_bricks_within(self.x, self.y, s.range or 360)
-    if #pool == 0 then return end
-    local t = pool[random:int(1, #pool)]
-    if not t or t.dead then return end
-    local jackpot = random:bool(math.floor((s.jackpot_chance or 0.12)*100))
-    local mult    = jackpot and (s.jackpot_mult or 9) or (s.payout_mult or 3)*random:float(0.5, 1.3)
-    t:take_damage(self:current_dmg()*mult, jackpot and yellow[0] or self.color)
-    arena_zap_line(arena, self.x, self.y, t.x, t.y, jackpot and yellow[0] or self.color)
-    self.dice_face   = jackpot and 6 or random:int(1, 6)   -- roll the die
+    if not (arena and arena.main and arena.main.world) then return end
+    if #arena:get_bricks_within(self.x, self.y, s.range or 360) == 0 then return end
+    -- ROLL the die: the pip count IS how many coins this cast throws (1-6).
+    local rolled     = random:int(1, 6)
+    self.dice_face   = rolled
     self.dice_roll_t = 0.25
     self.spring:pull(0.3)
+    local jackpot = (rolled == 6)   -- a full roll is the jackpot
     if jackpot then
-      spawn_burst(arena.effects, t.x, t.y, yellow[0], 14, 80, 220)
-      spawn_burst(arena.effects, t.x, t.y, self.color, 8, 60, 150)
       self.dice_jackpot_t = 0.4
-      camera:shake(2, 0.15, 90)
-      gold1:play{volume = 0.6, pitch = random:float(0.95, 1.05)}
-      level_up1:play{volume = 0.4, pitch = random:float(0.95, 1.1)}
-    else
-      spawn_burst(arena.effects, t.x, t.y, self.color, 4, 60, 130)
-      gold1:play{volume = 0.3, pitch = 0.95 + (pitch_bump or 0)}
+      camera:shake(2, 0.12, 90)
+      level_up1:play{volume = 0.35, pitch = random:float(0.95, 1.1)}
+    end
+    gold1:play{volume = jackpot and 0.55 or 0.32, pitch = random:float(0.95, 1.1)}
+    -- Fire `rolled` instant laser strikes at random bricks, staggered. Damage lands
+    -- immediately; the beam (ZapBeam in effects.lua) stays anchored to the moving die.
+    for i = 1, rolled do
+      self.t:after((i - 1)*0.06, function()
+        if self.stuck or self.returning then return end
+        if not (arena.main and arena.main.world) then return end
+        local p = arena:get_bricks_within(self.x, self.y, s.range or 360)
+        if #p == 0 then return end
+        local target = p[random:int(1, #p)]
+        if not target or target.dead then return end
+        target:take_damage(self:current_dmg()*(s.payout_mult or 3), self.color)
+        spawn_burst(arena.effects, target.x, target.y, self.color, 5, 60, 140)
+        ZapBeam{group = arena.effects, x = self.x, y = self.y, color = self.color,
+                src = self, target = target, tx = target.x, ty = target.y}
+      end)
     end
   end
 
   self.t:every(s.cd, function()
     if self.stuck or self.returning then return end
-    cast(0)
-    -- Level 3 "Multicast": a nested 60/40/20% chance to cast a 2nd/3rd/4th time.
+    cast()
+    -- Level 3 "Multicast": a nested 60/40/20% chance to RE-ROLL + throw again.
     if self.level >= 3 and random:bool(60) then
-      self.t:after(0.22, function()
-        cast(0.05)
+      self.t:after(0.3, function()
+        cast()
         if random:bool(40) then
-          self.t:after(0.22, function()
-            cast(0.1)
-            if random:bool(20) then
-              self.t:after(0.22, function() cast(0.15) end)
-            end
+          self.t:after(0.3, function()
+            cast()
+            if random:bool(20) then self.t:after(0.3, function() cast() end) end
           end)
         end
       end)
@@ -2032,13 +2044,17 @@ function BallHero:update(dt)
     self.ring_a = (self.ring_a or 0) + speed*dt
   end
 
-  -- Shadowstalker skin (assassin): advance the idle aura "breathe" clock and
-  -- decay the per-throw strike flash (blink-lunge cross-slash; see draw_shadow).
+  -- Shadowstalker skin (assassin): advance the idle "breathe" clock, spin the
+  -- blade-fang ring (lazy idle spin, whipped fast for a beat on each throw) and
+  -- decay the per-throw strike flash (see draw_shadow).
   if self.stats.skin == 'shadow' then
     self.shadow_t = (self.shadow_t or 0) + dt
+    local speed = 3
     if (self.assassin_strike_t or 0) > 0 then
       self.assassin_strike_t = self.assassin_strike_t - dt
+      speed = 24
     end
+    self.spin_a = (self.spin_a or 0) + speed*dt
   end
 
   -- Spellblade skin: spin the orbiting blade-shards and advance the arcane
@@ -2222,6 +2238,17 @@ function BallHero:update(dt)
   if self.mortar then
     self:update_mortar(dt)
     return
+  end
+
+  -- Glacier "Ice Rink": the longer the puck glides without touching the paddle,
+  -- the faster + harder it hits (glide_t heats it up to the caps). normalize_speed
+  -- then eases the real speed toward this raised target, so it accelerates as it
+  -- skates. A paddle bounce zeroes glide_t and cools it back down.
+  if self:is_glacier() then
+    self.glide_t = (self.glide_t or 0) + dt
+    local g = math.clamp(self.glide_t/GLIDE_FULL, 0, 1)
+    self.speed_mult      = 1 + g*GLIDE_SPEED_BONUS
+    self.charge_dmg_mult = 1 + g*GLIDE_DMG_BONUS
   end
 
   if self:is_pinball() then
@@ -2491,6 +2518,7 @@ function BallHero:start_stuck()
   self.charge_time      = 0     -- fresh charge bar each time
   self.charge_dmg_mult  = 1.0   -- previous charge bonus is consumed
   self.bounces          = 0     -- chain starts over from the paddle
+  self.glide_t          = 0     -- Glacier ice-rink heat resets when caught
   if self.body then self.body:setActive(false) end
   local arena = main.current
   arena.stuck_count = (arena.stuck_count or 0) + 1
@@ -2670,7 +2698,8 @@ function BallHero:draw()
     -- Archer: the ball as a tower base with a crossbow turret on top.
     self:draw_crossbow(s)
   elseif self.stats.skin == 'rune' then
-    -- Vulcanist: a rune-ringed furnace around a molten pupil.
+    -- Vulcanist: a dark volcanic-rock orb laced with glowing lava veins around a
+    -- bubbling molten crater; flares an ember ring when it plants a volcano.
     self:draw_rune_furnace(s)
   elseif self.stats.skin == 'shadow' then
     -- Assassin: a dark body wrapped in a breathing shadow aura, shedding inky
@@ -2924,145 +2953,128 @@ function BallHero:draw_crossbow(s)
 end
 
 
--- The vulcanist's rune-furnace body: a ring of dark volcanic stone with 8
--- runes that ignite one by one as the volcano cooldown refills (read off the
--- attack trigger — all 8 lit means the next volcano is ready), around a
--- molten pupil that seethes brighter with charge. On cast (cast_flash_t) the
--- runes all flash white while the ring whips around fast, and an expanding
--- ember ring marks the moment. A molten afterimage trail drags behind it
--- while it flies — fading, shrinking ghost rings with ember runes, the
--- oldest dissolving into a rising smoke puff. The physics body underneath
--- is still the same r_size circle, so bounces are unchanged.
+-- The vulcanist's body: a molten volcanic-rock ORB. A dark charcoal rock laced with
+-- glowing lava VEINS (jagged radial cracks) around a bubbling molten CRATER core. The
+-- veins + core brighten toward white-hot as the volcano cooldown refills (read off the
+-- attack trigger -- white means the next volcano is ready), and a red heat aura swells
+-- with it. On cast (cast_flash_t) the veins flare white + an ember ring snaps out. A
+-- fading ember-glow afterimage trail drags behind. Same r_size physics circle.
 function BallHero:draw_rune_furnace(s)
   s = s or 1
   local rs = self.r_size
   local c  = self.color
+  local t  = love.timer.getTime()
 
-  -- Charge progress 0..1 from the attack cooldown trigger.
+  -- Charge progress 0..1 from the attack cooldown trigger (how close the next volcano is).
   local prog = 1
   local tr   = self.t.triggers and self.t.triggers.attack
   if tr and tr.delay and tr.delay > 0 then
     prog = math.clamp(tr.timer/(tr.delay*(tr.multiplier or 1)), 0, 1)
   end
+  local cast  = math.clamp((self.cast_flash_t or 0)/0.4, 0, 1)
+  local churn = self.ring_a or 0
+  local bub   = 0.5 + 0.5*math.sin(t*4)            -- magma bubble pulse
 
-  -- Molten afterimages (newest first): fading, shrinking ghost copies of the
-  -- furnace — ember glow disc, ghost stone ring, four dim runes at the
-  -- sampled spin angle — with the oldest dissolving into a smoke puff.
-  local trail = self.rune_trail or {}
-  for i, p in ipairs(trail) do
-    local k     = 1 - (i - 1)*0.18
-    local alpha = 0.3 - (i - 1)*0.07
-    graphics.circle(p.x, p.y, rs*1.05*k, Color(1, 0.6, 0.25, alpha*0.4))
-    graphics.circle(p.x, p.y, rs*0.95*k, Color(c.r*0.55, c.g*0.4, c.b*0.4, alpha),
-                    math.max(1, rs*0.35*k))
-    for j = 0, 3 do
-      local a = (p.a or 0) + j*math.pi/2
-      graphics.line(p.x + math.cos(a)*rs*0.72*k, p.y + math.sin(a)*rs*0.72*k,
-                    p.x + math.cos(a)*rs*1.15*k, p.y + math.sin(a)*rs*1.15*k,
-                    Color(1, 0.55, 0.2, alpha), 1.3)
-    end
-    if i == #trail then
-      graphics.circle(p.x, p.y - rs*0.8, math.max(1, rs*0.4*k),
-                      Color(0.45, 0.4, 0.38, 0.18))
-    end
+  -- Molten afterimage trail (newest first): fading ember-glow ghosts.
+  for i, p in ipairs(self.rune_trail or {}) do
+    local k = 1 - (i - 1)*0.2
+    graphics.circle(p.x, p.y, rs*0.9*k*s, Color(1, 0.45, 0.12, 0.28 - (i - 1)*0.06))
   end
 
-  -- Heat aura, swelling with charge; soft pulse at full.
-  local glow = 0.08 + 0.2*prog
-  if prog >= 1 then glow = 0.26 + 0.1*math.sin(love.timer.getTime()*5) end
-  graphics.circle(self.x, self.y, rs*1.7, Color(c.r, c.g, c.b, glow))
+  -- Heat-haze aura: red glow swelling with charge, flaring on a cast.
+  local glow = 0.08 + 0.16*prog + cast*0.3
+  graphics.circle(self.x, self.y, rs*(1.7 + 0.2*bub)*s + cast*6, Color(c.r, c.g*0.3, 0.05, glow))
 
-  -- Stone ring + 8 runes around it. Lit runes count up with the charge and
-  -- all flash white for a beat when the volcano goes down.
-  graphics.circle(self.x, self.y, rs*0.95*s, Color(0.3, 0.24, 0.26, 1), rs*0.45)
-  local lit = math.floor(prog*8 + 0.0001)
-  for i = 0, 7 do
-    local a = (self.ring_a or 0) + i*math.pi/4
-    local col
-    if (self.cast_flash_t or 0) > 0 then
-      col = fg[0]
-    elseif i < lit then
-      col = orange[0]
-    else
-      col = Color(0.42, 0.33, 0.34, 1)
-    end
-    graphics.line(self.x + math.cos(a)*rs*0.72, self.y + math.sin(a)*rs*0.72,
-                  self.x + math.cos(a)*rs*1.18*s, self.y + math.sin(a)*rs*1.18*s,
-                  col, 1.6)
+  -- Dark volcanic-rock body.
+  graphics.circle(self.x, self.y, rs*s + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*s, Color(0.16, 0.13, 0.13, 1))
+
+  -- Glowing lava veins seeping through the rock: jagged radial cracks that churn
+  -- slowly and brighten toward white as the volcano nears ready.
+  local veins  = 6
+  local crackc = (cast > 0) and Color(1, 1, 0.7, 0.95)
+                 or Color(1, 0.5 + 0.4*prog, 0.12 + 0.3*prog, 0.55 + 0.4*prog)
+  for i = 0, veins - 1 do
+    local a   = churn*0.5 + i*2*math.pi/veins
+    local wob = math.sin(t*3 + i)*0.18
+    local x1, y1 = self.x + math.cos(a)*rs*0.16*s,       self.y + math.sin(a)*rs*0.16*s
+    local mx, my = self.x + math.cos(a + wob)*rs*0.58*s, self.y + math.sin(a + wob)*rs*0.58*s
+    local x2, y2 = self.x + math.cos(a - wob)*rs*0.96*s, self.y + math.sin(a - wob)*rs*0.96*s
+    graphics.line(x1, y1, mx, my, crackc, 1.6)
+    graphics.line(mx, my, x2, y2, crackc, 1.2)
   end
 
-  -- Molten pupil: hero-red core with an inner glow that seethes with charge.
-  graphics.circle(self.x, self.y, rs*0.5 + 0.5, bg[-2])
-  graphics.circle(self.x, self.y, rs*0.5*s, c)
-  graphics.circle(self.x + rs*0.08, self.y - rs*0.08, rs*0.28*s,
-                  Color(1, 0.72, 0.3, 0.35 + 0.6*prog))
-  graphics.circle(self.x - rs*0.15, self.y - rs*0.18, math.max(1, rs*0.14), fg[5])
+  -- Molten crater core: orange -> yellow -> white-hot, bubbling + seething with charge.
+  local cr = rs*(0.42 + 0.08*bub)*s
+  graphics.circle(self.x, self.y, cr, Color(1, 0.4, 0.1, 0.95))
+  graphics.circle(self.x, self.y, cr*(0.62 + 0.15*prog), Color(1, 0.72 + 0.2*prog, 0.2, 0.95))
+  graphics.circle(self.x, self.y, cr*0.4, Color(1, 1, 0.85, 0.7 + 0.3*prog))
 
-  -- Cast flash: an expanding, fading ember ring as the volcano is planted.
-  if (self.cast_flash_t or 0) > 0 then
-    local k = math.clamp(self.cast_flash_t/0.4, 0, 1)
-    graphics.circle(self.x, self.y, rs*(1.4 + (1 - k)*1.6),
-                    Color(1, 0.72, 0.3, 0.7*k), 2)
+  -- Cast eruption flash: a bright expanding ember ring as the volcano is planted.
+  if cast > 0 then
+    graphics.circle(self.x, self.y, rs*(1.4 + (1 - cast)*1.8)*s, Color(1, 0.72, 0.3, 0.7*cast), 2)
+    graphics.circle(self.x, self.y, cr*1.5, Color(1, 1, 0.85, cast*0.7))
   end
 end
 
 
--- The assassin's Shadowstalker body. The plain ball is wrapped in a soft
--- dark-purple shadow aura that "breathes" (slow sine on radius + alpha), trails
--- inky ghost-clones of itself that fade and drift up, and -- for a beat after
--- every knife throw (assassin_strike_t) -- blink-flickers, lunges toward the
--- victim (strike_a) and flashes a bright cross-slash (gold + wider on a crit).
--- The physics body underneath is the same r_size circle; bounces are unchanged.
+-- The assassin's Shadowstalker body: a dark stealth orb ringed by a slowly
+-- spinning trio of steel blade-fangs (the assassin identity + the spin cue),
+-- wrapped in a soft breathing shadow aura and trailing faint inky ghosts. On
+-- each knife throw (assassin_strike_t) the blades whip fast, brighten -- gold on
+-- a crit -- and a quick slash-ring snaps out. Kept deliberately simple so the
+-- silhouette still reads clearly as a ball. The physics body underneath is the
+-- same r_size circle; bounces are unchanged.
 function BallHero:draw_shadow(s)
   s = s or 1
   local rs = self.r_size
   local c  = self.color
   local bt = self.shadow_t or 0
 
-  -- Inky smoke-clone afterimages (newest first): darker, ghostlier copies that
-  -- rise and shrink with age so the ball reads as trailing smoke.
+  -- Faint inky ghost trail (newest first): darker copies that rise + fade, so the
+  -- orb reads as slipping through shadow.
   for i, p in ipairs(self.shadow_trail or {}) do
-    local k     = 1 - (i - 1)*0.16
-    local rise  = (i - 1)*1.1
-    local ghost = Color(c.r*0.4, c.g*0.35, c.b*0.5, 0.30 - (i - 1)*0.045)
-    graphics.circle(p.x, p.y - rise, rs*0.92*k*s, ghost)
+    local k    = 1 - (i - 1)*0.18
+    local rise = (i - 1)*1.0
+    graphics.circle(p.x, p.y - rise, rs*0.9*k*s, Color(c.r*0.4, c.g*0.35, c.b*0.5, 0.22 - (i - 1)*0.04))
   end
 
-  -- A strike flash 0..1 over the 0.26s after a throw; crits flare harder.
+  -- A strike flash 0..1 over the 0.26s after a throw; crits flare harder + gold.
   local strike = math.clamp((self.assassin_strike_t or 0)/0.26, 0, 1)
 
-  -- Breathing shadow aura: two soft concentric dark discs whose radius + alpha
-  -- pulse slowly (the idle "breathe"). A strike briefly brightens the aura.
+  -- Soft breathing shadow aura: one dark disc whose radius + alpha pulse slowly
+  -- (the idle "breathe"); a strike briefly brightens it.
   local breathe = 0.5 + 0.5*math.sin(bt*2.2)
-  local flare   = strike*(self.assassin_crit and 0.5 or 0.28)
-  local aura_a  = 0.10 + 0.06*breathe + flare
-  graphics.circle(self.x, self.y, rs*(2.4 + 0.35*breathe), Color(c.r*0.45, c.g*0.30, c.b*0.55, aura_a*0.6))
-  graphics.circle(self.x, self.y, rs*(1.7 + 0.25*breathe), Color(c.r*0.70, c.g*0.45, c.b*0.80, aura_a))
+  graphics.circle(self.x, self.y, rs*(1.9 + 0.25*breathe),
+                  Color(c.r*0.5, c.g*0.3, c.b*0.65, 0.10 + 0.05*breathe + strike*0.25))
 
-  -- Blink-lunge: for the beat after a throw the body jumps toward the victim
-  -- and flickers (alternating visible/dim), reading as a teleport-strike.
-  local lunge = strike*rs*1.6
-  local a     = self.strike_a or -math.pi/2
-  local bx    = self.x + math.cos(a)*lunge
-  local by    = self.y + math.sin(a)*lunge
-  local blink = (strike > 0 and (math.floor(bt*40) % 2 == 0)) and 0.45 or 1
+  -- Round body: a dark purple orb with a rim and an upper-left highlight, so it
+  -- stays clearly a ball beneath the blades.
+  graphics.circle(self.x, self.y, rs*s + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*s, c)
+  graphics.circle(self.x - rs*0.3, self.y - rs*0.3, math.max(1, rs*0.38*s),
+                  Color(fg[5].r, fg[5].g, fg[5].b, 0.8))
 
-  -- Body.
-  graphics.circle(bx, by, rs + 0.5, bg[-2])
-  graphics.circle(bx, by, rs*s, Color(c.r, c.g, c.b, blink))
-  graphics.circle(bx - rs*0.3, by - rs*0.3, math.max(1, rs*0.35), Color(fg[5].r, fg[5].g, fg[5].b, blink))
+  -- Spinning blade-fang ring: three short curved steel slashes etched around the
+  -- orb, each with a sharp leading tip, rotating with spin_a (the spin cue). They
+  -- brighten on a strike and turn gold on a crit.
+  local bc   = (strike > 0)
+               and (self.assassin_crit and Color(1, 0.85, 0.45, 1) or Color(0.9, 0.88, 0.98, 1))
+               or  Color(0.62, 0.58, 0.72, 0.85)
+  local br   = rs*0.74*s
+  local span = 0.8
+  local a0   = self.spin_a or 0
+  for i = 0, 2 do
+    local a = a0 + i*(2*math.pi/3)
+    graphics.arc('open', self.x, self.y, br, a, a + span, bc, 1.5 + strike*1.5)
+    graphics.circle(self.x + math.cos(a + span)*br, self.y + math.sin(a + span)*br,
+                    math.max(1, rs*0.16*s), bc)
+  end
 
-  -- Cross-slash: a bright X centered on the body, oriented to the strike, that
-  -- snaps out then vanishes. Brighter, wider and gold on a crit.
+  -- Strike slash-ring: a quick expanding ring snapped out on each throw.
   if strike > 0 then
-    local len = rs*(2.2 + (self.assassin_crit and 1.4 or 0.7))*(0.5 + strike)
-    local sc  = self.assassin_crit and Color(1, 0.9, 0.5, strike) or Color(1, 1, 1, strike*0.9)
-    local w   = self.assassin_crit and 2 or 1.5
-    for _, off in ipairs({math.pi/5, -math.pi/5}) do
-      local sa = a + off
-      graphics.line(bx - math.cos(sa)*len, by - math.sin(sa)*len,
-                    bx + math.cos(sa)*len, by + math.sin(sa)*len, sc, w)
-    end
+    local sc = self.assassin_crit and Color(1, 0.9, 0.5, strike) or Color(1, 1, 1, strike*0.8)
+    graphics.circle(self.x, self.y, rs*(1.2 + (1 - strike)*1.7)*s, sc, self.assassin_crit and 2 or 1.5)
   end
 end
 
@@ -3623,10 +3635,10 @@ function BallHero:draw_psy(s)
 end
 
 
--- The gambler's "Lucky Die" body: a tumbling gold die. A rounded gold square that
--- rotates (slow idle tumble, whipped fast for a beat on each roll) showing the rolled
--- face's pips, over a lucky gold aura. It spins up + flashes on each cast (dice_roll_t)
--- and flares bright gold on a jackpot (dice_jackpot_t). Same r_size physics circle.
+-- The gambler's "Lucky Die" body: a round gold BALL (so it still reads as a ball) with
+-- a small tumbling die perched ON TOP. The die spins slowly (whipped fast for a beat on
+-- each roll) and shows the rolled face's pips; a lucky gold aura pulses + flares on cast
+-- (dice_roll_t) / jackpot (dice_jackpot_t). Same r_size physics circle underneath.
 function BallHero:draw_dice(s)
   s = s or 1
   local rs = self.r_size
@@ -3637,21 +3649,28 @@ function BallHero:draw_dice(s)
   local a    = self.dice_a or 0
   local face = self.dice_face or 1
   local breathe = 0.5 + 0.5*math.sin(t*2.5)
-  local sc = s*(1 + roll*0.15 + jack*0.18)
+  local sc = s*(1 + roll*0.1 + jack*0.15)
 
   -- Lucky gold aura (pulses; flares on cast/jackpot).
   graphics.circle(self.x, self.y, rs*(1.55 + 0.2*breathe)*sc + roll*3 + jack*9,
                   Color(c.r, c.g, c.b*0.45, 0.08 + 0.05*breathe + roll*0.12 + jack*0.3))
 
-  -- Die body: a rounded gold square tumbling on `a`.
-  local side  = rs*1.7*sc
+  -- Round gold ball body -- keeps the "ball" silhouette.
+  graphics.circle(self.x, self.y, rs*sc + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rs*sc, c)
+  graphics.circle(self.x - rs*0.3*sc, self.y - rs*0.3*sc, math.max(1, rs*0.32*sc), fg[5])
+
+  -- A die sitting CENTERED directly on the ball, tumbling on `a` (the ball's gold rim
+  -- still shows around it).
+  local dy    = self.y
+  local side  = rs*1.3*sc
   local facec = (jack > 0) and Color(1, 0.97, 0.7, 1) or Color(0.96, 0.86, 0.55, 1)
-  graphics.push(self.x, self.y, a, 1, 1)
-    graphics.rectangle(self.x, self.y, side + 1.5, side + 1.5, 3, 3, bg[-2])
-    graphics.rectangle(self.x, self.y, side, side, 3, 3, facec)
+  graphics.push(self.x, dy, a, 1, 1)
+    graphics.rectangle(self.x, dy, side + 1.5, side + 1.5, 2, 2, bg[-2])
+    graphics.rectangle(self.x, dy, side, side, 2, 2, facec)
   graphics.pop()
 
-  -- Pips at the rolled face's standard 3x3 positions, tumbling with the die.
+  -- Pips on the die face, tumbling with it.
   local layouts = {
     {{0, 0}},
     {{-1, -1}, {1, 1}},
@@ -3662,11 +3681,11 @@ function BallHero:draw_dice(s)
   }
   local pips = layouts[face] or layouts[1]
   local g  = side*0.27
-  local pr = math.max(1, rs*0.16*sc)
+  local pr = math.max(1, rs*0.13*sc)
   local ca, sa = math.cos(a), math.sin(a)
   for _, p in ipairs(pips) do
     local lx, ly = p[1]*g, p[2]*g
-    graphics.circle(self.x + lx*ca - ly*sa, self.y + lx*sa + ly*ca, pr, Color(0.15, 0.12, 0.05, 1))
+    graphics.circle(self.x + lx*ca - ly*sa, dy + lx*sa + ly*ca, pr, Color(0.15, 0.12, 0.05, 1))
   end
 end
 
