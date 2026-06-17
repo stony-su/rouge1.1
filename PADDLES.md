@@ -118,12 +118,21 @@ back (double-pass lanes). Always recoverable, very controlled (Dmg 1.4, Aim 1.3)
 - **Hook:** in the ball's wall-collision callback, set velocity back toward the
   paddle and flag a damaging return state.
 
-### Twin Cast — *ability spam*
-Every drafted hero is **mirrored into two balls**, and abilities fire at **double
-frequency** (halved cooldowns). Raw ability-spam build (Dmg 1.6, Count 4).
-- **Downside:** **XP 0.5×** (much slower draft) and heavy screen clutter balance
-  the power.
-- **Hook:** `add_hero` spawns 2; halve `cd` in `setup_continuous_attack`.
+### Twin Cast — *binary fusion / burst rhythm*
+Every drafted hero is **mirrored into a bonded pair** that **orbits a shared
+core**, charging as it swirls. At full charge the twins **FUSE** into one
+super-ball that detonates a **nova supercast** — a heavy falloff AoE (hits
+bricks, critters AND the boss) carrying the pair's element — then **split apart
+and recharge**. Strongest right after a fusion, weakest mid-charge (Dmg 1.6,
+Count 4). A twisting tether + charge ring telegraph the build-up; cooldowns are
+still mildly cut (`cd_mult 0.75`) so the between-nova pair stays snappy.
+- **Downside:** **XP 0.5×** (much slower draft); the nova is on a ~8s active-play
+  timer, so the burst is paid for with uptime, not screen clutter.
+- **Hook:** `add_hero` spawns + bonds each pair (`twincast_register_pair`);
+  `twincast_tick` runs the orbit → charge → fuse → split state machine and fires
+  `twincast_fuse_blast` (reusing the Cannon's `do_splash_falloff`); `TwinFusionFX`
+  + `TwinNova` draw the bond, charge ring, fused core and shockwave. All in
+  `paddles.lua` (+ the `twincast_tick` call and pair registration in `ballpit.lua`).
 
 ### Phantom — *mobility / skill*
 Press **E** to drop a **ghost paddle anchor** at your current spot (it still

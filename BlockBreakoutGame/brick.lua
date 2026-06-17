@@ -845,8 +845,10 @@ function Brick:on_ball_contact(ball)
   -- Apply the ball's active charge bonus (1.0 .. 1.5) to contact damage,
   -- then layer on the per-ball bounce multiplier and the arena-wide combo
   -- multiplier. With both at max this gives ~8.8x — big payoff for keeping
-  -- a single ball alive through a chain at high rank.
-  local dmg = ball.dmg*(ball.charge_dmg_mult or 1)
+  -- a single ball alive through a chain at high rank. terror_other_mult guts
+  -- contact damage on the Terrorist paddle (its blast is the real damage); nil
+  -- = 1 for every other ball.
+  local dmg = ball.dmg*(ball.charge_dmg_mult or 1)*(ball.terror_other_mult or 1)
   local arena = main.current
   if arena and arena.combo then
     dmg = dmg * arena:bounce_dmg_mult(ball.bounces or 0) * arena:combo_mult()

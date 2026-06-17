@@ -685,6 +685,64 @@ function ReactorBlast:draw()
 end
 
 
+-- TerrorBlast: the terrorist paddle's detonation flash (visual only — the
+-- damage is dealt in BallPit:terror_blast the instant it spawns). A beefier,
+-- punchier cousin of ReactorBlast: a white-hot core flash, a fireball puff,
+-- a flung debris cluster, and a triple expanding shockwave with a bright rim.
+TerrorBlast = Object:extend()
+TerrorBlast:implement(GameObject)
+function TerrorBlast:init(args)
+  self:init_game_object(args)
+  self.radius = self.radius or 64
+  self.color  = self.color or orange[0]
+  self.age    = 0
+  self.life   = 0.7
+  -- Debris chunks + smoke spit out on the frame it lands.
+  local arena = main.current
+  if arena then
+    spawn_burst(arena.effects, self.x, self.y, self.color, 16, 110, 280)
+    spawn_burst(arena.effects, self.x, self.y, Color(1, 1, 1, 1), 8, 70, 190)
+    for _ = 1, 7 do
+      local a  = random:float(0, 2*math.pi)
+      local sp = random:float(50, 150)
+      SmokePuff{group = arena.effects, x = self.x, y = self.y, color = Color(0.22, 0.20, 0.22, 1),
+                rs = random:float(3, 7), alpha = 0.45, vx = math.cos(a)*sp, vy = math.sin(a)*sp - 14,
+                duration = random:float(0.5, 1.0)}
+    end
+  end
+  self.t:after(self.life, function() self.dead = true end)
+end
+function TerrorBlast:update(dt)
+  self:update_game_object(dt)
+  self.age = self.age + dt
+end
+function TerrorBlast:draw()
+  local c = self.color
+  local k = math.clamp(self.age/self.life, 0, 1)
+  -- White-hot core flash, fading fast.
+  graphics.circle(self.x, self.y, math.max(0, 20*(1 - k*1.4)), Color(1, 1, 1, 1 - k))
+  graphics.circle(self.x, self.y, math.max(0, 13*(1 - k)), Color(1, 0.85, 0.4, 0.9*(1 - k)))
+  -- Three staggered expanding shockwave rings with a bright leading rim.
+  for i = 1, 3 do
+    local kk = math.clamp(k*1.3 - (i - 1)*0.16, 0, 1)
+    if kk > 0 and kk < 1 then
+      local rr = self.radius*(0.25 + kk)
+      graphics.circle(self.x, self.y, rr, Color(c.r, c.g, c.b, 0.75*(1 - kk)), 3.0 - i*0.6)
+      graphics.circle(self.x, self.y, rr, Color(1, 1, 1, 0.5*(1 - kk)), 1)
+    end
+  end
+  -- Radiating energy spokes shooting outward, fading.
+  local spoke = self.radius*(0.3 + k*1.05)
+  local fade  = 1 - k
+  for i = 0, 9 do
+    local a  = i*math.pi/5 + self.age*5
+    graphics.line(self.x + math.cos(a)*spoke*0.5, self.y + math.sin(a)*spoke*0.5,
+                  self.x + math.cos(a)*spoke, self.y + math.sin(a)*spoke,
+                  Color(1, 0.7, 0.3, 0.8*fade), 1.5)
+  end
+end
+
+
 -- AllyTurret: parks above the paddle, fires projectiles at the nearest brick
 -- on its own cooldown, despawns after `lifetime` seconds.
 -- AllyTurret (SNKRX engineer port: player.lua:3196 Turret). A deployed gun
@@ -830,8 +888,8 @@ end
 
 
 -- SmokePuff: a soft wisp that drifts (usually upward), GROWS and fades out over
--- its lifetime. Used by the assassin's Shadowstalker trail so the ball sheds
--- inky smoke that dissipates as it rises. Decelerates as it climbs.
+-- its lifetime. Used widely (bomber/engineer vents, projectile trails, etc.) for
+-- smoke that dissipates as it rises. Decelerates as it climbs.
 SmokePuff = Object:extend()
 SmokePuff:implement(GameObject)
 function SmokePuff:init(args)

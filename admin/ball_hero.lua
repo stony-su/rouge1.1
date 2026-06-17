@@ -59,15 +59,6 @@ local HERO_STATS = {
   -- hop on top. skin switches the draw to the spinning bandit shuriken.
   scout       = {r = 5, base_speed = 180, dmg = 6,  color = 'red',    behavior = 'chain_knife', range = 64, cd = 2.0, speed = 240, chain = 3, skin = 'shuriken'},
 
-  -- ----- Assassin (SNKRX assassin port; behavior = 'assassinate') -----
-  -- SNKRX player.lua:587 -- every cd seconds with a brick in the 64px sensor,
-  -- hurl a knife at the CLOSEST one with pierce 1000 so it skewers the whole
-  -- lane. Every brick it touches BLEEDS (player.lua:2356): a bleed_dur-second
-  -- DoT worth dmg/2 normally, 4x dmg on a crit. The rogue "assassination" crit
-  -- (crit_chance%, +10% per level) also doubles the strike. skin = 'shadow' is
-  -- the Shadowstalker look (dark orb, spinning steel blade-fang ring, inky trail).
-  assassin    = {r = 5, base_speed = 200, dmg = 12, color = 'purple', behavior = 'assassinate', range = 64, cd = 2.0, speed = 320, pierce = 1000, crit_chance = 25, bleed_dur = 3, skin = 'shadow'},
-
   -- ----- Spellblade (SNKRX spellblade port; behavior = 'blade_storm') -----
   -- SNKRX player.lua:400 + :2013 -- a spinning blade-shard fired in a RANDOM
   -- direction with pierce 1000; the projectile's heading SPINS (orbit_vr starts
@@ -397,28 +388,6 @@ function BallHero:init(args)
       end
       table.insert(self.rune_trail, 1, {x = self.x, y = self.y, a = self.ring_a})
       if #self.rune_trail > 4 then table.remove(self.rune_trail) end
-    end)
-  end
-
-  -- Shadowstalker skin (assassin): a dark stealth orb ringed by a spinning trio
-  -- of steel blade-fangs (the spin cue + the assassin identity). shadow_t is the
-  -- idle "breathe" clock; spin_a is the blade rotation (lazy idle spin, whipped
-  -- fast for a beat on each throw -- see update). shadow_trail samples recent
-  -- positions for the faint inky ghosts; assassin_strike_t + assassin_crit (set
-  -- in shoot_assassin_knife) drive the per-throw strike flash.
-  if s.skin == 'shadow' then
-    self.shadow_t          = random:float(0, 2*math.pi)
-    self.spin_a            = random:float(0, 2*math.pi)
-    self.assassin_strike_t = 0
-    self.strike_a          = -math.pi/2
-    self.shadow_trail      = {}
-    self.t:every(0.04, function()
-      if self.stuck or self.returning or self.mortar then
-        self.shadow_trail = {}
-        return
-      end
-      table.insert(self.shadow_trail, 1, {x = self.x, y = self.y})
-      if #self.shadow_trail > 5 then table.remove(self.shadow_trail) end
     end)
   end
 
@@ -827,10 +796,15 @@ function BallHero:init(args)
   -- Continuous timer-based attacks for the 12 non-exception heroes.
   self:setup_continuous_attack()
 
-  -- Terrorist loadout: every ball self-detonates on a fuse, blasting its own
-  -- element around it, then re-forms at the paddle (see terror_detonate).
-  if mods.sig and mods.sig.fuse then
-    self.t:every(mods.sig.fuse, function() self:terror_detonate() end)
+  -- Terrorist loadout: detonation is MANUAL now — press E to blow up every
+  -- ball that's near a block (BallPit:terror_manual_detonate); a spent ball is
+  -- consumed, it does NOT re-form. Flag the ball so all of its non-blast damage
+  -- is gutted (current_dmg), and seed the armed-telegraph spark clock.
+  if mods.signature == 'terrorist' then
+    self.terror            = true
+    self.terror_other_mult = (mods.sig and mods.sig.other_dmg_mult) or 0.2
+    self.terror_armed      = false
+    self.terror_fuse_t     = random:float(0, 2*math.pi)
   end
 
   -- Drop afterimage trail particles while the ball is moving above the
@@ -1036,25 +1010,6 @@ BEHAVIORS.shoot_knife = function(self, s)
     if s.pierce   then extra.pierce   = s.pierce end
     if s.ricochet then extra.ricochet = s.ricochet end
     self:shoot_knife(s.range, s.speed or 240, extra)
-  end, 0, nil, 'attack')
-end
-
-
--- SNKRX assassin port (player.lua:587 + :2356). Every cd seconds with a brick
--- in the sensor, hurl a pierce-1000 knife at the CLOSEST one; on hit it makes
--- the target BLEED for bleed_dur seconds (dmg/2 normally, 4x dmg on a crit).
--- The rogue "assassination" crit (crit_chance%, +10% per level) also doubles
--- the strike's direct damage. The Shadowstalker juice is armed inside
--- shoot_assassin_knife. NOTE: this behavior is deliberately NOT in
--- RANGED_BEHAVIORS -- its cd is already the SNKRX 2s, and it applies the ranged
--- damage multiplier itself (via PROJECTILE_DMG_MULT in shoot_assassin_knife).
-BEHAVIORS.assassinate = function(self, s)
-  self.t:cooldown(s.cd, function() return self:can_attack(s.range) end, function()
-    if self.stuck or self.returning then return end
-    local crit_chance = (s.crit_chance or 25) + 10*(self.level - 1)
-    local crit        = random:bool(crit_chance)
-    local bleed_total = (crit and 4 or 0.5)*self:current_dmg()
-    self:shoot_assassin_knife(s, crit, bleed_total)
   end, 0, nil, 'attack')
 end
 
@@ -1547,6 +1502,17 @@ function BallHero:shoot_mortar(s)
   if self.stuck or self.returning then return end
   local arena  = main.current
   if not arena then return end
+
+  -- Cannon LOADOUT (sig 'cannon'): the ball itself IS the shell — a fired shot
+  -- bounces it into its own z-axis mortar hop (homing onto the swarm via
+  -- update_mortar) instead of lobbing a separate MortarShell. So every charged
+  -- shot "bounces" the ball, matching the paddle's per-hit hop. Other loadouts
+  -- fall through to the Triple-Mortar artillery below.
+  if arena.run_mods and arena.run_mods.signature == 'cannon' and self.start_mortar and not self.mortar then
+    self:start_mortar(0)
+    return
+  end
+
   local target = arena:get_nearest_brick_within(self.x, self.y, s.range or 240)
   if not target then return end
 
@@ -1606,7 +1572,7 @@ BEHAVIORS.pet_spawn = function(self, s)
         AllyCritter{
           group = arena.main, x = self.x, y = self.y,
           color = self.color, speed = s.pet_speed or 70,
-          dmg = (s.pet_dmg or 8)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1),
+          dmg = (s.pet_dmg or 8)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)*(self.terror_other_mult or 1),
         }
       end)
     end
@@ -1636,7 +1602,7 @@ function BallHero:emit_locusts(s)
   -- Pressure: 1 base + up to 2 more from a dense cluster + a frenzy bonus.
   local count = 1 + math.min(2, math.floor((#pool - 1)/3))
   if (self.locust_frenzy or 0) > 0 then count = count + 2 end
-  local dmg = (s.locust_dmg or 5)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)
+  local dmg = (s.locust_dmg or 5)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)*(self.terror_other_mult or 1)
   local hx, hy = self.x, self.y
   for _ = 1, count do
     local tg = pool[random:int(1, #pool)]
@@ -1791,6 +1757,17 @@ local SPELLBLADE_DMG_MULT = 0.6*RANGED_DMG_MULT
 -- Effective damage this ball deals right now (base × any active charge bonus
 -- × any active ally damage buff from stormweaver/warden).
 function BallHero:current_dmg()
+  -- Terrorist: every non-blast damage source (contact, abilities, projectiles)
+  -- is gutted to terror_other_mult so the manual detonation IS the damage. The
+  -- blast itself reads blast_dmg() below, which skips this nerf. nil for every
+  -- other paddle, so their numbers are unchanged.
+  return self.dmg*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.terror_other_mult or 1)
+end
+
+
+-- Un-nerfed damage, used ONLY by the terrorist detonation blast — its whole
+-- payoff. For every other ball this equals current_dmg().
+function BallHero:blast_dmg()
   return self.dmg*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)
 end
 
@@ -1812,40 +1789,6 @@ function BallHero:shoot_knife(range, speed, extra)
   if extra then for k, v in pairs(extra) do opts[k] = v end end
   main.current:fire_projectile_at_nearest(self, opts)
   -- SNKRX plays one of two throw sounds at random for every knife thrower.
-  _G[random:table{'scout1', 'scout2'}]:play{pitch = random:float(0.95, 1.05), volume = 0.35}
-end
-
-
--- The assassin's bleed-knife (SNKRX assassin port). Unlike shoot_knife it
--- builds the Projectile directly so it can carry the crit flag and the bleed
--- payload (fire_projectile_at_nearest forwards neither). Targets the nearest
--- brick in range; pierce 1000 skewers the whole lane and every brick it punches
--- through starts bleeding (see projectile.lua / Brick:apply_bleed). Also arms
--- the Shadowstalker blink-lunge cross-slash (strike_a / assassin_strike_t).
-function BallHero:shoot_assassin_knife(s, crit, bleed_total)
-  if self.stuck or self.returning then return end
-  local arena = main.current
-  if not (arena and arena.main and arena.main.world) then return end
-  local target = arena:get_nearest_brick_within(self.x, self.y, s.range)
-  if not target then return end
-  local hx, hy = self.x, self.y
-  local r      = math.atan2(target.y - hy, target.x - hx)
-  self.strike_a          = r
-  self.assassin_strike_t = 0.26
-  self.assassin_crit     = crit
-  local dmg    = self:current_dmg()*PROJECTILE_DMG_MULT*(crit and 2 or 1)
-  local color  = self.color
-  local main_g = arena.main
-  arena.t:after(0, function()
-    if main_g and main_g.world then
-      Projectile{
-        group = main_g, x = hx, y = hy, r = r,
-        type = 'knife', dmg = dmg, speed = s.speed or 320,
-        pierce = s.pierce or 1000, color = color,
-        crit = crit, bleed = bleed_total, bleed_dur = s.bleed_dur or 3,
-      }
-    end
-  end)
   _G[random:table{'scout1', 'scout2'}]:play{pitch = random:float(0.95, 1.05), volume = 0.35}
 end
 
@@ -1975,6 +1918,20 @@ function BallHero:update(dt)
 
   local arena = main.current
 
+  -- Terrorist: advance the fuse-spark clock and recompute whether this ball is
+  -- "armed" — i.e. a block/critter/boss sits within its (level-scaled) blast
+  -- reach, so pressing E would detonate it. Drives the draw telegraph + the [E]
+  -- prompt. Only a ball actually in play can be armed (a caught/falling/mortar
+  -- ball can't).
+  if self.terror then
+    self.terror_fuse_t = (self.terror_fuse_t or 0) + dt
+    if self.stuck or self.returning or self.mortar or self.dead or not arena then
+      self.terror_armed = false
+    else
+      self.terror_armed = arena:terror_has_enemy_within(self.x, self.y, arena:terror_blast_radius())
+    end
+  end
+
   -- Mitosis: the grow-in (a budding daughter cell scaling up) and decay (a
   -- dying clone) timers advance every frame regardless of state, so the
   -- division + rot animation stays smooth. See begin_mitosis_grow/decay.
@@ -2042,19 +1999,6 @@ function BallHero:update(dt)
       speed = 12
     end
     self.ring_a = (self.ring_a or 0) + speed*dt
-  end
-
-  -- Shadowstalker skin (assassin): advance the idle "breathe" clock, spin the
-  -- blade-fang ring (lazy idle spin, whipped fast for a beat on each throw) and
-  -- decay the per-throw strike flash (see draw_shadow).
-  if self.stats.skin == 'shadow' then
-    self.shadow_t = (self.shadow_t or 0) + dt
-    local speed = 3
-    if (self.assassin_strike_t or 0) > 0 then
-      self.assassin_strike_t = self.assassin_strike_t - dt
-      speed = 24
-    end
-    self.spin_a = (self.spin_a or 0) + speed*dt
   end
 
   -- Spellblade skin: spin the orbiting blade-shards and advance the arcane
@@ -2653,41 +2597,11 @@ function BallHero:draw_mitosis_cell(grow, decay)
 end
 
 
-function BallHero:draw()
-  -- Cannon mortar: the ball is "out of the screen" — a ground shadow stays at
-  -- (x, y) while the ball draws above it, scaled up with height, so the
-  -- z-axis reads without real 3D.
-  if self.mortar then
-    local z  = self.z or 0
-    local sa = math.clamp(0.5 - z/300, 0.12, 0.5)
-    local sr = self.r_size*math.clamp(1 - z/260, 0.45, 1)
-    graphics.circle(self.x, self.y, sr, Color(0, 0, 0, sa))
-    local scale = 1 + z/140
-    local dy    = z*0.9
-    graphics.circle(self.x, self.y - dy, self.r_size*scale + 0.5, bg[-2])
-    graphics.circle(self.x, self.y - dy, self.r_size*scale, self.color)
-    graphics.circle(self.x - self.r_size*scale*0.3, self.y - dy - self.r_size*scale*0.3,
-                    math.max(1, self.r_size*scale*0.35), fg[5])
-    return
-  end
-
-  -- Mitosis decaying clone: drawn as a dividing/decaying cell (not the hero
-  -- skin), wobbling harder as it dies — see draw_mitosis_cell.
-  if self.mitosis_clone then
-    self:draw_mitosis_cell(self:mitosis_grow_factor(), self:mitosis_decay_factor())
-    if main.current.show_hero_labels then
-      graphics.print_centered(self.character:sub(1, 3), pixul_font, self.x, self.y - self.r_size - 6, 0, 1, 1, 0, 0, fg[0])
-    end
-    return
-  end
-
-  -- Freshly-budded daughter cell: scale the whole body up from a point so it
-  -- "grows" out of its parent (mitosis) instead of popping in.
-  local grow = self:mitosis_grow_factor()
-  if grow < 1 then graphics.push(self.x, self.y, 0, grow, grow) end
-
-  self.spring:pull(0)
-  local s = self.spring.x
+-- Draw just the hero's body (its per-archetype skin, or the plain ball for
+-- skinless heroes). Split out of draw() so the cannon mortar arc can render the
+-- SAME skin while airborne (lifted + scaled) instead of a stand-in circle. `s`
+-- is the spring scale; callers handle the grow/charge/label chrome around this.
+function BallHero:draw_skin(s)
   if self.stats.skin == 'crescent' then
     -- Swordsman: a banked crescent slash instead of the plain ball body.
     self:draw_crescent(s)
@@ -2701,10 +2615,6 @@ function BallHero:draw()
     -- Vulcanist: a dark volcanic-rock orb laced with glowing lava veins around a
     -- bubbling molten crater; flares an ember ring when it plants a volcano.
     self:draw_rune_furnace(s)
-  elseif self.stats.skin == 'shadow' then
-    -- Assassin: a dark body wrapped in a breathing shadow aura, shedding inky
-    -- smoke-clone afterimages; blink-lunges with a cross-slash on each throw.
-    self:draw_shadow(s)
   elseif self.stats.skin == 'spellblade' then
     -- Spellblade: a bright arcane core orbited by spinning blade-shards.
     self:draw_spellblade(s)
@@ -2762,8 +2672,64 @@ function BallHero:draw()
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
     graphics.circle(self.x - self.r_size*0.3, self.y - self.r_size*0.3, math.max(1, self.r_size*0.35), fg[5])
   end
+end
+
+
+function BallHero:draw()
+  -- Cannon mortar: the ball is airborne on its z-axis arc. A ground shadow
+  -- stays at (x, y); the ball itself draws lifted by its z-height and scaled up
+  -- — but using its REAL skin (draw_skin), so it keeps the design it has on the
+  -- ground instead of morphing into a plain circle mid-flight.
+  if self.mortar then
+    local z  = self.z or 0
+    local sa = math.clamp(0.5 - z/300, 0.12, 0.5)
+    local sr = self.r_size*math.clamp(1 - z/260, 0.45, 1)
+    graphics.circle(self.x, self.y, sr, Color(0, 0, 0, sa))
+    self.spring:pull(0)
+    local scale  = 1 + z/140
+    local dy     = z*0.9
+    local real_y = self.y
+    self.y = self.y - dy
+    graphics.push(self.x, self.y, 0, scale, scale)
+      self:draw_skin(self.spring.x)
+    graphics.pop()
+    self.y = real_y
+    return
+  end
+
+  -- Mitosis decaying clone: drawn as a dividing/decaying cell (not the hero
+  -- skin), wobbling harder as it dies — see draw_mitosis_cell.
+  if self.mitosis_clone then
+    self:draw_mitosis_cell(self:mitosis_grow_factor(), self:mitosis_decay_factor())
+    if main.current.show_hero_labels then
+      graphics.print_centered(self.character:sub(1, 3), pixul_font, self.x, self.y - self.r_size - 6, 0, 1, 1, 0, 0, fg[0])
+    end
+    return
+  end
+
+  -- Freshly-budded daughter cell: scale the whole body up from a point so it
+  -- "grows" out of its parent (mitosis) instead of popping in.
+  local grow = self:mitosis_grow_factor()
+  if grow < 1 then graphics.push(self.x, self.y, 0, grow, grow) end
+
+  self.spring:pull(0)
+  local s = self.spring.x
+  self:draw_skin(s)
 
   if grow < 1 then graphics.pop() end
+
+  -- Terrorist armed telegraph: a ball within detonation range pulses a red
+  -- warning ring with a lit, sparking fuse over it, so the player can read at a
+  -- glance exactly which balls will blow when they press E.
+  if self.terror and self.terror_armed and not self.stuck then
+    local t     = self.terror_fuse_t or 0
+    local pulse = 0.5 + 0.5*math.sin(t*12)
+    graphics.circle(self.x, self.y, self.r_size + 3 + pulse*2, Color(1, 0.25, 0.15, 0.45 + 0.4*pulse), 1.5)
+    local fx2 = self.x + math.cos(t*9)*1.5
+    local fy2 = self.y - self.r_size - 3 - pulse*1.5
+    graphics.circle(fx2, fy2, 1.6 + pulse*1.2, Color(1, 0.85, 0.35, 0.9))
+    graphics.circle(fx2, fy2, 0.8, Color(1, 1, 1, 1))
+  end
 
   if main.current.show_hero_labels then
     graphics.print_centered(self.character:sub(1, 3), pixul_font, self.x, self.y - self.r_size - 6, 0, 1, 1, 0, 0, fg[0])
@@ -3014,67 +2980,6 @@ function BallHero:draw_rune_furnace(s)
   if cast > 0 then
     graphics.circle(self.x, self.y, rs*(1.4 + (1 - cast)*1.8)*s, Color(1, 0.72, 0.3, 0.7*cast), 2)
     graphics.circle(self.x, self.y, cr*1.5, Color(1, 1, 0.85, cast*0.7))
-  end
-end
-
-
--- The assassin's Shadowstalker body: a dark stealth orb ringed by a slowly
--- spinning trio of steel blade-fangs (the assassin identity + the spin cue),
--- wrapped in a soft breathing shadow aura and trailing faint inky ghosts. On
--- each knife throw (assassin_strike_t) the blades whip fast, brighten -- gold on
--- a crit -- and a quick slash-ring snaps out. Kept deliberately simple so the
--- silhouette still reads clearly as a ball. The physics body underneath is the
--- same r_size circle; bounces are unchanged.
-function BallHero:draw_shadow(s)
-  s = s or 1
-  local rs = self.r_size
-  local c  = self.color
-  local bt = self.shadow_t or 0
-
-  -- Faint inky ghost trail (newest first): darker copies that rise + fade, so the
-  -- orb reads as slipping through shadow.
-  for i, p in ipairs(self.shadow_trail or {}) do
-    local k    = 1 - (i - 1)*0.18
-    local rise = (i - 1)*1.0
-    graphics.circle(p.x, p.y - rise, rs*0.9*k*s, Color(c.r*0.4, c.g*0.35, c.b*0.5, 0.22 - (i - 1)*0.04))
-  end
-
-  -- A strike flash 0..1 over the 0.26s after a throw; crits flare harder + gold.
-  local strike = math.clamp((self.assassin_strike_t or 0)/0.26, 0, 1)
-
-  -- Soft breathing shadow aura: one dark disc whose radius + alpha pulse slowly
-  -- (the idle "breathe"); a strike briefly brightens it.
-  local breathe = 0.5 + 0.5*math.sin(bt*2.2)
-  graphics.circle(self.x, self.y, rs*(1.9 + 0.25*breathe),
-                  Color(c.r*0.5, c.g*0.3, c.b*0.65, 0.10 + 0.05*breathe + strike*0.25))
-
-  -- Round body: a dark purple orb with a rim and an upper-left highlight, so it
-  -- stays clearly a ball beneath the blades.
-  graphics.circle(self.x, self.y, rs*s + 0.5, bg[-2])
-  graphics.circle(self.x, self.y, rs*s, c)
-  graphics.circle(self.x - rs*0.3, self.y - rs*0.3, math.max(1, rs*0.38*s),
-                  Color(fg[5].r, fg[5].g, fg[5].b, 0.8))
-
-  -- Spinning blade-fang ring: three short curved steel slashes etched around the
-  -- orb, each with a sharp leading tip, rotating with spin_a (the spin cue). They
-  -- brighten on a strike and turn gold on a crit.
-  local bc   = (strike > 0)
-               and (self.assassin_crit and Color(1, 0.85, 0.45, 1) or Color(0.9, 0.88, 0.98, 1))
-               or  Color(0.62, 0.58, 0.72, 0.85)
-  local br   = rs*0.74*s
-  local span = 0.8
-  local a0   = self.spin_a or 0
-  for i = 0, 2 do
-    local a = a0 + i*(2*math.pi/3)
-    graphics.arc('open', self.x, self.y, br, a, a + span, bc, 1.5 + strike*1.5)
-    graphics.circle(self.x + math.cos(a + span)*br, self.y + math.sin(a + span)*br,
-                    math.max(1, rs*0.16*s), bc)
-  end
-
-  -- Strike slash-ring: a quick expanding ring snapped out on each throw.
-  if strike > 0 then
-    local sc = self.assassin_crit and Color(1, 0.9, 0.5, strike) or Color(1, 1, 1, strike*0.8)
-    graphics.circle(self.x, self.y, rs*(1.2 + (1 - strike)*1.7)*s, sc, self.assassin_crit and 2 or 1.5)
   end
 end
 
@@ -3989,41 +3894,50 @@ function BallHero:on_brick_hit(brick)
 end
 
 
--- ----- Terrorist loadout: timed self-detonation -----
+-- ----- Terrorist loadout: manual on-demand detonation -----
 
--- Blast the ball's own element in an AoE around it, then re-form at the
--- paddle. Deliberately NOT routed through start_return: re-forming is the
--- mechanic working as intended, so it must not eat the combo miss penalty.
--- The relaunch goes through launch_from_paddle, which resets speed_mult and
--- the chain counter — that reset is the glass-cannon cost of the blast.
+-- Blow the ball up in an AoE around it (carrying its own element), then CONSUME
+-- it — a spent ball does NOT re-form; the player replenishes ammo through the
+-- auto-drafted level-ups (BallPit:terror_auto_levelup) or, at zero balls, the
+-- safety regrow. Triggered per-ball by BallPit:terror_manual_detonate when E is
+-- pressed and an enemy is within blast reach. The blast uses blast_dmg() (the
+-- un-nerfed damage) — it is the whole offense of the build, and both its radius
+-- and damage scale with the run level so it stays lethal deep into a run.
 function BallHero:terror_detonate()
   if self.stuck or self.returning or self.mortar or self.dead then return end
   local arena = main.current
   if not arena or arena.game_over then return end
   local sig    = (self.run_mods and self.run_mods.sig) or {}
-  local radius = sig.blast_radius or 56
+  local radius = arena:terror_blast_radius()
+  local lvl    = arena.level or 1
+  -- Damage climbs with the run level (on top of the flat blast_mult) so the
+  -- detonation keeps up with late-game brick HP.
+  local dmg    = self:blast_dmg()*(sig.blast_mult or 5.0)
+                 *(1 + (lvl - 1)*(sig.blast_dmg_per_level or 0.18))
   local x, y   = self.x, self.y
 
-  arena:do_splash(x, y, radius, self:current_dmg()*(sig.blast_mult or 2.2), self.color)
-  -- Element carry-over: a Pyromancer ball makes a burn blast, a Cryomancer
-  -- ball a freeze blast; everything else is the plain splash.
-  local trigger = self.stats.on_bounce
-  if trigger == 'burn' then
-    arena:burn_area(x, y, radius, self:current_dmg()*1.5, 3)
-  elseif trigger == 'slow' or self.character == 'cryomancer' then
-    arena:slow_in_area(x, y, radius, 0.5, 3)
-  end
-  explosion1:play{volume = 0.4, pitch = random:float(0.9, 1.05)}
-  spawn_burst(arena.effects, x, y, self.color, 12, 80, 170)
+  -- Element carry-over: a Pyromancer ball makes a burn blast, a Cryomancer ball
+  -- a freeze blast; everything else is the plain splash.
+  local element = self.stats.on_bounce
+  if self.character == 'cryomancer' then element = 'slow' end
+  arena:terror_blast(x, y, radius, dmg, self.color, element)
 
+  self:terror_consume()
+end
+
+
+-- The spent ball is gone for good (no re-form). Mirrors mitosis_die: kill the
+-- body, mark dead, and prune dead heroes out of the arena's live list.
+function BallHero:terror_consume()
+  if self.dead then return end
   if self.body then self.body:setActive(false) end
-  self.t:after(0.5, function()
-    if self.dead then return end
-    local a = main.current
-    if not (a and a.paddle and self.body) then return end
-    self.body:setActive(true)
-    self:launch_from_paddle()
-  end)
+  self.dead = true
+  local arena = main.current
+  if arena and arena.heroes then
+    for i = #arena.heroes, 1, -1 do
+      if arena.heroes[i] and arena.heroes[i].dead then table.remove(arena.heroes, i) end
+    end
+  end
 end
 
 
@@ -4105,11 +4019,13 @@ function BallHero:update_mortar(dt)
 end
 
 
--- The charge is consumed: speed_mult resets and the ball drops back into
--- normal 2D play (falling toward the paddle for the next ramp-up loop).
+-- The hop sequence ends and the ball drops back into normal 2D play (falling
+-- toward the paddle for the next bounce). Charge (speed_mult) is deliberately
+-- NOT reset here: a juggled cannon ball keeps building its hop height + splash
+-- across landings — only dropping it into the pit (start_stuck) wipes the
+-- charge, which is the loadout's downside.
 function BallHero:land_mortar()
   self.mortar     = false
-  self.speed_mult = 1.0
   self.bounces    = 0
   if self.body then
     self.body:setActive(true)

@@ -290,10 +290,123 @@ function Paddle:draw()
     return
   end
 
+  if self.paddle_skin == 'terrorist' then
+    self:draw_terrorist_paddle(s, body_color)
+    return
+  end
+
+  if self.paddle_skin == 'cannon' then
+    self:draw_cannon_paddle(s, body_color)
+    return
+  end
+
   graphics.push(self.x, self.y, 0, s, 1/s)
     graphics.rectangle(self.x, self.y, self.w, self.h, 2, 2, body_color)
     graphics.rectangle(self.x, self.y - self.h/2, self.w, 1, nil, nil, fg[5])
   graphics.pop()
+end
+
+
+-- The Terrorist paddle as a detonator rig: a dark armored slab striped with
+-- yellow/black hazard chevrons, topped by a little red plunger-box detonator
+-- with a blinking arm light. Stays inside the standard hitbox footprint; uses
+-- the hit-flash colour + spring scale like the standard paddle.
+function Paddle:draw_terrorist_paddle(s, color)
+  local w, h = self.w, self.h
+  local x, y = self.x, self.y
+  local t    = love.timer.getTime()
+
+  graphics.push(x, y, 0, s, 1/s)
+    -- Dark armored base slab.
+    graphics.rectangle(x, y, w, h + 2, 2, 2, Color(0.13, 0.11, 0.11, 1))
+    -- Hazard chevrons: alternating amber/red diagonal bars across the slab.
+    local n = math.max(2, math.floor(w/7))
+    for i = 0, n do
+      local sx = x - w/2 + 2 + i*(w/n)
+      if sx > x - w/2 + 1 and sx < x + w/2 - 1 then
+        local col = (i % 2 == 0) and Color(0.95, 0.74, 0.12, 0.95) or Color(0.78, 0.16, 0.11, 0.95)
+        graphics.line(sx - 1.5, y + h/2, sx + 1.5, y - h/2, col, 1.6)
+      end
+    end
+    -- Bright top edge so the bounce surface still reads clearly.
+    graphics.rectangle(x, y - h/2, w, 1, nil, nil, color)
+  graphics.pop()
+
+  -- Plunger-box detonator perched on top-centre.
+  local by = y - h/2 - 3.5
+  graphics.rectangle(x, by, 8, 4, 1, 1, Color(0.62, 0.12, 0.09, 1))
+  graphics.rectangle(x, by, 8, 4, 1, 1, Color(1, 0.5, 0.4, 0.7), 1)
+  graphics.rectangle(x, by - 2.6, 2, 3, nil, nil, Color(0.25, 0.25, 0.25, 1))   -- plunger stem
+  graphics.circle(x, by - 4.2, 1.6, Color(0.85, 0.2, 0.15, 1))                  -- plunger knob
+  -- Blinking "armed" light at the right end of the slab.
+  local lit = math.sin(t*8) > 0
+  graphics.circle(x + w/2 - 3, y - 0.5, 1.5, lit and Color(1, 0.35, 0.2, 1) or Color(0.4, 0.12, 0.1, 1))
+end
+
+
+-- The Cannon paddle as a siege gun-carriage: a dark armored slab on two
+-- spoked wheels, banded with rivets, mounting a squat upward mortar barrel at
+-- the centre with a glowing bore + heat-haze. On a ball hit the spring (s)
+-- pops, kicking the barrel down in recoil and flaring a muzzle flash, so the
+-- paddle "fires" every bounce. Cosmetic only — the hitbox is the flat bar.
+function Paddle:draw_cannon_paddle(s, color)
+  local t      = love.timer.getTime()
+  local x, y   = self.x, self.y
+  local w, h   = self.w, self.h
+  local pulse  = 0.5 + 0.5*math.sin(t*3)
+  local hit    = math.min(1, math.abs(1 - s)*2.2)   -- 0 at rest, ->1 on impact
+
+  -- Breathing orange heat-haze aura.
+  graphics.rectangle(x, y, w + 5 + pulse*2, h + 6, (h + 6)/2, (h + 6)/2,
+                     Color(color.r, color.g*0.45, 0.05, 0.13 + 0.10*pulse))
+
+  -- Two spoked carriage wheels at the ends (drawn under the slab).
+  for _, sx in ipairs({-1, 1}) do
+    local wx, wy = x + sx*(w/2 - 3), y + h/2 + 1.5
+    graphics.circle(wx, wy, 2.6, Color(0.10, 0.09, 0.08, 1))
+    graphics.circle(wx, wy, 2.6, Color(color.r*0.75, color.g*0.4, 0.1, 0.85), 1)
+    graphics.line(wx - 1.8, wy, wx + 1.8, wy, Color(0.4, 0.32, 0.24, 0.9), 1)
+    graphics.line(wx, wy - 1.8, wx, wy + 1.8, Color(0.4, 0.32, 0.24, 0.9), 1)
+    graphics.circle(wx, wy, 0.8, Color(0.55, 0.45, 0.34, 1))
+  end
+
+  graphics.push(x, y, 0, s, 1/s)
+    -- Dark armored gun-carriage slab.
+    graphics.rectangle(x, y, w, h + 2, 2, 2, Color(0.16, 0.13, 0.11, 1))
+    -- Iron reinforcing band + a row of rivets.
+    graphics.rectangle(x, y, w*0.94, h*0.5, 1, 1, Color(0.30, 0.24, 0.20, 1))
+    local n = math.max(3, math.floor(w/8))
+    for i = 0, n do
+      local rx = x - w/2 + 3 + i*((w - 6)/n)
+      graphics.circle(rx, y, 0.7, Color(0.55, 0.45, 0.35, 0.9))
+    end
+    -- Bright bounce edge on top in the loadout colour.
+    graphics.rectangle(x, y - h/2, w*0.96, 1, nil, nil, color)
+  graphics.pop()
+
+  -- Squat mortar barrel rising from the centre, recoiling down on a hit.
+  local by = y - h/2 - 3 + hit*2.5
+  graphics.polygon({
+    x - 2.3, by + 3.5,
+    x + 2.3, by + 3.5,
+    x + 3.1, by - 3.5,
+    x - 3.1, by - 3.5,
+  }, Color(0.20, 0.17, 0.16, 1))
+  graphics.polygon({
+    x - 2.3, by + 3.5,
+    x + 2.3, by + 3.5,
+    x + 3.1, by - 3.5,
+    x - 3.1, by - 3.5,
+  }, Color(color.r*0.8, color.g*0.5, 0.12, 0.9), 1)
+
+  -- Glowing muzzle bore at the mouth, flaring on a fresh hit.
+  local hot = math.min(1, 0.35 + 0.35*pulse + hit*1.2)
+  graphics.circle(x, by - 3.5, 2.0, Color(1, 0.55 + 0.3*pulse, 0.2, hot))
+  graphics.circle(x, by - 3.5, 1.0, Color(1, 0.95, 0.7, hot))
+  if hit > 0.05 then
+    graphics.circle(x, by - 3.5, 2 + hit*5, Color(1, 0.85, 0.4, hit*0.9))
+    graphics.circle(x, by - 4.5, 1 + hit*3, Color(1, 1, 0.85, hit))
+  end
 end
 
 
@@ -566,11 +679,12 @@ function Paddle:on_ball_bounce(ball)
     ball.speed_mult = math.min(ball.speed_mult_max, (ball.speed_mult or 1)*(ball.speed_mult_step or 1.07))
   end
 
-  -- Cannon: a charged-up ball launches into the mortar arc instead of
-  -- reflecting. The ramp above IS the charge — dropping a ball into the pit
-  -- resets speed_mult, which resets the mortar too.
-  if sig == 'cannon' and not ball.mortar and ball.start_mortar
-  and (ball.speed_mult or 1) >= ((mods.sig and mods.sig.launch_at) or 1.5) then
+  -- Cannon: EVERY paddle hit bounces the ball into its z-axis mortar hop — no
+  -- charge threshold anymore. The speed_mult ramp above still feeds the hop
+  -- height + splash size (see start_mortar), and a juggled ball keeps building
+  -- that charge across hops (land_mortar no longer wipes it); dropping a ball
+  -- into the pit (start_stuck) is what resets the charge.
+  if sig == 'cannon' and not ball.mortar and ball.start_mortar then
     local off = math.clamp((ball.x - self.x)/(self.w/2), -1, 1)
     ball:start_mortar(off)
     return

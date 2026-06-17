@@ -746,7 +746,7 @@ function BallPit:reset_run()
     flipper_gap = pdef.sig.gap, flip_window = pdef.sig.flip_window,
     flipper_sig = pdef.sig,
     move_mode = (pdef.signature == 'glacier') and 'ice' or nil,
-    paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang', vampire = 'vampire', hive = 'hive', tesla = 'tesla', glacier = 'glacier'})[pdef.signature],
+    paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang', vampire = 'vampire', hive = 'hive', tesla = 'tesla', glacier = 'glacier', terrorist = 'terrorist', cannon = 'cannon'})[pdef.signature],
   }
 
   -- Pinball Lobber: damp the side/top walls so balls shed energy on a wall hit
@@ -763,6 +763,9 @@ function BallPit:reset_run()
   -- each one inside add_hero). seen_characters feeds the Mitosis regrow.
   self.heroes = {}
   self.seen_characters = {}
+  -- Twin Cast (Binary Fusion): bonded pairs register here as they spawn, so
+  -- this must exist before the starting heroes are added (add_hero fills it).
+  self.twin_pairs = {}
   for _, c in ipairs(pdef.start_balls) do self:add_hero(c) end
 
   -- Run state. The Vampire's hp_mode 'bar' uses a 0-100 float (1 heart = 20
@@ -969,10 +972,13 @@ function BallPit:add_hero(character, opts)
   if self.seen_characters and not opts.clone then
     self.seen_characters[character] = true
   end
-  -- Twin Cast loadout: every drafted hero arrives mirrored as a pair.
+  -- Twin Cast loadout: every drafted hero arrives mirrored as a bonded pair
+  -- (Binary Fusion). The mirror is registered as the hero's twin so the pair
+  -- can orbit + fuse together (see BallPit:twincast_tick).
   if self.run_mods and self.run_mods.signature == 'twincast'
   and not opts.no_mirror and not opts.clone then
-    self:add_hero(character, {no_mirror = true})
+    local partner = self:add_hero(character, {no_mirror = true})
+    self:twincast_register_pair(hero, partner)
   end
   return hero
 end
@@ -1310,6 +1316,11 @@ function BallPit:update(dt)
     self:phantom_blink()
   end
 
+  -- Terrorist loadout: E detonates every ball currently near a block.
+  if self.run_mods and self.run_mods.signature == 'terrorist' and input.blink.pressed then
+    self:terror_manual_detonate()
+  end
+
   -- Aim is adjustable whenever space is held OR a ball is stuck on the paddle.
   -- Holding space is the "auto-fire" mode: the aim line shows, arrow keys
   -- nudge the angle, and any stuck ball fires immediately (returning balls
@@ -1338,8 +1349,9 @@ function BallPit:update(dt)
   self:tick_powerup_pity(dt)
   self:tick_levelup_pity(dt)
   self:tick_combo(dt)
-  self:tesla_tick(dt)   -- Tesla: persistent conduction web pulses (no-op otherwise)
-  self:glacier_tick(dt) -- Glacier: lay slick ice patches on the rink (no-op otherwise)
+  self:tesla_tick(dt)    -- Tesla: persistent conduction web pulses (no-op otherwise)
+  self:glacier_tick(dt)  -- Glacier: lay slick ice patches on the rink (no-op otherwise)
+  self:twincast_tick(dt) -- Twin Cast: orbit/charge/fuse the bonded pairs (no-op otherwise)
 
   -- Wave advance. Three cases:
   --   * Boss wave (10): never advances on time -- only once the boss is dead
@@ -1384,6 +1396,7 @@ function BallPit:draw()
   if self.frozen then self:draw_frost_overlay() end
   if self.fire_active then self:draw_fire_overlay() end
   if self.stuck_count > 0 or input.launch.down then self:draw_aim_line() end
+  if self.run_mods and self.run_mods.signature == 'terrorist' then self:draw_terror_prompt() end
   self.ui:draw()
   self:draw_hud()
   self:draw_buff_strip()
@@ -1396,6 +1409,12 @@ end
 
 
 function BallPit:draw_aim_line()
+  -- Terrorist gets a full bounce-traced trajectory so the player can line a ball
+  -- up to land right next to a block before launching + detonating it.
+  if self.run_mods and self.run_mods.signature == 'terrorist' then
+    self:draw_aim_trajectory()
+    return
+  end
   local px = self.paddle.x
   local py = self.paddle.y - self.paddle.h/2 - 4
   local len = 36
@@ -1403,6 +1422,65 @@ function BallPit:draw_aim_line()
   local ey = py + math.sin(self.aim_angle)*len
   graphics.dashed_line(px, py, ex, ey, 3, 2, fg[0], 1)
   graphics.circle(ex, ey, 2, fg[0])
+end
+
+
+-- Trace the launch ray, reflecting it off the three solid walls (left/right/top
+-- inset by the ball radius), drawing a dashed segment per leg with a dot at each
+-- bounce, until it descends back to the paddle's launch height, runs out of
+-- bounces, or hits a total length budget. The trace stops AT the launch line so
+-- it never draws behind/below the paddle (where the ball would just be caught).
+function BallPit:draw_aim_trajectory()
+  local px = self.paddle.x
+  local py = self.paddle.y - self.paddle.h/2 - 4
+  -- Use a live ball's radius for the wall inset so the preview matches reality.
+  local r = 6
+  for _, h in ipairs(self.heroes) do
+    if h and not h.dead and h.r_size then r = h.r_size; break end
+  end
+  local lx, rx = self.x1 + r, self.x2 - r
+  local ty     = self.y1 + r
+  local by     = py                      -- stop once it returns to the paddle line
+
+  local dx, dy = math.cos(self.aim_angle), math.sin(self.aim_angle)
+  local x, y   = px, py
+  local total, MAX_TOTAL = 0, 1300
+  local MAX_BOUNCES = 5
+
+  for _ = 0, MAX_BOUNCES do
+    -- Nearest positive intersection with each boundary along (dx, dy).
+    local t_best, side = math.huge, nil
+    if dx > 1e-6      then local t = (rx - x)/dx; if t > 1e-4 and t < t_best then t_best, side = t, 'x' end
+    elseif dx < -1e-6 then local t = (lx - x)/dx; if t > 1e-4 and t < t_best then t_best, side = t, 'x' end end
+    if dy < -1e-6     then local t = (ty - y)/dy; if t > 1e-4 and t < t_best then t_best, side = t, 'y' end end
+    if dy > 1e-6      then local t = (by - y)/dy; if t > 1e-4 and t < t_best then t_best, side = t, 'bottom' end end
+    if not side then break end
+
+    local seg, clipped = t_best, false
+    if total + seg > MAX_TOTAL then seg = MAX_TOTAL - total; clipped = true end
+    local nx, ny = x + dx*seg, y + dy*seg
+    graphics.dashed_line(x, y, nx, ny, 3, 3, fg[0], 1)
+    x, y, total = nx, ny, total + seg
+
+    if clipped then break end
+    if side == 'bottom' then graphics.circle(x, y, 2.5, red[0]); break end
+    -- Wall bounce: mark it + reflect the direction.
+    graphics.circle(x, y, 2.5, Color(fg[0].r, fg[0].g, fg[0].b, 0.85))
+    if side == 'x' then dx = -dx else dy = -dy end
+  end
+  graphics.circle(px, py, 2, fg[0])
+end
+
+
+-- Terrorist: a pulsing "[E] DETONATE xN" prompt over the paddle whenever at
+-- least one ball is armed (near a block), so the detonate beat reads clearly.
+function BallPit:draw_terror_prompt()
+  local n = 0
+  for _, h in ipairs(self.heroes) do if h and not h.dead and h.terror_armed then n = n + 1 end end
+  if n == 0 then return end
+  local a = 0.6 + 0.4*math.sin(love.timer.getTime()*8)
+  graphics.print_centered('[E] DETONATE x' .. n, pixul_font,
+                          self.paddle.x, self.paddle.y + 10, 0, 1, 1, 0, 0, Color(1, 0.4, 0.2, a))
 end
 
 
@@ -1832,6 +1910,13 @@ end
 
 
 function BallPit:offer_upgrades()
+  -- Terrorist: no draft screen — the player shouldn't stop to pick a card every
+  -- level when balls are expendable munitions. Auto-arm a random ball instead
+  -- and leave upgrade_pending false so play never freezes.
+  if self.run_mods and self.run_mods.signature == 'terrorist' then
+    self:terror_auto_levelup()
+    return
+  end
   self.upgrade_pending = true
   self.upgrade_selected = 1
   local pool = {}
@@ -1847,6 +1932,37 @@ function BallPit:offer_upgrades()
     if exists and random:bool(35) then action = 'upgrade' end
     table.insert(self.upgrade_choices, {character = c, action = action})
   end
+end
+
+
+-- Terrorist's draftless level-up: every level instantly arms a fresh random
+-- ball (the player wants ammo, not menu time, since detonations spend balls).
+-- Once the field is crowded it levels an existing ball instead so the screen
+-- doesn't drown in orbs. Never opens a picker / sets upgrade_pending.
+function BallPit:terror_auto_levelup()
+  local TERROR_BALL_CAP = 14
+  local live = 0
+  for _, h in ipairs(self.heroes) do if h and not h.dead then live = live + 1 end end
+
+  if live < TERROR_BALL_CAP then
+    local c    = hero_pool[random:int(1, #hero_pool)]
+    local hero = self:add_hero(c)
+    FloatingText{group = self.effects, x = self.paddle.x, y = self.paddle.y - 24,
+                 text = '+' .. c:sub(1, 4):upper(), color = yellow[0]}
+    if hero then self:flash_hero_level_up(hero) end
+  else
+    local pool = {}
+    for _, h in ipairs(self.heroes) do
+      if h and not h.dead and (h.level or 1) < 3 then pool[#pool + 1] = h end
+    end
+    if #pool > 0 then
+      local h = pool[random:int(1, #pool)]
+      h.level = (h.level or 1) + 1
+      h.dmg   = h.dmg * 1.4
+      self:flash_hero_level_up(h)
+    end
+  end
+  confirm1:play{volume = 0.35}
 end
 
 
@@ -1961,7 +2077,6 @@ function BallPit:hero_ability_blurb(c)
 
     -- Knives
     scout        = 'chaining knife',
-    assassin     = 'fast pierce',
 
     -- Special projectiles
     spellblade   = 'random shot',
@@ -2058,6 +2173,51 @@ function BallPit:has_brick_within(x, y, range)
     end
   end
   return false
+end
+
+
+-- Like has_brick_within but counts ANY enemy (block, critter, or boss) — used
+-- by the Terrorist to decide whether a ball is "armed" (close enough to blow).
+function BallPit:terror_has_enemy_within(x, y, range)
+  for _, o in ipairs(self.main.objects) do
+    if not o.dead and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+      if math.distance(x, y, o.x, o.y) <= range then return true end
+    end
+  end
+  return false
+end
+
+
+-- Terrorist: the detonation radius — also the arm range. Grows with the run
+-- level so late-game blasts cover more ground (and balls arm from further out),
+-- capped by blast_radius_max so it never engulfs the whole arena. Shared by the
+-- blast itself (terror_detonate), the per-ball armed check, and the E gate.
+function BallPit:terror_blast_radius()
+  local sig   = (self.run_mods and self.run_mods.sig) or {}
+  local scale = 1 + ((self.level or 1) - 1)*(sig.blast_radius_per_level or 0.05)
+  return math.min((sig.blast_radius or 78)*scale, sig.blast_radius_max or 150)
+end
+
+
+-- Terrorist: E pressed. Detonate every ball that is in play AND near an enemy
+-- (armed); balls that aren't close don't blow, so the player keeps them. Each
+-- detonation consumes its ball (terror_detonate). Iterate a snapshot because
+-- the detonations mutate self.heroes mid-loop.
+function BallPit:terror_manual_detonate()
+  local arm = self:terror_blast_radius()
+  local snapshot = {}
+  for _, h in ipairs(self.heroes) do snapshot[#snapshot + 1] = h end
+  local any = false
+  for _, h in ipairs(snapshot) do
+    if h and not h.dead and not h.stuck and not h.returning and not h.mortar then
+      if self:terror_has_enemy_within(h.x, h.y, arm) then
+        h:terror_detonate()
+        any = true
+      end
+    end
+  end
+  -- Nothing in range: a soft click so the press still registers as "no target".
+  if not any and pop1 then pop1:play{volume = 0.2, pitch = 0.6} end
 end
 
 

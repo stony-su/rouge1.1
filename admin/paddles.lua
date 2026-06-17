@@ -111,9 +111,19 @@ PADDLES.defs = {
     size = 1.0, move = 0.9, ball = 1.0, charge = 1.0, aim = 0.9, dmg = 1.6,
     xp = 0.5, combo = 1.1, hp = 4, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'spellblade', 'swordsman'},
-    signature = 'twincast', sig = {cd_mult = 0.5},
-    blurb = 'Every hero arrives mirrored as a pair, abilities fire 2x as fast.',
-    sig_blurb = 'XP crawls at half speed to pay for it',
+    -- Binary Fusion: each hero is a bonded PAIR that orbits a shared core,
+    -- charging as they swirl; at full charge the twins FUSE into one super-ball
+    -- that detonates a nova supercast, then split and recharge. fuse_time =
+    -- seconds of both-twins-in-play to fill; fuse_window = how long they stay
+    -- fused; split_cd = beat after a split before charge resumes; nova_* = the
+    -- blast (dmg scales with pair level); orbit_pull = how hard the spin tightens
+    -- with charge. cd_mult keeps the between-nova pair snappy (a dialled-back
+    -- echo of the old "double cast" feel).
+    signature = 'twincast',
+    sig = {cd_mult = 0.75, fuse_time = 8, fuse_window = 0.42, split_cd = 0.6,
+           nova_radius = 80, nova_dmg = 26, orbit_pull = 2.4},
+    blurb = 'Bonded twins orbit and FUSE into a nova supercast, then split.',
+    sig_blurb = 'charge the binary; strongest right after a fusion',
   },
   tesla = {
     id = 'tesla', name = 'Tesla', price = 4500, color_key = 'blue',
@@ -128,19 +138,29 @@ PADDLES.defs = {
     id = 'terrorist', name = 'Terrorist', price = 6500, color_key = 'red',
     size = 1.0, move = 1.0, ball = 1.1, charge = 1.0, aim = 1.0, dmg = 1.6,
     xp = 1.0, combo = 1.0, hp = 3, hp_mode = 'hearts', xp_mode = 'flat',
-    start_balls = {'bomber', 'bomber', 'bomber'},
-    signature = 'terrorist', sig = {fuse = 6, blast_radius = 56, blast_mult = 2.2},
-    blurb = 'Balls self-detonate with their own element, then re-form.',
-    sig_blurb = 'every level costs the same flat XP',
+    start_balls = {'bomber', 'bomber', 'bomber', 'bomber'},
+    -- blast_radius: the detonation AoE (also the arm range — a ball blows on E
+    -- when an enemy sits inside its blast reach). blast_mult: the blast's payoff
+    -- (the build's whole damage). Both the radius and the damage SCALE with the
+    -- run level (blast_*_per_level) so the blast keeps pace late-game; radius is
+    -- capped at blast_radius_max. other_dmg_mult: every NON-blast damage source
+    -- is gutted to this.
+    signature = 'terrorist',
+    sig = {blast_radius = 78, blast_radius_per_level = 0.05, blast_radius_max = 150,
+           blast_mult = 5.0, blast_dmg_per_level = 0.18, other_dmg_mult = 0.2},
+    blurb = 'Press E to detonate balls near blocks — the blast is your real damage.',
+    sig_blurb = 'spent balls are gone; level-ups auto-arm a new random ball',
   },
   cannon = {
     id = 'cannon', name = 'Cannon', price = 7500, color_key = 'orange',
     size = 0.9, move = 1.0, ball = 0.6, charge = 1.7, aim = 0.9, dmg = 1.5,
     xp = 1.0, combo = 1.1, hp = 4, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'cannoneer', 'cannoneer'},
+    -- launch_at is vestigial now (every paddle hit mortars — no threshold);
+    -- impacts = z-axis crashes per hop. charge scales hop height + splash size.
     signature = 'cannon', sig = {launch_at = 1.5, impacts = 4},
-    blurb = 'Charged balls mortar out of the screen and crash down in splashes.',
-    sig_blurb = 'dropping a ball into the pit resets its charge',
+    blurb = 'Every paddle hit mortars the ball out of the screen to crash down in splashes.',
+    sig_blurb = 'juggling builds the charge (bigger crashes); a pit drop resets it',
   },
 }
 
@@ -199,6 +219,7 @@ function BallPit:setup_signature()
   self.phantom_anchor   = nil
   self.phantom_cd_ready = true
   self.aegis_wall       = nil
+  self.twin_fx          = nil
 
   if sigid == 'aegis' then
     -- Close the pit. A separate field from floor_wall so the floor powerup's
@@ -227,6 +248,22 @@ function BallPit:setup_signature()
   elseif sigid == 'glacier' then
     -- Ice rink: glacier_tick lays slick patches over the run (see BallPit:update).
     self.slick_t = SLICK_SPAWN_CD
+  elseif sigid == 'twincast' then
+    -- Binary Fusion: one FX entity draws every bonded pair's bond/charge/core
+    -- each frame (it reads arena.twin_pairs, which add_hero filled in before this
+    -- ran). twincast_tick drives the charge -> fuse -> split cycle.
+    self.twin_fx = TwinFusionFX{group = self.effects}
+  elseif sigid == 'terrorist' then
+    -- Munitions never run fully dry: detonations CONSUME balls (they don't
+    -- re-form), so if every ball has been spent, arm a fresh random one after a
+    -- short beat. New balls otherwise come from the auto-drafted level-ups
+    -- (see BallPit:terror_auto_levelup). This only fires at exactly zero balls,
+    -- so it never resurrects a specific spent ball — it just stops a hard-lock.
+    self.t:every(2.5, function()
+      if self.game_over or self.upgrade_pending then return end
+      for _, h in ipairs(self.heroes) do if h and not h.dead then return end end
+      self:add_hero(hero_pool[random:int(1, #hero_pool)])
+    end, nil, nil, 'terror_regrow')
   end
 end
 
@@ -583,6 +620,279 @@ function BallPit:do_splash_falloff(x, y, radius, dmg_max, color)
 end
 
 
+-- Terrorist: the manual detonation blast — the whole offense of the build.
+-- Like the Cannon splash it hits bricks, critters AND the boss with distance
+-- falloff (a near-direct hit lands a bonus), carries the ball's element onto
+-- the bricks, and throws a big TerrorBlast flash. Damage lives here; the
+-- consuming of the spent ball happens in BallHero:terror_detonate.
+function BallPit:terror_blast(x, y, radius, dmg, color, element)
+  for _, o in ipairs(self.main.objects) do
+    if not o.dead and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) and o.take_damage then
+      local d = math.max(0, math.distance(x, y, o.x, o.y) - (o.r_outer or 0))
+      if d <= radius then
+        local k = math.clamp(1 - d/radius, 0.3, 1)
+        if d < 10 then k = k*1.5 end                 -- near-direct hit bonus
+        o:take_damage(dmg*k, color)
+      end
+    end
+  end
+  if     element == 'burn' then self:burn_area(x, y, radius, dmg*0.35, 3)
+  elseif element == 'slow' then self:slow_in_area(x, y, radius, 0.5, 3) end
+  TerrorBlast{group = self.effects, x = x, y = y, radius = radius, color = color}
+  camera:shake(math.clamp(radius/8, 3, 8), 0.25, 110)
+  if explosion1 then explosion1:play{volume = 0.5, pitch = random:float(0.85, 1.0)} end
+end
+
+
+-- ----- Twin Cast (Binary Fusion) signature -----
+--
+-- Each drafted hero arrives as a bonded PAIR (the mirror spawn in add_hero).
+-- The two twins share a fusion bond that charges while both are in play; as it
+-- fills, a gentle orbit pull spirals them together until they FUSE into one
+-- super-ball that detonates a nova supercast, then split apart and recharge.
+-- One TwinFusionFX entity draws every pair's bond/charge/core each frame (it
+-- reads arena.twin_pairs, like the Tesla web reads its conduction path).
+
+-- Link a freshly-spawned twin pair and register it for twincast_tick.
+function BallPit:twincast_register_pair(a, b)
+  if not (a and b) then return end
+  a.twin, b.twin = b, a
+  local pair = {
+    a = a, b = b, charge = 0, state = 'charging', timer = 0, flash = 0,
+    winding = random:bool(50) and 1 or -1,
+    color   = a.color,
+    element = a.stats and a.stats.on_bounce,
+    fx_x = a.x, fx_y = a.y,
+  }
+  a.twin_pair, b.twin_pair = pair, pair
+  self.twin_pairs = self.twin_pairs or {}
+  self.twin_pairs[#self.twin_pairs + 1] = pair
+end
+
+
+-- Steer one twin's velocity toward a tangential orbit around the pair's
+-- barycenter (mx,my), biased inward as charge rises so the pair spirals
+-- together. Magnitude is preserved (normalize_speed keeps the speed), so this
+-- only curves the path — the balls still bounce, attack and ramp normally.
+function BallPit:twincast_orbit(ball, mx, my, charge, winding, pull, dt)
+  if not ball.body then return end
+  local dx, dy = ball.x - mx, ball.y - my
+  local dist = math.sqrt(dx*dx + dy*dy)
+  if dist < 1 then return end
+  local rx, ry = dx/dist, dy/dist
+  local tx, ty = -ry*winding, rx*winding          -- tangential (orbit direction)
+  local inb = 0.12 + 0.7*charge                   -- inward spiral grows with charge
+  local dirx, diry = tx - rx*inb, ty - ry*inb
+  local dl = math.sqrt(dirx*dirx + diry*diry)
+  if dl < 0.0001 then return end
+  dirx, diry = dirx/dl, diry/dl
+  local vx, vy = ball:get_velocity()
+  local sp = math.sqrt(vx*vx + vy*vy)
+  if sp < 1 then sp = (ball.base_speed or 120)*(ball.speed_mult or 1) end
+  local k = math.min(0.9, (0.25 + charge*pull)*dt)
+  local nx, ny = (vx/sp)*(1 - k) + dirx*k, (vy/sp)*(1 - k) + diry*k
+  local nl = math.sqrt(nx*nx + ny*ny)
+  if nl < 0.0001 then return end
+  ball:set_velocity(nx/nl*sp, ny/nl*sp)
+end
+
+
+-- The fusion nova: a heavy AoE supercast at the fuse point. Reuses the Cannon's
+-- falloff splash (hits bricks, critters AND the boss), layers on the twins'
+-- element if they carry one, and throws the TwinNova shockwave + a big boom.
+function BallPit:twincast_fuse_blast(x, y, radius, dmg, color, element)
+  self:do_splash_falloff(x, y, radius, dmg, color)
+  if element then
+    for _, o in ipairs(self.main.objects) do
+      if o:is(Brick) and not o.dead and math.distance(x, y, o.x, o.y) <= radius then
+        if     element == 'burn' and o.apply_burn then o:apply_burn(dmg*0.22, 2.5)
+        elseif element == 'slow' and o.apply_slow then o:apply_slow(0.5, 2.0) end
+      end
+    end
+  end
+  TwinNova{group = self.effects, x = x, y = y, radius = radius, color = color}
+  camera:shake(5, 0.25, 100)
+  if explosion1 then explosion1:play{volume = 0.42, pitch = random:float(0.95, 1.08)} end
+  if force1     then force1:play{volume = 0.30, pitch = 1.25} end
+end
+
+
+-- Per-frame driver (called unconditionally from BallPit:update). Advances every
+-- bonded pair's charge -> fuse -> split cycle. No-op off a Twin Cast run.
+function BallPit:twincast_tick(dt)
+  if not (self.run_mods and self.run_mods.signature == 'twincast') then return end
+  if self.game_over or self.upgrade_pending then return end
+  local sig         = self.run_mods.sig or {}
+  local fuse_time   = sig.fuse_time   or 8
+  local fuse_window = sig.fuse_window or 0.42
+  local split_cd    = sig.split_cd    or 0.6
+  local pull        = sig.orbit_pull  or 2.4
+  for _, pr in ipairs(self.twin_pairs or {}) do
+    local a, b = pr.a, pr.b
+    if a and b and not a.dead and not b.dead and a.body and b.body then
+      if pr.flash > 0 then pr.flash = math.max(0, pr.flash - dt*3) end
+
+      if pr.state == 'charging' then
+        local in_play = not (a.stuck or a.returning or a.serving or a.mortar
+                          or  b.stuck or b.returning or b.serving or b.mortar)
+        if in_play then
+          pr.charge = math.min(1, pr.charge + dt/fuse_time)
+          local mx, my = (a.x + b.x)/2, (a.y + b.y)/2
+          self:twincast_orbit(a, mx, my, pr.charge, pr.winding, pull, dt)
+          self:twincast_orbit(b, mx, my, pr.charge, pr.winding, pull, dt)
+          if pr.charge >= 1 then
+            pr.state, pr.timer = 'fused', fuse_window
+            pr.fuse_window = fuse_window
+            pr.fx_x, pr.fx_y = mx, my
+            a:set_position(mx, my);  b:set_position(mx, my)
+            a:set_velocity(0, 0);    b:set_velocity(0, 0)
+            a.spring:pull(0.6);      b.spring:pull(0.6)
+            local lvl = a.level or 1
+            local dmg = (sig.nova_dmg or 26)*(1 + 0.5*(lvl - 1))*((self.run_mods.dmg) or 1)
+            self:twincast_fuse_blast(mx, my, sig.nova_radius or 80, dmg, pr.color or blue[0], pr.element)
+          end
+        end
+
+      elseif pr.state == 'fused' then
+        pr.timer = pr.timer - dt
+        a:set_position(pr.fx_x, pr.fx_y);  b:set_position(pr.fx_x, pr.fx_y)
+        a:set_velocity(0, 0);              b:set_velocity(0, 0)
+        if pr.timer <= 0 then
+          pr.state, pr.timer = 'split', split_cd
+          pr.charge, pr.flash = 0, 1
+          local ang = random:float(0, 2*math.pi)
+          local sp  = (a.base_speed or 120)*1.25
+          a:set_velocity(math.cos(ang)*sp,  math.sin(ang)*sp)
+          b:set_velocity(-math.cos(ang)*sp, -math.sin(ang)*sp)
+          a.spring:pull(0.5);  b.spring:pull(0.5)
+          spawn_burst(self.effects, pr.fx_x, pr.fx_y, pr.color or blue[0], 14, 90, 190)
+          if pop1 then pop1:play{volume = 0.3, pitch = 1.3} end
+        end
+
+      elseif pr.state == 'split' then
+        pr.timer = pr.timer - dt
+        if pr.timer <= 0 then pr.state, pr.charge = 'charging', 0 end
+      end
+    end
+  end
+end
+
+
+-- A twisting twin-strand bond drawn between the two balls; brightens + fattens
+-- as the pair charges, pinched to a point at each ball.
+local function draw_fusion_bond(ax, ay, bx, by, charge, col, t)
+  local dx, dy = bx - ax, by - ay
+  local len = math.sqrt(dx*dx + dy*dy)
+  if len < 1 then return end
+  local nx, ny = -dy/len, dx/len
+  local amp  = 3 + 6*charge
+  local al   = 0.22 + 0.55*charge
+  local segs = 16
+  for strand = 0, 1 do
+    local px, py
+    for i = 0, segs do
+      local f   = i/segs
+      local env = math.sin(math.pi*f)                       -- pinch at both ends
+      local off = math.sin(f*math.pi*3 + t*6 + strand*math.pi)*amp*env
+      local x, y = ax + dx*f + nx*off, ay + dy*f + ny*off
+      if i > 0 then graphics.line(px, py, x, y, Color(col.r, col.g, col.b, al), 1.4 + charge) end
+      px, py = x, y
+    end
+  end
+end
+
+
+-- One always-on entity drawing every pair's fusion visuals (bond, charge ring,
+-- orbit motes, and the fused core), reading arena.twin_pairs each frame. Lives
+-- in arena.effects so it shakes + layers over the balls.
+TwinFusionFX = Object:extend()
+TwinFusionFX:implement(GameObject)
+
+function TwinFusionFX:init(args) self:init_game_object(args) end
+function TwinFusionFX:update(dt) self:update_game_object(dt) end
+
+function TwinFusionFX:draw()
+  local arena = main.current
+  if not (arena and arena.twin_pairs) then return end
+  local t = love.timer.getTime()
+  for _, pr in ipairs(arena.twin_pairs) do
+    local a, b = pr.a, pr.b
+    if a and b and not a.dead and not b.dead then
+      local col = pr.color or blue[0]
+      if pr.state == 'fused' then
+        local p     = math.clamp((pr.timer or 0)/(pr.fuse_window or 0.42), 0, 1)
+        local pulse = 0.7 + 0.3*math.sin(t*30)
+        local R     = (a.r_size or 6)*(2.1 + 0.9*p)*pulse
+        for i = 0, 5 do
+          local ang = t*8 + i*math.pi/3
+          graphics.line(pr.fx_x, pr.fx_y, pr.fx_x + math.cos(ang)*R*2.1,
+                        pr.fx_y + math.sin(ang)*R*2.1, Color(col.r, col.g, col.b, 0.4), 2)
+        end
+        graphics.circle(pr.fx_x, pr.fx_y, R*1.7,  Color(col.r, col.g, col.b, 0.16))
+        graphics.circle(pr.fx_x, pr.fx_y, R,      Color(col.r, col.g, col.b, 0.85))
+        graphics.circle(pr.fx_x, pr.fx_y, R*0.55, Color(1, 1, 1, 0.92))
+      else
+        local ch = pr.charge or 0
+        draw_fusion_bond(a.x, a.y, b.x, b.y, ch, col, t)
+        local mx, my = (a.x + b.x)/2, (a.y + b.y)/2
+        local cr = 2 + 5*ch
+        graphics.circle(mx, my, cr + 2, Color(col.r, col.g, col.b, 0.25*ch))
+        graphics.circle(mx, my, cr,     Color(1, 1, 1, 0.35 + 0.5*ch))
+        local sa = -math.pi/2
+        graphics.arc('open', mx, my, 9 + 3*ch, sa, sa + ch*2*math.pi,
+                     Color(col.r, col.g, col.b, 0.85), 2)
+        for i = 0, 2 do
+          local ang = t*3 + i*2.094
+          local orb = 7 + 4*ch
+          graphics.circle(mx + math.cos(ang)*orb, my + math.sin(ang)*orb,
+                          1.2 + ch, Color(col.r, col.g, col.b, 0.5*ch))
+        end
+      end
+      if pr.flash and pr.flash > 0 then
+        graphics.circle(pr.fx_x, pr.fx_y, (a.r_size or 6)*2*(2 - pr.flash),
+                        Color(1, 1, 1, 0.45*pr.flash), 2)
+      end
+    end
+  end
+end
+
+
+-- The fusion nova shockwave: an expanding ring + radial spokes in the twins'
+-- colour. Pure juice — the damage is dealt immediately in twincast_fuse_blast.
+TwinNova = Object:extend()
+TwinNova:implement(GameObject)
+
+function TwinNova:init(args)
+  self:init_game_object(args)
+  self.radius = self.radius or 78
+  self.life, self.max = 0.5, 0.5
+  self.spin = random:float(0, 2*math.pi)
+end
+
+function TwinNova:update(dt)
+  self:update_game_object(dt)
+  self.life = self.life - dt
+  self.spin = self.spin + dt*4
+  if self.life <= 0 then self.dead = true end
+end
+
+function TwinNova:draw()
+  local k   = 1 - self.life/self.max
+  local r   = self.radius*(0.25 + 0.95*k)
+  local al  = 1 - k
+  local col = self.color or blue[0]
+  graphics.circle(self.x, self.y, r*0.85, Color(col.r, col.g, col.b, 0.10*al))
+  graphics.circle(self.x, self.y, r,      Color(col.r, col.g, col.b, 0.70*al), 3)
+  graphics.circle(self.x, self.y, r*0.7,  Color(1, 1, 1, 0.45*al), 1.5)
+  for i = 0, 7 do
+    local ang = self.spin + i*math.pi/4
+    graphics.line(self.x + math.cos(ang)*r*0.4,  self.y + math.sin(ang)*r*0.4,
+                  self.x + math.cos(ang)*r*1.05, self.y + math.sin(ang)*r*1.05,
+                  Color(col.r, col.g, col.b, 0.5*al), 2)
+  end
+end
+
+
 -- ----- The post-death paddle shop -----
 --
 -- The existing game_over flag doubles as "shop open": trigger_game_over banks
@@ -744,6 +1054,13 @@ function BallPit:draw_game_over()
           graphics.rectangle(cx + side*9, gy, 13, 4, 1, 1, col)
         graphics.pop()
       end
+    elseif def.signature == 'twincast' then
+      -- Twin Cast preview: two orbiting twins joined by a fusion bond.
+      local sp = 11
+      graphics.line(cx - sp, gy, cx + sp, gy, Color(col.r, col.g, col.b, 0.6), 1)
+      graphics.circle(cx - sp, gy, 3, col)
+      graphics.circle(cx + sp, gy, 3, col)
+      graphics.circle(cx, gy, 2.5, fg[0])
     else
       local gw_card = math.clamp(26*def.size, 14, 38)
       graphics.rectangle(cx, gy, gw_card, 5, 2, 2, col)
