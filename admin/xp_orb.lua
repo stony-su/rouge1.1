@@ -21,6 +21,13 @@ function XpOrb:init(args)
   -- over time (64 -> 88 -> 130) so the paddle vacuums up a whole column of
   -- falling XP without having to pass directly under each orb.
   self.magnet_range = 130
+  -- Terrorist paddle: auto-collect — every orb magnets in from anywhere on the
+  -- field so the player never chases XP (leveling, which auto-arms balls, is the
+  -- whole loop). A field-spanning range means the magnet branch always wins.
+  local arena = main.current
+  if arena and arena.run_mods and arena.run_mods.signature == 'terrorist' then
+    self.magnet_range = 100000
+  end
   -- Short pop-out window so the orb's initial scatter velocity from :init is
   -- visible before gravity / magnet takes over.
   self.magnet_delay = 0.35

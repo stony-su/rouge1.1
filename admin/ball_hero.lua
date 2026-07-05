@@ -1502,17 +1502,6 @@ function BallHero:shoot_mortar(s)
   if self.stuck or self.returning then return end
   local arena  = main.current
   if not arena then return end
-
-  -- Cannon LOADOUT (sig 'cannon'): the ball itself IS the shell — a fired shot
-  -- bounces it into its own z-axis mortar hop (homing onto the swarm via
-  -- update_mortar) instead of lobbing a separate MortarShell. So every charged
-  -- shot "bounces" the ball, matching the paddle's per-hit hop. Other loadouts
-  -- fall through to the Triple-Mortar artillery below.
-  if arena.run_mods and arena.run_mods.signature == 'cannon' and self.start_mortar and not self.mortar then
-    self:start_mortar(0)
-    return
-  end
-
   local target = arena:get_nearest_brick_within(self.x, self.y, s.range or 240)
   if not target then return end
 
@@ -2177,12 +2166,11 @@ function BallHero:update(dt)
     return
   end
 
-  -- Cannon loadout: the ball is out of plane on its mortar arc; physics is
-  -- off and we integrate x/y/z manually until it has spent its impacts.
-  if self.mortar then
-    self:update_mortar(dt)
-    return
-  end
+  -- Cannon loadout: a charged-launched ball ALSO hops on the z-axis. Physics +
+  -- xy stay fully normal here (it bounces off walls / bricks / the paddle like
+  -- any regular ball) — update_hop only bobs the fake height and carves a splash
+  -- on each landing. No early return; the normal-ball update continues below.
+  if self.hopping then self:update_hop(dt) end
 
   -- Glacier "Ice Rink": the longer the puck glides without touching the paddle,
   -- the faster + harder it hits (glide_t heats it up to the caps). normalize_speed
@@ -2400,6 +2388,8 @@ function BallHero:start_return()
   end
   self.returning = true
   self.boomerang_home = nil
+  self.hopping = false   -- a recalled cannon ball stops hopping until relaunched
+  self.z       = 0
   if self.body then self.body:setActive(false) end
 end
 
@@ -2463,6 +2453,8 @@ function BallHero:start_stuck()
   self.charge_dmg_mult  = 1.0   -- previous charge bonus is consumed
   self.bounces          = 0     -- chain starts over from the paddle
   self.glide_t          = 0     -- Glacier ice-rink heat resets when caught
+  self.hopping          = false -- Cannon hop ends when caught; recharge then relaunch
+  self.z                = 0
   if self.body then self.body:setActive(false) end
   local arena = main.current
   arena.stuck_count = (arena.stuck_count or 0) + 1
@@ -2505,6 +2497,8 @@ function BallHero:launch_from_stuck(angle)
   if charge_pct > 0.6 then
     spawn_burst(main.current.effects, self.x, self.y, self.color, 6, 80, 160)
   end
+  -- (Cannon: a launch sends the ball out flat — it starts HOPPING only when the
+  -- paddle next strikes it, see Paddle:on_ball_bounce / start_hop.)
   local arena = main.current
   arena.stuck_count = math.max(0, (arena.stuck_count or 0) - 1)
 end
@@ -2676,17 +2670,13 @@ end
 
 
 function BallHero:draw()
-  -- Cannon mortar: the ball is airborne on its z-axis arc. A ground shadow
-  -- stays at (x, y); the ball itself draws lifted by its z-height and scaled up
-  -- — but using its REAL skin (draw_skin), so it keeps the design it has on the
-  -- ground instead of morphing into a plain circle mid-flight.
-  if self.mortar then
+  -- Cannon loadout hop: the ball arcs on a fake z-axis while still bouncing
+  -- normally in xy. Lift the ball's REAL skin by the height and scale it up so
+  -- it reads as airborne (it keeps its own design — no morph, no shadow).
+  if self.hopping then
     local z  = self.z or 0
-    local sa = math.clamp(0.5 - z/300, 0.12, 0.5)
-    local sr = self.r_size*math.clamp(1 - z/260, 0.45, 1)
-    graphics.circle(self.x, self.y, sr, Color(0, 0, 0, sa))
     self.spring:pull(0)
-    local scale  = 1 + z/140
+    local scale  = 1 + z/180
     local dy     = z*0.9
     local real_y = self.y
     self.y = self.y - dy
@@ -3941,95 +3931,75 @@ function BallHero:terror_consume()
 end
 
 
--- ----- Cannon loadout: the z-axis mortar -----
+-- ----- Cannon loadout: the paddle-strike z-hop -----
+--
+-- Striking a ball with the paddle launches it into a HOP on a fake z-axis.
+-- Physics + xy are untouched (it still bounces off walls, bricks and the paddle
+-- like any regular ball); start_hop only seeds the height bob, update_hop
+-- integrates it + splashes on each landing (and ENDS the hop once a hop carries
+-- the ball to the far wall), and end_hop clears it. `power` (0..1, from how hard
+-- the paddle was charging forward when it connected — see Paddle:on_ball_bounce)
+-- sets EVERYTHING: a hard strike arcs HIGH, so with constant gravity it hangs
+-- LONGER between crashes and carves a WIDER, harder splash; a soft tap does
+-- small, fast, weak hops. Each landing re-bounces to the same apex.
+local HOP_VZ_MIN,     HOP_VZ_MAX     = 120, 300   -- launch z-speed -> apex height + air time
+local HOP_GRAVITY                    = 540        -- constant: a higher apex = more time between hops
+local HOP_RADIUS_MIN, HOP_RADIUS_MAX = 22,  58    -- splash radius per landing
+local HOP_DMG_MIN,    HOP_DMG_MAX    = 1.2, 3.4   -- x current_dmg per landing
 
--- A charged ball (speed_mult past the launch threshold — the existing paddle
--- ramp IS the charge) fires "out of the screen": physics goes inactive (same
--- pattern as the pit-return recall, so z-flight ignores all 2D collisions)
--- and x/y/z are integrated by hand. Higher charge = faster up/down bounces
--- (constant apex: z_vel scales with charge, gravity with charge^2) and a
--- bigger splash per landing, with damage falloff from the impact centre.
-function BallHero:start_mortar(hit_offset)
-  if self.mortar then return end
-  local arena = main.current
-  if not arena then return end
-  self.mortar = true
+function BallHero:start_hop(power)
+  local cp = math.clamp(power or 0, 0, 1)
+  self.hopping    = true
+  self.hop_charge = cp
+  self.hop_vz0    = HOP_VZ_MIN + (HOP_VZ_MAX - HOP_VZ_MIN)*cp
+  self.z          = 0
+  self.z_vel      = self.hop_vz0
   self.boomerang_home = nil
-
-  local cf = math.clamp((self.speed_mult or 1)/2, 0.6, 2.0)
-  self.mortar_cf      = cf
-  self.z              = 0
-  self.z_vel          = 240*cf
-  self.z_g            = 580*cf*cf
-  self.mortar_bounces = 0
-  self.mortar_max     = (arena.run_mods and arena.run_mods.sig and arena.run_mods.sig.impacts) or 4
-  -- Edge hits steer the drop; a gentle climb pushes it up into the swarm.
-  self.mortar_vx      = (hit_offset or 0)*60
-  self.mortar_vy      = -(50 + 30*cf)
-
-  -- Deactivating a body inside a Box2D contact callback is illegal (this is
-  -- called from the paddle bounce), so defer it a frame.
-  self.t:after(0, function()
-    if self.body and self.mortar then self.body:setActive(false) end
-  end)
-  explosion1:play{volume = 0.25, pitch = 1.35}
-  spawn_burst(main.current.effects, self.x, self.y, self.color, 8, 80, 160)
+  if cp > 0.05 then spawn_burst(main.current.effects, self.x, self.y, self.color, 5, 60, 130) end
 end
 
 
-function BallHero:update_mortar(dt)
+function BallHero:update_hop(dt)
   local arena = main.current
-  if not arena then return end
 
-  -- Gentle homing toward the nearest brick so drops land among the swarm.
-  -- Falls back to the boss on wave 10 (it isn't a Brick instance).
-  local target = arena:get_nearest_brick(self.x, self.y)
-  if not target and arena.boss and not arena.boss.dead then target = arena.boss end
-  if target then
-    local dx, dy = target.x - self.x, target.y - self.y
-    local d = math.sqrt(dx*dx + dy*dy)
-    if d > 4 then
-      self.mortar_vx = self.mortar_vx + (dx/d)*40*dt
-      self.mortar_vy = self.mortar_vy + (dy/d)*40*dt
+  -- Stop hopping once a hop carries the ball to the FAR end of the arena: the
+  -- back (top) wall, or the furthest (upper) stretch of a side wall. It drops
+  -- back to flat xy and stays there until the paddle strikes it again.
+  if arena then
+    local r       = self.r_size or 6
+    local far_y   = arena.y1 + (arena.y2 - arena.y1)*0.30
+    local at_top  = self.y <= arena.y1 + r + 2
+    local at_side = self.x <= arena.x1 + r + 2 or self.x >= arena.x2 - r - 2
+    if at_top or (at_side and self.y <= far_y) then
+      self:end_hop()
+      return
     end
   end
-  self.x = math.clamp(self.x + self.mortar_vx*dt, arena.x1 + self.r_size, arena.x2 - self.r_size)
-  self.y = math.clamp(self.y + self.mortar_vy*dt, arena.y1 + self.r_size, arena.y2 - 20)
-  if self.body then self.body:setPosition(self.x, self.y) end
 
-  self.z_vel = self.z_vel - self.z_g*dt
-  self.z     = math.max(0, self.z + self.z_vel*dt)
+  self.z_vel = (self.z_vel or 0) - HOP_GRAVITY*dt
+  self.z     = math.max(0, (self.z or 0) + self.z_vel*dt)
 
+  -- Landing: crater a splash scaled by the launch charge, feed the combo meter,
+  -- then bounce back up to the same apex for the next hop.
   if self.z <= 0 and self.z_vel < 0 then
-    self.mortar_bounces = self.mortar_bounces + 1
-    local mult   = self.speed_mult or 1
-    local radius = 28 + 26*(mult - 1)
-    arena:do_splash_falloff(self.x, self.y, radius, self:current_dmg()*3*mult, self.color)
-    -- Feed the combo meter once per impact so mortar runs don't starve it.
-    local b = arena:get_nearest_brick_within(self.x, self.y, radius)
-    if b and arena.on_brick_bounce then arena:on_brick_bounce(self, b) end
-    explosion1:play{volume = 0.35, pitch = random:float(0.85, 1.0)}
-
-    if self.mortar_bounces >= self.mortar_max then
-      self:land_mortar()
-    else
-      self.z_vel = 240*self.mortar_cf
+    if arena then
+      local cp     = self.hop_charge or 0
+      local radius = HOP_RADIUS_MIN + (HOP_RADIUS_MAX - HOP_RADIUS_MIN)*cp
+      local dmg    = self:current_dmg()*(HOP_DMG_MIN + (HOP_DMG_MAX - HOP_DMG_MIN)*cp)
+      if arena.do_splash_falloff then
+        arena:do_splash_falloff(self.x, self.y, radius, dmg, self.color)
+      end
+      local b = arena.get_nearest_brick_within and arena:get_nearest_brick_within(self.x, self.y, radius)
+      if b and arena.on_brick_bounce then arena:on_brick_bounce(self, b) end
+      spawn_burst(arena.effects, self.x, self.y, self.color, 4 + math.floor(cp*5), 50, 130)
+      explosion1:play{volume = 0.24 + 0.16*cp, pitch = random:float(0.8, 1.0)}
     end
+    self.z_vel = self.hop_vz0 or HOP_VZ_MIN
   end
 end
 
 
--- The hop sequence ends and the ball drops back into normal 2D play (falling
--- toward the paddle for the next bounce). Charge (speed_mult) is deliberately
--- NOT reset here: a juggled cannon ball keeps building its hop height + splash
--- across landings — only dropping it into the pit (start_stuck) wipes the
--- charge, which is the loadout's downside.
-function BallHero:land_mortar()
-  self.mortar     = false
-  self.bounces    = 0
-  if self.body then
-    self.body:setActive(true)
-    self.body:setPosition(self.x, self.y)
-  end
-  self:set_velocity(random:float(-30, 30), self.base_speed)
+function BallHero:end_hop()
+  self.hopping = false
+  self.z       = 0
 end

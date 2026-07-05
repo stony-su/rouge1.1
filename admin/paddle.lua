@@ -242,7 +242,15 @@ function Paddle:update(dt)
     if clamped_y ~= target_y then self.slide_vy = 0 end
   end
 
+  -- Actual per-frame velocity (respects wall clamping + ice coasting). The
+  -- Cannon hop reads this: a paddle charging FORWARD (up) into a ball launches a
+  -- bigger hop than a stationary tap. Captured from the real position delta so a
+  -- paddle pinned against a wall reads as "not moving" there.
+  local px, py = self.x, self.y
   self:set_position(clamped_x, clamped_y)
+  local idt = (dt > 0) and (1/dt) or 0
+  self.hit_vx = (clamped_x - px)*idt
+  self.hit_vy = (clamped_y - py)*idt
 
   self.vx = (self.move_mode == 'ice') and self.slide_vx or dx*self.speed
 end
@@ -679,15 +687,18 @@ function Paddle:on_ball_bounce(ball)
     ball.speed_mult = math.min(ball.speed_mult_max, (ball.speed_mult or 1)*(ball.speed_mult_step or 1.07))
   end
 
-  -- Cannon: EVERY paddle hit bounces the ball into its z-axis mortar hop — no
-  -- charge threshold anymore. The speed_mult ramp above still feeds the hop
-  -- height + splash size (see start_mortar), and a juggled ball keeps building
-  -- that charge across hops (land_mortar no longer wipes it); dropping a ball
-  -- into the pit (start_stuck) is what resets the charge.
-  if sig == 'cannon' and not ball.mortar and ball.start_mortar then
-    local off = math.clamp((ball.x - self.x)/(self.w/2), -1, 1)
-    ball:start_mortar(off)
-    return
+  -- Cannon: striking a ball launches it into a z-axis HOP (on top of the normal
+  -- reflection below). A stationary "tap" gives a weak hop; the faster the
+  -- paddle is charging FORWARD (up, into the ball) when it connects, the higher +
+  -- harder the hop — so pulling the paddle back then driving it up into the ball
+  -- is rewarded. Lateral motion adds a little. The hop ends at the far wall
+  -- (BallHero:update_hop), dropping the ball back to flat xy for the next strike.
+  if sig == 'cannon' and ball.start_hop then
+    local maxspd  = self.speed or 220
+    local up      = math.max(0, -(self.hit_vy or 0))    -- charging forward = moving up
+    local lateral = math.abs(self.hit_vx or 0)
+    local power   = math.clamp(0.12 + (up + lateral*0.4)/maxspd*0.95, 0.12, 1)
+    ball:start_hop(power)
   end
 
   -- Edge-offset reflection: hit with the paddle edge to steer. The loadout's

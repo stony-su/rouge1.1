@@ -156,11 +156,13 @@ PADDLES.defs = {
     size = 0.9, move = 1.0, ball = 0.6, charge = 1.7, aim = 0.9, dmg = 1.5,
     xp = 1.0, combo = 1.1, hp = 4, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'cannoneer', 'cannoneer'},
-    -- launch_at is vestigial now (every paddle hit mortars — no threshold);
-    -- impacts = z-axis crashes per hop. charge scales hop height + splash size.
-    signature = 'cannon', sig = {launch_at = 1.5, impacts = 4},
-    blurb = 'Every paddle hit mortars the ball out of the screen to crash down in splashes.',
-    sig_blurb = 'juggling builds the charge (bigger crashes); a pit drop resets it',
+    -- The hop is driven by PADDLE STRIKES (Paddle:on_ball_bounce -> start_hop):
+    -- height/air-time/splash scale with how hard the paddle was charging forward
+    -- into the ball; the hop ends at the far wall. Tunables live in ball_hero.lua
+    -- (HOP_* constants), so no sig fields are needed here.
+    signature = 'cannon', sig = {},
+    blurb = 'Strike balls with the paddle to launch HOPS that crash down in splashes.',
+    sig_blurb = 'pull back, then charge forward into the ball for bigger hops',
   },
 }
 
