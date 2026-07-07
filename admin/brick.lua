@@ -543,7 +543,7 @@ function Brick:update(dt)
     end
     self.infest_spread_t = (self.infest_spread_t or 0) - dt
     if self.infest_spread_t <= 0 then
-      self.infest_spread_t = INFEST_SPREAD_CD + random:float(-0.15, 0.2)
+      self.infest_spread_t = BAL('dots.infest_spread_cd', INFEST_SPREAD_CD) + random:float(-0.15, 0.2)
       self:infest_spread()
     end
     self:take_damage(self.infest_dps*dt, self.infest_color, true)
@@ -905,7 +905,7 @@ end
 -- the existing callers (fire trail, pyromancer, dot clouds, curses) don't
 -- need to change.
 function Brick:apply_burn(dps, duration)
-  self.burn_dps   = self.max_hp*0.2
+  self.burn_dps   = self.max_hp*BAL('dots.burn_max_hp_frac', 0.2)
   self.burn_timer = math.huge
   self.scorched   = true
 end
@@ -930,11 +930,11 @@ end
 function Brick:apply_infest(potency, color)
   if self.dead then return end
   potency = potency or 1
-  self.infest_dps     = math.max(self.infest_dps or 0, self.max_hp*INFEST_ROT_FRAC*potency)
+  self.infest_dps     = math.max(self.infest_dps or 0, self.max_hp*BAL('dots.infest_rot_frac', INFEST_ROT_FRAC)*potency)
   self.infest_potency = math.max(self.infest_potency or 0, potency)
   self.infest_timer   = math.huge
   self.infest_color   = color or self.infest_color or Color(0.4, 0.6, 0.12, 1)
-  if (self.infest_spread_t or 0) <= 0 then self.infest_spread_t = INFEST_SPREAD_CD end
+  if (self.infest_spread_t or 0) <= 0 then self.infest_spread_t = BAL('dots.infest_spread_cd', INFEST_SPREAD_CD) end
   self.infested       = true
 end
 
@@ -942,11 +942,11 @@ end
 -- Creep the infestation to the nearest un-infested brick in reach -- but only
 -- while the rot is still potent, so weak (far-out) infestations fizzle.
 function Brick:infest_spread()
-  if self.dead or (self.infest_potency or 0) < INFEST_MIN_SPREAD then return end
+  if self.dead or (self.infest_potency or 0) < BAL('dots.infest_min_spread', INFEST_MIN_SPREAD) then return end
   local arena = main.current
   if not (arena and arena.get_bricks_within) then return end
   local best
-  for _, b in ipairs(arena:get_bricks_within(self.x, self.y, INFEST_SPREAD_RADIUS)) do
+  for _, b in ipairs(arena:get_bricks_within(self.x, self.y, BAL('dots.infest_spread_radius', INFEST_SPREAD_RADIUS))) do
     if b ~= self and not b.dead and not b.infested and b.apply_infest then
       if not best or math.distance(self.x, self.y, b.x, b.y) < math.distance(self.x, self.y, best.x, best.y) then
         best = b
@@ -954,7 +954,7 @@ function Brick:infest_spread()
     end
   end
   if best then
-    best:apply_infest((self.infest_potency or 1)*INFEST_SPREAD_DECAY, self.infest_color)
+    best:apply_infest((self.infest_potency or 1)*BAL('dots.infest_spread_decay', INFEST_SPREAD_DECAY), self.infest_color)
     if arena_zap_line then arena_zap_line(arena, self.x, self.y, best.x, best.y, self.infest_color or Color(0.4, 0.6, 0.12, 1)) end
     spawn_burst(arena.effects, best.x, best.y, Color(0.26, 0.36, 0.07, 0.9), 3, 30, 70)
   end
@@ -1009,14 +1009,15 @@ function Brick:die()
   -- of chaining forever (see INFEST_SPREAD_DECAY / INFEST_MIN_SPREAD).
   if self.infested then
     local ix, iy = self.x, self.y
-    local pot    = (self.infest_potency or 1)*INFEST_SPREAD_DECAY
+    local pot    = (self.infest_potency or 1)*BAL('dots.infest_spread_decay', INFEST_SPREAD_DECAY)
     local icolor = self.infest_color or Color(0.4, 0.6, 0.12, 1)
     spawn_burst(arena.effects, ix, iy, Color(0.22, 0.30, 0.06, 0.95), 8, 30, 80)
-    if pot >= INFEST_MIN_SPREAD then
+    if pot >= BAL('dots.infest_min_spread', INFEST_MIN_SPREAD) then
+      local spread_r = BAL('dots.infest_spread_radius', INFEST_SPREAD_RADIUS)
       arena.t:after(0, function()
         if not (arena.main and arena.main.world) then return end
-        TelegraphRing{group = arena.effects, x = ix, y = iy, radius = INFEST_SPREAD_RADIUS, color = icolor, duration = 0.3}
-        for _, b in ipairs(arena:get_bricks_within(ix, iy, INFEST_SPREAD_RADIUS)) do
+        TelegraphRing{group = arena.effects, x = ix, y = iy, radius = spread_r, color = icolor, duration = 0.3}
+        for _, b in ipairs(arena:get_bricks_within(ix, iy, spread_r)) do
           if b and not b.dead and not b.infested and b.apply_infest then
             b:apply_infest(pot, icolor)
             if arena_zap_line then arena_zap_line(arena, ix, iy, b.x, b.y, icolor) end
@@ -1047,14 +1048,16 @@ end
 
 -- Chain-explode neighbours within ~28px.
 function Brick:cast_explode_on_death()
-  local arena = main.current
-  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 28, color = blue[0], duration = 0.25}
+  local arena  = main.current
+  local radius = BAL('enemies.volatile_death_radius', 28)
+  local frac   = BAL('enemies.volatile_death_frac', 0.4)
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = radius, color = blue[0], duration = 0.25}
   explosion1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
   camera:shake(2, 0.15, 90)
   for _, o in ipairs(arena.main.objects) do
     if o:is(Brick) and not o.dead and o.id ~= self.id then
-      if math.distance(self.x, self.y, o.x, o.y) <= 28 then
-        o:take_damage(self.max_hp*0.4, blue[0])
+      if math.distance(self.x, self.y, o.x, o.y) <= radius then
+        o:take_damage(self.max_hp*frac, blue[0])
       end
     end
   end

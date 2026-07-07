@@ -1,5 +1,6 @@
 require 'engine'
 require 'shared'
+require 'balance'   -- damage master files (balance/<paddle>.lua); defines BAL()
 require 'ballpit'
 require 'paddle'
 require 'ball_hero'

@@ -295,8 +295,8 @@ function Projectile:on_hit_brick(brick)
     end
     if #candidates > 0 then
       local target = candidates[random:int(1, #candidates)]
-      self.speed = self.speed*1.25
-      if self.chain_dmg_ramp then self.dmg = self.dmg*1.25 end
+      self.speed = self.speed*BAL('globals.chain_hop_speed_mult', 1.25)
+      if self.chain_dmg_ramp then self.dmg = self.dmg*BAL('globals.chain_hop_dmg_mult', 1.25) end
       local ang = math.atan2(target.y - self.y, target.x - self.x)
       self:set_velocity(math.cos(ang)*self.speed, math.sin(ang)*self.speed)
     end
@@ -353,7 +353,8 @@ function Projectile:cannon_explode()
       arena.t:after(i*0.18, function()
         local a = main.current
         if not (a and a.world) then return end
-        a:do_splash(bx, by, radius*0.7, dmg*0.5, col)
+        a:do_splash(bx, by, radius*BAL('effects.mortar_cluster_radius_mult', 0.7),
+                    dmg*BAL('effects.mortar_cluster_dmg_mult', 0.5), col)
         explosion1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
       end)
     end

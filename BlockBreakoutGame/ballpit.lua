@@ -157,6 +157,16 @@ local COMBO_IDLE_DECAY       = 20    -- points/sec subtracted after grace expire
 local COMBO_BOUNCE_DMG_STEP  = 0.08  -- +8% damage per bounce on the same ball
 local COMBO_BOUNCE_CAP       = 15    -- max bounces counted for damage scaling
 
+-- Effective rank values: the equipped paddle's damage master file
+-- (balance/<paddle>.lua, `combo.ranks`) can override every rank's threshold
+-- and multiplier; the table above is the fallback and keeps labels/colors.
+local function combo_rank_threshold(i)
+  return BAL('combo.ranks.' .. i .. '.threshold', COMBO_RANKS[i].threshold)
+end
+local function combo_rank_mult(i)
+  return BAL('combo.ranks.' .. i .. '.mult', COMBO_RANKS[i].mult)
+end
+
 
 function BallPit:init(name)
   self:init_state(name)
@@ -730,6 +740,11 @@ function BallPit:reset_run()
   -- heroes spawn so both read them at init time.
   PADDLES.ensure_state()
   local pdef = PADDLES.get(state.selected_paddle)
+  -- Load this paddle's damage master file (balance/<id>.lua) fresh from disk
+  -- and overlay its loadout/signature numbers onto a COPY of the def, so
+  -- every damage number below comes from the master file.
+  Balance.set_paddle(pdef.id)
+  pdef = Balance.effective_def(pdef)
   self.paddle_def = pdef
   self.run_mods = {
     ball = pdef.ball, charge = pdef.charge, aim = pdef.aim, dmg = pdef.dmg,
@@ -1392,6 +1407,7 @@ end
 function BallPit:draw()
   self.floor:draw()
   self.main:draw()
+  self:draw_hop_layer()
   self.effects:draw()
   if self.frozen then self:draw_frost_overlay() end
   if self.fire_active then self:draw_fire_overlay() end
@@ -1405,6 +1421,19 @@ function BallPit:draw()
   if self.game_over then self:draw_game_over() end
   if self.settings_open and not self.tutorial_open then self:draw_settings() end
   if self.tutorial_open then self:draw_tutorial() end
+end
+
+
+-- Cannon loadout: hopping balls are AIRBORNE — draw them (plus their ground
+-- shadow) in a pass AFTER the whole main group, so they layer OVER the bricks
+-- they fly across instead of being covered by swarm cells drawn later in
+-- group insertion order. BallHero:draw skips its normal body draw while
+-- hopping; BallHero:draw_hop is the deferred draw.
+function BallPit:draw_hop_layer()
+  if not self.heroes then return end
+  for _, h in ipairs(self.heroes) do
+    if h and not h.dead and h.hopping and h.draw_hop then h:draw_hop() end
+  end
 end
 
 
@@ -1688,7 +1717,7 @@ end
 function BallPit:combo_rank_index()
   local idx = 1
   for i = #COMBO_RANKS, 1, -1 do
-    if self.combo.points >= COMBO_RANKS[i].threshold then
+    if self.combo.points >= combo_rank_threshold(i) then
       idx = i
       break
     end
@@ -1698,7 +1727,7 @@ end
 
 
 function BallPit:combo_mult()
-  return COMBO_RANKS[self:combo_rank_index()].mult
+  return combo_rank_mult(self:combo_rank_index())
 end
 
 
@@ -1706,8 +1735,8 @@ end
 -- can't trivialise a wave on its own. Combines multiplicatively with the
 -- combo multiplier in Brick:on_ball_contact.
 function BallPit:bounce_dmg_mult(bounces)
-  local n = math.min(bounces or 0, COMBO_BOUNCE_CAP)
-  return 1 + n*COMBO_BOUNCE_DMG_STEP
+  local n = math.min(bounces or 0, BAL('combo.bounce_cap', COMBO_BOUNCE_CAP))
+  return 1 + n*BAL('combo.bounce_dmg_step', COMBO_BOUNCE_DMG_STEP)
 end
 
 
@@ -1722,17 +1751,17 @@ function BallPit:on_brick_bounce(ball, brick)
   local prev_idx = self:combo_rank_index()
 
   c.streak = (c.streak or 0) + 1
-  local streak_bonus  = math.min(c.streak, COMBO_STREAK_BONUS_CAP)
+  local streak_bonus  = math.min(c.streak, BAL('combo.streak_bonus_cap', COMBO_STREAK_BONUS_CAP))
   local variety_bonus = 0
   if brick.variant_name and c.last_variant and brick.variant_name ~= c.last_variant then
-    variety_bonus = COMBO_VARIETY_BONUS
+    variety_bonus = BAL('combo.variety_bonus', COMBO_VARIETY_BONUS)
   end
   c.last_variant  = brick.variant_name or c.last_variant
   c.bounces_total = c.bounces_total + 1
   -- The loadout's Combo stat scales gain AND bleed (see on_ball_missed /
   -- tick_combo) — high-combo paddles run a hotter, riskier meter.
   local cm = (self.run_mods and self.run_mods.combo) or 1
-  local gained = (COMBO_BASE_POINTS + streak_bonus + variety_bonus)*cm
+  local gained = (BAL('combo.base_points', COMBO_BASE_POINTS) + streak_bonus + variety_bonus)*cm
   c.points = c.points + gained
 
   local new_idx = self:combo_rank_index()
@@ -1761,7 +1790,7 @@ function BallPit:on_ball_missed(ball)
   if not c or c.points <= 0 then return end
   local prev_idx = self:combo_rank_index()
   local cm = (self.run_mods and self.run_mods.combo) or 1
-  c.points       = math.max(0, c.points - COMBO_PENALTY_MISS*cm)
+  c.points       = math.max(0, c.points - BAL('combo.miss_penalty', COMBO_PENALTY_MISS)*cm)
   c.streak       = 0
   c.last_variant = nil
 
@@ -1775,9 +1804,9 @@ function BallPit:tick_combo(dt)
   local c = self.combo
   if not c then return end
   c.idle_t = c.idle_t + dt
-  if c.idle_t > COMBO_IDLE_GRACE and c.points > 0 then
+  if c.idle_t > BAL('combo.idle_grace', COMBO_IDLE_GRACE) and c.points > 0 then
     local cm = (self.run_mods and self.run_mods.combo) or 1
-    c.points = math.max(0, c.points - COMBO_IDLE_DECAY*cm*dt)
+    c.points = math.max(0, c.points - BAL('combo.idle_decay', COMBO_IDLE_DECAY)*cm*dt)
     if c.points <= 0 then
       c.streak       = 0
       c.last_variant = nil
@@ -1806,7 +1835,7 @@ function BallPit:draw_combo_meter()
   graphics.print_centered(rank.label, fat_font, cx, cy, 0, scale, scale, 0, 0, col)
 
   -- Multiplier label sits to the right of the rank letter.
-  graphics.print_centered(string.format('x%.1f', rank.mult), pixul_font,
+  graphics.print_centered(string.format('x%.1f', combo_rank_mult(idx)), pixul_font,
                           cx + 22, cy, 0, 1, 1, 0, 0, col)
 
   -- Progress bar to the next rank (full at ULTRAKILL).
@@ -1817,8 +1846,8 @@ function BallPit:draw_combo_meter()
   if idx == #COMBO_RANKS then
     pct = 1
   else
-    local next_t = COMBO_RANKS[idx + 1].threshold
-    local prev_t = rank.threshold
+    local next_t = combo_rank_threshold(idx + 1)
+    local prev_t = combo_rank_threshold(idx)
     pct = math.clamp((c.points - prev_t) / (next_t - prev_t), 0, 1)
   end
   if pct > 0 then
@@ -1958,7 +1987,7 @@ function BallPit:terror_auto_levelup()
     if #pool > 0 then
       local h = pool[random:int(1, #pool)]
       h.level = (h.level or 1) + 1
-      h.dmg   = h.dmg * 1.4
+      h.dmg   = h.dmg * (1 + BAL('globals.level_dmg_growth', 0.4))
       self:flash_hero_level_up(h)
     end
   end
@@ -2021,7 +2050,7 @@ function BallPit:confirm_upgrade()
     for _, h in ipairs(self.heroes) do
       if h.character == choice.character and h.level < 3 then
         h.level = h.level + 1
-        h.dmg = h.dmg * 1.4
+        h.dmg = h.dmg * (1 + BAL('globals.level_dmg_growth', 0.4))
         to_level = to_level - 1
         if to_level <= 0 then break end
       end
@@ -3028,7 +3057,7 @@ function BallPit:apply_level_random(amount)
     pool[i], pool[j] = pool[j], pool[i]
     local h = pool[i]
     h.level = (h.level or 1) + 1
-    h.dmg   = h.dmg * 1.4
+    h.dmg   = h.dmg * (1 + BAL('globals.level_dmg_growth', 0.4))
     self:flash_hero_level_up(h)
   end
   level_up1:play{volume = 0.4}

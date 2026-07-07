@@ -235,7 +235,10 @@ function BallHero:init(args)
   -- tunables), passed explicitly by BallPit:add_hero so they're valid during
   -- reset_run ordering and for clones. See paddles.lua.
   local mods        = self.run_mods or {}
-  local s           = BallHero.stats_for(self.character)
+  -- Stats resolve through the equipped paddle's damage master file
+  -- (balance/<paddle>.lua `heroes.<character>`): any numeric field there
+  -- overrides HERO_STATS. Always a fresh copy, so the mutations below are safe.
+  local s           = Balance.merge_hero_stats(self.character, BallHero.stats_for(self.character))
   -- Twin Cast halves ability cooldowns. Work on a shallow copy so the shared
   -- HERO_STATS table is never mutated across runs.
   if mods.sig and mods.sig.cd_mult then
@@ -251,7 +254,7 @@ function BallHero:init(args)
   if RANGED_BEHAVIORS[s.behavior] and s.cd then
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
-    copy.cd = copy.cd*RANGED_CD_MULT
+    copy.cd = copy.cd*BAL('globals.ranged_cd_mult', RANGED_CD_MULT)
     s = copy
   end
   self.stats        = s
@@ -262,7 +265,7 @@ function BallHero:init(args)
   -- slightly lighter or darker tint and stays distinguishable.
   local base_color  = character_colors[self.character] or fg[0]
   self.color        = BallHero.shaded(base_color, self.shade_offset or 0)
-  self.dmg          = s.dmg * (1 + 0.4*(self.level-1)) * (mods.dmg or 1)
+  self.dmg          = s.dmg * (1 + BAL('globals.level_dmg_growth', 0.4)*(self.level-1)) * (mods.dmg or 1)
   -- Kept separately for damage paths that bypass self.dmg (pet/turret drops).
   self.run_dmg_mult = mods.dmg or 1
   -- Scale base ball speed by the live arena height (relative to the original
@@ -322,7 +325,7 @@ function BallHero:init(args)
         self.cres_trail = {}
         return
       end
-      table.insert(self.cres_trail, 1, {x = self.x, y = self.y, a = self.face_a})
+      table.insert(self.cres_trail, 1, {x = self.x, y = self:fx_y(), a = self.face_a})
       if #self.cres_trail > 2 then table.remove(self.cres_trail) end
     end)
   end
@@ -339,7 +342,7 @@ function BallHero:init(args)
         self.shuriken_trail = {}
         return
       end
-      table.insert(self.shuriken_trail, 1, {x = self.x, y = self.y, a = self.spin_a})
+      table.insert(self.shuriken_trail, 1, {x = self.x, y = self:fx_y(), a = self.spin_a})
       if #self.shuriken_trail > 4 then table.remove(self.shuriken_trail) end
     end)
   end
@@ -359,7 +362,7 @@ function BallHero:init(args)
         self.bow_trail = {}
         return
       end
-      table.insert(self.bow_trail, 1, {x = self.x, y = self.y, a = self.aim_a})
+      table.insert(self.bow_trail, 1, {x = self.x, y = self:fx_y(), a = self.aim_a})
       if #self.bow_trail > 3 then table.remove(self.bow_trail) end
     end)
     -- Retarget on a timer, not every frame, to keep the nearest-brick scan
@@ -386,7 +389,7 @@ function BallHero:init(args)
         self.rune_trail = {}
         return
       end
-      table.insert(self.rune_trail, 1, {x = self.x, y = self.y, a = self.ring_a})
+      table.insert(self.rune_trail, 1, {x = self.x, y = self:fx_y(), a = self.ring_a})
       if #self.rune_trail > 4 then table.remove(self.rune_trail) end
     end)
   end
@@ -403,7 +406,7 @@ function BallHero:init(args)
       if self.stuck or self.returning or self.mortar then return end
       ArcaneSpark{
         group = main.current.effects,
-        x = self.x + random:float(-1, 1), y = self.y + random:float(-1, 1),
+        x = self.x + random:float(-1, 1), y = self:fx_y() + random:float(-1, 1),
         color = self.color, rs = random:float(2, 3.5),
         alpha = 0.7, spin = random:float(-9, 9),
         duration = random:float(0.3, 0.5),
@@ -433,7 +436,7 @@ function BallHero:init(args)
         local sp  = random:float(10, 42)
         SporeMote{
           group = main.current.effects,
-          x = self.x + random:float(-2, 2), y = self.y + random:float(-2, 2),
+          x = self.x + random:float(-2, 2), y = self:fx_y() + random:float(-2, 2),
           color = self.color, vx = math.cos(ang)*sp, vy = math.sin(ang)*sp,
           rs = random:float(0.8, 1.7), alpha = random:float(0.45, 0.8),
           duration = random:float(0.4, 0.8),
@@ -467,10 +470,10 @@ function BallHero:init(args)
         self.jester_trail = {}
         return
       end
-      table.insert(self.jester_trail, 1, {x = self.x, y = self.y})
+      table.insert(self.jester_trail, 1, {x = self.x, y = self:fx_y()})
       if #self.jester_trail > 5 then table.remove(self.jester_trail) end
       if random:bool(45) then
-        JesterMote{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y,
+        JesterMote{group = main.current.effects, x = self.x + random:float(-2, 2), y = self:fx_y(),
                    color = self.color, vx = random:float(-20, 20), vy = random:float(-30, -6),
                    rs = random:float(1.0, 2.0), alpha = random:float(0.4, 0.7)}
       end
@@ -497,13 +500,13 @@ function BallHero:init(args)
     self.t:every(0.06, function()
       if self.stuck or self.returning or self.mortar then return end
       -- Heat-haze venting off the core.
-      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y - self.r_size*0.4,
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self:fx_y() - self.r_size*0.4,
                 color = Color(self.color.r, self.color.g*0.7, self.color.b*0.4, 1), rs = random:float(1.2, 2.2),
                 alpha = random:float(0.16, 0.30), vx = random:float(-10, 10), vy = random:float(-22, -10),
                 duration = random:float(0.35, 0.6)}
       -- ...and the occasional brighter plasma spark.
       if random:bool(30) then
-        SmokePuff{group = main.current.effects, x = self.x + random:float(-1, 1), y = self.y,
+        SmokePuff{group = main.current.effects, x = self.x + random:float(-1, 1), y = self:fx_y(),
                   color = Color(yellow[0].r, yellow[0].g, yellow[0].b, 1), rs = random:float(0.7, 1.3),
                   alpha = random:float(0.5, 0.8), vx = random:float(-14, 14), vy = random:float(-24, -12),
                   duration = random:float(0.2, 0.4)}
@@ -529,7 +532,7 @@ function BallHero:init(args)
       if self.stuck or self.returning or self.mortar then return end
       -- Grinding/welding sparks that shower off and fall.
       if random:bool(55) then
-        SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(-1, 2),
+        SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self:fx_y() + random:float(-1, 2),
                   color = Color(yellow[0].r, yellow[0].g, yellow[0].b, 1), rs = random:float(0.6, 1.2),
                   alpha = random:float(0.5, 0.85), vx = random:float(-22, 22), vy = random:float(6, 28),
                   duration = random:float(0.22, 0.45)}
@@ -551,7 +554,7 @@ function BallHero:init(args)
     self.t:every(0.07, function()
       if self.stuck or self.returning or self.mortar then return end
       -- Drifting snow / frost motes.
-      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(-2, 2),
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self:fx_y() + random:float(-2, 2),
                 color = Color(0.75, 0.88, 1, 1), rs = random:float(0.7, 1.5), alpha = random:float(0.3, 0.6),
                 vx = random:float(-8, 8), vy = random:float(-6, 14), duration = random:float(0.4, 0.8)}
     end)
@@ -581,12 +584,12 @@ function BallHero:init(args)
         if vx and (vx*vx + vy*vy) > 100 then ta = math.atan2(-vy, -vx) end
       end
       local es = random:float(18, 40)
-      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(-2, 2),
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self:fx_y() + random:float(-2, 2),
                 color = Color(1, 0.6, 0.15, 1), rs = random:float(0.7, 1.6), alpha = random:float(0.5, 0.85),
                 vx = math.cos(ta)*es + random:float(-8, 8), vy = math.sin(ta)*es + random:float(-8, 8),
                 duration = random:float(0.3, 0.6)}
       if random:bool(30) then
-        SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y,
+        SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self:fx_y(),
                   color = Color(0.22, 0.20, 0.20, 1), rs = random:float(2, 3.5), alpha = random:float(0.2, 0.35),
                   vx = math.cos(ta)*es*0.6 + random:float(-6, 6), vy = math.sin(ta)*es*0.6 + random:float(-6, 6),
                   duration = random:float(0.5, 0.9)}
@@ -609,7 +612,7 @@ function BallHero:init(args)
     self.t:every(0.06, function()
       if self.stuck or self.returning or self.mortar then return end
       -- Dripping void essence.
-      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(0, 3),
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self:fx_y() + random:float(0, 3),
                 color = Color(self.color.r*0.85, self.color.g*0.5, self.color.b*0.95, 1), rs = random:float(0.8, 1.6),
                 alpha = random:float(0.3, 0.6), vx = random:float(-6, 6), vy = random:float(4, 18), duration = random:float(0.4, 0.8)}
     end)
@@ -631,7 +634,7 @@ function BallHero:init(args)
       if self.stuck or self.returning or self.mortar then return end
       -- Faint psychic ripple motes drifting outward.
       local a = random:float(0, 2*math.pi)
-      SmokePuff{group = main.current.effects, x = self.x + math.cos(a)*self.r_size, y = self.y + math.sin(a)*self.r_size,
+      SmokePuff{group = main.current.effects, x = self.x + math.cos(a)*self.r_size, y = self:fx_y() + math.sin(a)*self.r_size,
                 color = Color(self.color.r, self.color.g, self.color.b, 1), rs = random:float(0.7, 1.3),
                 alpha = random:float(0.25, 0.5), vx = math.cos(a)*random:float(6, 16), vy = math.sin(a)*random:float(6, 16),
                 duration = random:float(0.4, 0.7)}
@@ -660,7 +663,7 @@ function BallHero:init(args)
       if self.stuck or self.returning or self.mortar then return end
       -- Coin-glint sparkles.
       if random:bool(50) then
-        SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self.y + random:float(-2, 2),
+        SmokePuff{group = main.current.effects, x = self.x + random:float(-2, 2), y = self:fx_y() + random:float(-2, 2),
                   color = Color(1, 0.9, 0.45, 1), rs = random:float(0.7, 1.4), alpha = random:float(0.5, 0.85),
                   vx = random:float(-14, 14), vy = random:float(-16, 8), duration = random:float(0.25, 0.5)}
       end
@@ -692,7 +695,7 @@ function BallHero:init(args)
       if self.stuck or self.returning or self.mortar then return end
       -- Trail/emission: a crackling spark sloughs off the body while it travels.
       local a = random:float(0, 2*math.pi)
-      StormSpark{group = main.current.effects, x = self.x + random:float(-1, 1), y = self.y + random:float(-1, 1),
+      StormSpark{group = main.current.effects, x = self.x + random:float(-1, 1), y = self:fx_y() + random:float(-1, 1),
                  color = self.color, vx = math.cos(a)*random:float(8, 26), vy = math.sin(a)*random:float(8, 26),
                  alpha = random:float(0.4, 0.7)}
     end)
@@ -718,7 +721,7 @@ function BallHero:init(args)
     -- Idle gunsmoke drizzle off the barrels.
     self.t:every(0.07, function()
       if self.stuck or self.returning or self.mortar then return end
-      SmokePuff{group = main.current.effects, x = self.x + random:float(-3, 3), y = self.y - self.r_size*0.4,
+      SmokePuff{group = main.current.effects, x = self.x + random:float(-3, 3), y = self:fx_y() - self.r_size*0.4,
                 color = Color(0.30, 0.28, 0.26, 1), rs = random:float(1.0, 2.0), alpha = random:float(0.1, 0.2),
                 vx = random:float(-6, 6), vy = random:float(-16, -6), duration = random:float(0.4, 0.7)}
     end)
@@ -747,7 +750,7 @@ function BallHero:init(args)
     -- Trail: a smear of stray locusts peels off and scatters behind.
     self.t:every(0.05, function()
       if self.stuck or self.returning or self.mortar then return end
-      SporeMote{group = main.current.effects, x = self.x + random:float(-4, 4), y = self.y + random:float(-4, 4),
+      SporeMote{group = main.current.effects, x = self.x + random:float(-4, 4), y = self:fx_y() + random:float(-4, 4),
                 color = Color(0.16, 0.20, 0.08, 1), vx = random:float(-22, 22), vy = random:float(-22, 22),
                 rs = random:float(0.8, 1.5), alpha = random:float(0.3, 0.55), duration = random:float(0.3, 0.6)}
     end)
@@ -807,6 +810,14 @@ function BallHero:init(args)
     self.terror_fuse_t     = random:float(0, 2*math.pi)
   end
 
+  -- Cannon loadout: the hop-landing splash IS the damage plan. Everything else
+  -- the balls do (abilities, projectiles, pets) is damped to other_dmg_mult in
+  -- current_dmg; BOUNCE damage keeps full strength — brick contact reads
+  -- ball.dmg directly, and the splash reads blast_dmg, so both skip the nerf.
+  if mods.signature == 'cannon' then
+    self.cannon_other_mult = (mods.sig and mods.sig.other_dmg_mult) or 0.35
+  end
+
   -- Drop afterimage trail particles while the ball is moving above the
   -- speed-streak threshold. Empty/no-op otherwise.
   self.t:every(0.035, function() self:maybe_spawn_trail() end)
@@ -840,12 +851,36 @@ function BallHero:set_piercing(on)
 end
 
 
+-- Where the ball APPEARS on screen vertically. While a cannon-paddle hop has
+-- it airborne, trails/motes/afterimages must anchor to the lifted position —
+-- computed from the physics-integrated hop height (the same y - z*0.9 mapping
+-- draw_hop uses) — or they'd crawl along the ground under the flying ball.
+-- Equals plain self.y whenever the ball isn't hopping.
+function BallHero:fx_y()
+  if self.hopping then return self.y - (self.z or 0)*0.9 end
+  return self.y
+end
+
+
+-- The apparent scale that pairs with fx_y (an airborne ball draws bigger the
+-- higher it flies) so aftershadow ghosts match the drawn body size.
+function BallHero:fx_scale()
+  if self.hopping then return 1 + (self.z or 0)/180 end
+  return 1
+end
+
+
 function BallHero:maybe_spawn_trail()
   if self.stuck or self.returning or self.mortar then return end
   local mult = self.speed_mult or 1
   if mult < 1.3 then return end
 
   local fx = main.current.effects
+  -- Cannon hop: sample the LIFTED position + scale while airborne, so the
+  -- aftershadow traces the ball's ballistic arc through the fake 3d space
+  -- instead of smearing along the ground beneath it.
+  local ty = self:fx_y()
+  local ts = self:fx_scale()
 
   -- Tier 1 (always while mult >= 1.3): the regular colored aftershadow. Size,
   -- alpha and lifespan all scale with speed so 4× balls smear more visibly
@@ -853,16 +888,16 @@ function BallHero:maybe_spawn_trail()
   local base_rs       = self.r_size  * math.clamp(math.remap(mult, 1.3, 4.0, 0.85, 1.25), 0.85, 1.25)
   local base_alpha    = math.clamp(math.remap(mult, 1.3, 4.0, 0.35, 0.85), 0.35, 0.85)
   local base_duration = math.clamp(math.remap(mult, 1.3, 4.0, 0.22, 0.4),  0.22, 0.4)
-  BallTrail{group = fx, x = self.x, y = self.y, color = self.color,
-            rs = base_rs, alpha = base_alpha, duration = base_duration}
+  BallTrail{group = fx, x = self.x, y = ty, color = self.color,
+            rs = base_rs*ts, alpha = base_alpha, duration = base_duration}
 
   -- Tier 2 (mult >= 2.5): NEON OVERDRIVE. A white-hot core particle sits on
   -- top of the coloured trail so the ball looks like it's burning through
   -- the arena. Core grows + brightens as the streak climbs toward the cap.
   if mult >= 2.5 then
     local neon = math.clamp(math.remap(mult, 2.5, 4.0, 0, 1), 0, 1)
-    BallTrail{group = fx, x = self.x, y = self.y, color = Color(1, 1, 1, 1),
-              rs = self.r_size*(0.45 + neon*0.45),
+    BallTrail{group = fx, x = self.x, y = ty, color = Color(1, 1, 1, 1),
+              rs = self.r_size*ts*(0.45 + neon*0.45),
               alpha = 0.55 + neon*0.4,
               duration = 0.18 + neon*0.22}
 
@@ -876,8 +911,8 @@ function BallHero:maybe_spawn_trail()
         math.min(1, c.g*1.8 + 0.2),
         math.min(1, c.b*1.8 + 0.2),
         1)
-      BallTrail{group = fx, x = self.x, y = self.y, color = glow,
-                rs = self.r_size*(1.0 + neon*0.6),
+      BallTrail{group = fx, x = self.x, y = ty, color = glow,
+                rs = self.r_size*ts*(1.0 + neon*0.6),
                 alpha = 0.45*neon,
                 duration = 0.32 + neon*0.3}
     end
@@ -1067,7 +1102,7 @@ BEHAVIORS.random_shot = function(self, s)
       Projectile{
         group  = arena.main, x = self.x, y = self.y, r = ang,
         type   = 'arrow', speed = s.speed or 180, color = self.color,
-        dmg    = self:current_dmg()*3.5*RANGED_DMG_MULT,
+        dmg    = self:current_dmg()*BAL('globals.projectile_dmg_mult', 3.5*RANGED_DMG_MULT),
       }
     end)
     archer1:play{volume = 0.2, pitch = random:float(0.95, 1.05)}
@@ -1561,7 +1596,7 @@ BEHAVIORS.pet_spawn = function(self, s)
         AllyCritter{
           group = arena.main, x = self.x, y = self.y,
           color = self.color, speed = s.pet_speed or 70,
-          dmg = (s.pet_dmg or 8)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)*(self.terror_other_mult or 1),
+          dmg = (s.pet_dmg or 8)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)*(self.terror_other_mult or 1)*(self.cannon_other_mult or 1),
         }
       end)
     end
@@ -1591,7 +1626,7 @@ function BallHero:emit_locusts(s)
   -- Pressure: 1 base + up to 2 more from a dense cluster + a frenzy bonus.
   local count = 1 + math.min(2, math.floor((#pool - 1)/3))
   if (self.locust_frenzy or 0) > 0 then count = count + 2 end
-  local dmg = (s.locust_dmg or 5)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)*(self.terror_other_mult or 1)
+  local dmg = (s.locust_dmg or 5)*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.run_dmg_mult or 1)*(self.terror_other_mult or 1)*(self.cannon_other_mult or 1)
   local hx, hy = self.x, self.y
   for _ = 1, count do
     local tg = pool[random:int(1, #pool)]
@@ -1748,14 +1783,18 @@ local SPELLBLADE_DMG_MULT = 0.6*RANGED_DMG_MULT
 function BallHero:current_dmg()
   -- Terrorist: every non-blast damage source (contact, abilities, projectiles)
   -- is gutted to terror_other_mult so the manual detonation IS the damage. The
-  -- blast itself reads blast_dmg() below, which skips this nerf. nil for every
-  -- other paddle, so their numbers are unchanged.
-  return self.dmg*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.terror_other_mult or 1)
+  -- blast itself reads blast_dmg() below, which skips this nerf.
+  -- Cannon: same idea via cannon_other_mult — abilities/projectiles/pets are
+  -- damped so the damage lives in BOUNCES (brick contact reads ball.dmg
+  -- directly, and the hop-landing splash reads blast_dmg — both skip this).
+  -- Both mults are nil for every other paddle, so their numbers are unchanged.
+  return self.dmg*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)*(self.terror_other_mult or 1)*(self.cannon_other_mult or 1)
 end
 
 
--- Un-nerfed damage, used ONLY by the terrorist detonation blast — its whole
--- payoff. For every other ball this equals current_dmg().
+-- Un-nerfed damage: used by the terrorist detonation blast and the cannon
+-- hop-landing splash — each build's whole payoff. For every other ball this
+-- equals current_dmg().
 function BallHero:blast_dmg()
   return self.dmg*(self.charge_dmg_mult or 1)*(self.buff_dmg_mult or 1)
 end
@@ -1763,8 +1802,8 @@ end
 
 function BallHero:shoot_arrow(range, speed, extra)
   if self.stuck or self.returning then return end
-  local dmg = self:current_dmg()*PROJECTILE_DMG_MULT
-  if extra and extra.crit then dmg = dmg*2 end
+  local dmg = self:current_dmg()*BAL('globals.projectile_dmg_mult', PROJECTILE_DMG_MULT)
+  if extra and extra.crit then dmg = dmg*BAL('globals.crit_dmg_mult', 2) end
   local opts = {type = 'arrow', dmg = dmg, speed = speed, range = range, color = self.color}
   if extra then for k, v in pairs(extra) do if k ~= 'crit' then opts[k] = v end end end
   main.current:fire_projectile_at_nearest(self, opts)
@@ -1774,7 +1813,7 @@ end
 
 function BallHero:shoot_knife(range, speed, extra)
   if self.stuck or self.returning then return end
-  local opts = {type = 'knife', dmg = self:current_dmg()*PROJECTILE_DMG_MULT, speed = speed, range = range, color = self.color}
+  local opts = {type = 'knife', dmg = self:current_dmg()*BAL('globals.projectile_dmg_mult', PROJECTILE_DMG_MULT), speed = speed, range = range, color = self.color}
   if extra then for k, v in pairs(extra) do opts[k] = v end end
   main.current:fire_projectile_at_nearest(self, opts)
   -- SNKRX plays one of two throw sounds at random for every knife thrower.
@@ -1795,7 +1834,7 @@ function BallHero:shoot_blade(s)
   local ang    = random:float(0, 2*math.pi)
   local dir    = random:bool(50) and 1 or -1
   local x, y   = self.x, self.y
-  local dmg    = self:current_dmg()*SPELLBLADE_DMG_MULT
+  local dmg    = self:current_dmg()*BAL('globals.spellblade_dmg_mult', SPELLBLADE_DMG_MULT)
   local color  = self.color
   local main_g = arena.main
   arena.t:after(0, function()
@@ -1819,7 +1858,7 @@ end
 function BallHero:shoot_bolt(s)
   if self.stuck or self.returning then return end
   main.current:fire_projectile_at_nearest(self, {
-    type = 'arrow', dmg = self:current_dmg()*PROJECTILE_DMG_MULT,
+    type = 'arrow', dmg = self:current_dmg()*BAL('globals.projectile_dmg_mult', PROJECTILE_DMG_MULT),
     speed = s.speed or 260, range = s.range, color = self.color,
     pierce = 1000, ricochet = (self.level >= 3) and 3 or 0, wall_stick = true,
   })
@@ -1898,7 +1937,7 @@ function BallHero:cast_volcano(s)
   self.cast_flash_t = 0.4   -- all runes flash + the ring whips fast (draw)
   Volcano{group = arena.effects, x = x, y = y, color = self.color,
           parent = self, rs = s.volcano_rs or 24, area = s.area or 72,
-          level = self.level, dmg_mult = RANGED_DMG_MULT}
+          level = self.level, dmg_mult = BAL('globals.ranged_dmg_mult', RANGED_DMG_MULT)}
 end
 
 
@@ -2166,11 +2205,19 @@ function BallHero:update(dt)
     return
   end
 
-  -- Cannon loadout: a charged-launched ball ALSO hops on the z-axis. Physics +
-  -- xy stay fully normal here (it bounces off walls / bricks / the paddle like
-  -- any regular ball) — update_hop only bobs the fake height and carves a splash
-  -- on each landing. No early return; the normal-ball update continues below.
+  -- Cannon loadout: a charged-launched ball ALSO hops on the z-axis. xy physics
+  -- stays live for walls + the paddle, but while airborne the ground is masked
+  -- off — bricks/critters/boss can't deflect the lob (see apply_hop_filter).
+  -- No early return; the normal-ball update continues below.
   if self.hopping then self:update_hop(dt) end
+
+  -- Cannon hop: snapshot the post-physics heading. After all the per-skin
+  -- steering blocks below have run, the heading is blended most of the way
+  -- back toward this snapshot (see the blend just before the boomerang block),
+  -- so an airborne lob flies near-straight — signature weaves/curves survive
+  -- only at a fraction, keeping the mortar arc readable instead of chaotic.
+  local hop_pre_vx, hop_pre_vy
+  if self.hopping and self.body then hop_pre_vx, hop_pre_vy = self:get_velocity() end
 
   -- Glacier "Ice Rink": the longer the puck glides without touching the paddle,
   -- the faster + harder it hits (glide_t heats it up to the caps). normalize_speed
@@ -2338,6 +2385,19 @@ function BallHero:update(dt)
     end
   end
 
+  -- Cannon hop: pull the heading 75% of the way back toward the pre-steering
+  -- snapshot taken above, so the per-skin weaves/darts/curves survive at 25%
+  -- while airborne — minimized, not removed. Wall reflections happen inside
+  -- the physics step (before the snapshot), so they are never fought here.
+  if self.hopping and hop_pre_vx and self.body then
+    local vx, vy = self:get_velocity()
+    local nvx = hop_pre_vx + (vx - hop_pre_vx)*0.25
+    local nvy = hop_pre_vy + (vy - hop_pre_vy)*0.25
+    local sp  = math.sqrt(vx*vx + vy*vy)
+    local nl  = math.sqrt(nvx*nvx + nvy*nvy)
+    if nl > 0.0001 then self:set_velocity(nvx/nl*sp, nvy/nl*sp) end
+  end
+
   -- Boomerang loadout: after any wall hit the ball curls back toward the
   -- paddle, damaging whatever it crosses on the way home. Velocity is only
   -- rotated (never re-scaled) so normalize_speed doesn't fight the turn.
@@ -2388,8 +2448,7 @@ function BallHero:start_return()
   end
   self.returning = true
   self.boomerang_home = nil
-  self.hopping = false   -- a recalled cannon ball stops hopping until relaunched
-  self.z       = 0
+  self:end_hop()         -- a recalled cannon ball stops hopping until relaunched
   if self.body then self.body:setActive(false) end
 end
 
@@ -2453,8 +2512,7 @@ function BallHero:start_stuck()
   self.charge_dmg_mult  = 1.0   -- previous charge bonus is consumed
   self.bounces          = 0     -- chain starts over from the paddle
   self.glide_t          = 0     -- Glacier ice-rink heat resets when caught
-  self.hopping          = false -- Cannon hop ends when caught; recharge then relaunch
-  self.z                = 0
+  self:end_hop()                -- Cannon hop ends when caught; recharge then relaunch
   if self.body then self.body:setActive(false) end
   local arena = main.current
   arena.stuck_count = (arena.stuck_count or 0) + 1
@@ -2487,7 +2545,7 @@ function BallHero:launch_from_stuck(angle)
 
   local charge_pct      = math.clamp(self.charge_time/self.charge_max_time, 0, 1)
   self.speed_mult       = 1.0 + charge_pct           -- 1x .. 2x
-  self.charge_dmg_mult  = 1.0 + charge_pct*0.5       -- 1x .. 1.5x
+  self.charge_dmg_mult  = 1.0 + charge_pct*BAL('globals.charge_dmg_bonus_max', 0.5)   -- 1x .. 1.5x at defaults
   -- Inherit pierce from the active buff each time we relaunch off the paddle.
   self:set_piercing(main.current and main.current.pierce_active == true)
 
@@ -2670,22 +2728,11 @@ end
 
 
 function BallHero:draw()
-  -- Cannon loadout hop: the ball arcs on a fake z-axis while still bouncing
-  -- normally in xy. Lift the ball's REAL skin by the height and scale it up so
-  -- it reads as airborne (it keeps its own design — no morph, no shadow).
-  if self.hopping then
-    local z  = self.z or 0
-    self.spring:pull(0)
-    local scale  = 1 + z/180
-    local dy     = z*0.9
-    local real_y = self.y
-    self.y = self.y - dy
-    graphics.push(self.x, self.y, 0, scale, scale)
-      self:draw_skin(self.spring.x)
-    graphics.pop()
-    self.y = real_y
-    return
-  end
+  -- Cannon loadout hop: the airborne ball is drawn AFTER the whole main group
+  -- (BallPit:draw_hop_layer -> draw_hop) so it hovers ABOVE the bricks it
+  -- crosses instead of being covered by swarm cells drawn later in group
+  -- order. Nothing to draw in the normal pass.
+  if self.hopping then return end
 
   -- Mitosis decaying clone: drawn as a dividing/decaying cell (not the hero
   -- skin), wobbling harder as it dies — see draw_mitosis_cell.
@@ -3839,7 +3886,7 @@ function BallHero:on_brick_hit(brick)
   -- 'brick' for collision routing and expose a no-op apply_burn, so this is
   -- safe; only real Brick instances actually tick burn damage.
   if arena and arena.buffs and arena.buffs.fire_trail and brick.apply_burn then
-    brick:apply_burn(self:current_dmg()*0.4, 2.0)
+    brick:apply_burn(self:current_dmg()*BAL('dots.fire_trail_dps_mult', 0.4), BAL('dots.fire_trail_duration', 2.0))
     if random:bool(25) then
       HitParticle{
         group = arena.effects,
@@ -3856,29 +3903,34 @@ function BallHero:on_brick_hit(brick)
   if trigger == 'chain_lightning' then
     if self.ability_ready then
       self.ability_ready = false
-      arena:do_chain_lightning(self.x, self.y, self:current_dmg()*0.7, 3 + self.level, self.color)
+      arena:do_chain_lightning(self.x, self.y, self:current_dmg()*BAL('on_bounce.chain_dmg_mult', 0.7),
+                               BAL('on_bounce.chain_links_base', 3) + self.level, self.color)
       wizard1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}
     end
 
   elseif trigger == 'slow' then
-    arena:slow_in_area(self.x, self.y, 32, 0.5, 2.0)
+    arena:slow_in_area(self.x, self.y, BAL('on_bounce.slow_radius', 32),
+                       BAL('on_bounce.slow_factor', 0.5), BAL('on_bounce.slow_duration', 2.0))
     frost1:play{volume = 0.25, pitch = random:float(0.95, 1.05)}
 
   elseif trigger == 'burn' then
     if self.ability_ready then
       self.ability_ready = false
       -- Burn dps buffed +400% (×5): was self.dmg*0.5 dps, now self.dmg*2.5 dps.
-      arena:burn_area(self.x, self.y, 32, self:current_dmg()*2.5, 2.5)
+      arena:burn_area(self.x, self.y, BAL('on_bounce.burn_radius', 32),
+                      self:current_dmg()*BAL('on_bounce.burn_dps_mult', 2.5), BAL('on_bounce.burn_duration', 2.5))
       fire1:play{volume = 0.25, pitch = random:float(0.95, 1.05)}
     end
 
   elseif trigger == 'big_splash' then
-    arena:do_splash(self.x, self.y, 64, self:current_dmg()*1.1, orange[0])
+    arena:do_splash(self.x, self.y, BAL('on_bounce.big_splash_radius', 64),
+                    self:current_dmg()*BAL('on_bounce.big_splash_dmg_mult', 1.1), orange[0])
     explosion1:play{volume = 0.35, pitch = random:float(0.95, 1.05)}
 
   elseif trigger == 'flagellant_pulse' then
     -- A constant low-damage pulse on every bounce — no internal cooldown.
-    arena:do_splash(self.x, self.y, 36, self:current_dmg()*0.45, fg[0])
+    arena:do_splash(self.x, self.y, BAL('on_bounce.flagellant_radius', 36),
+                    self:current_dmg()*BAL('on_bounce.flagellant_dmg_mult', 0.45), fg[0])
     flagellant1:play{volume = 0.18, pitch = random:float(0.9, 1.1)}
   end
 end
@@ -3934,24 +3986,30 @@ end
 -- ----- Cannon loadout: the paddle-strike z-hop -----
 --
 -- Striking a ball with the paddle launches it into a HOP on a fake z-axis.
--- Physics + xy are untouched (it still bounces off walls, bricks and the paddle
--- like any regular ball); start_hop only seeds the height bob, update_hop
--- integrates it + splashes on each landing (and ENDS the hop once a hop carries
--- the ball to the far wall), and end_hop clears it. `power` (0..1, from how hard
--- the paddle was charging forward when it connected — see Paddle:on_ball_bounce)
--- sets EVERYTHING: a hard strike arcs HIGH, so with constant gravity it hangs
--- LONGER between crashes and carves a WIDER, harder splash; a soft tap does
--- small, fast, weak hops. Each landing re-bounces to the same apex.
+-- While airborne the ball is a mortar shell: the 'brick' collision category is
+-- masked off its fixture (apply_hop_filter), so bricks / critters / the boss
+-- can never deflect it — it flies OVER them (and is drawn above them, see
+-- BallPit:draw_hop_layer); only walls and the paddle stay solid. Each landing
+-- carves a splash, feeds the combo meter, and rebounds to a DECAYED apex
+-- (HOP_RESTITUTION), so the hop dies out as an organic shrinking skip-skip-skip
+-- and settles flat at ground level (end_hop) instead of snapping back to 2d.
+-- `power` (0..1, from how hard the paddle was charging forward when it
+-- connected — see Paddle:on_ball_bounce) sets the launch: a hard strike arcs
+-- HIGH, hangs longer between crashes, and opens with wider, harder splashes;
+-- a soft tap does small, fast, weak hops that die out quickly.
 local HOP_VZ_MIN,     HOP_VZ_MAX     = 120, 300   -- launch z-speed -> apex height + air time
 local HOP_GRAVITY                    = 540        -- constant: a higher apex = more time between hops
+local HOP_RESTITUTION                = 0.72       -- z-speed kept per landing -> shrinking hops
+local HOP_VZ_END                     = 60         -- below this rebound (~3px apex) the hop settles flat
 local HOP_RADIUS_MIN, HOP_RADIUS_MAX = 22,  58    -- splash radius per landing
-local HOP_DMG_MIN,    HOP_DMG_MAX    = 1.2, 3.4   -- x current_dmg per landing
+local HOP_DMG_MIN,    HOP_DMG_MAX    = 1.2, 3.4   -- x blast_dmg per landing
 
 function BallHero:start_hop(power)
   local cp = math.clamp(power or 0, 0, 1)
+  local vz_min, vz_max = BAL('signature.hop_vz_min', HOP_VZ_MIN), BAL('signature.hop_vz_max', HOP_VZ_MAX)
   self.hopping    = true
   self.hop_charge = cp
-  self.hop_vz0    = HOP_VZ_MIN + (HOP_VZ_MAX - HOP_VZ_MIN)*cp
+  self.hop_vz0    = vz_min + (vz_max - vz_min)*cp
   self.z          = 0
   self.z_vel      = self.hop_vz0
   self.boomerang_home = nil
@@ -3959,42 +4017,74 @@ function BallHero:start_hop(power)
 end
 
 
+-- Airborne collision filter: mask the 'brick' category (bricks, critters and
+-- the boss all share it) off the ball's fixture so nothing on the ground can
+-- bounce the lob off course — not mid-air and not on the landing frame. Called
+-- from update_hop (never inside a Box2D callback), and re-applied there
+-- whenever the fixture was rebuilt under us (ball-resize powerups recreate it).
+function BallHero:apply_hop_filter()
+  if not (self.fixture and self.group and self.group.collision_tags) then return end
+  local ct = self.group.collision_tags
+  if not (ct.ball and ct.brick) then return end
+  local masks = {}
+  for _, m in ipairs(ct.ball.masks) do table.insert(masks, m) end
+  table.insert(masks, ct.brick.category)
+  self.fixture:setMask(unpack(masks))
+  self._hop_filter_fixture = self.fixture
+end
+
+
+function BallHero:clear_hop_filter()
+  self._hop_filter_fixture = nil
+  if not (self.fixture and self.group and self.group.collision_tags) then return end
+  local ct = self.group.collision_tags
+  if not ct.ball then return end
+  self.fixture:setMask(unpack(ct.ball.masks))
+end
+
+
 function BallHero:update_hop(dt)
   local arena = main.current
 
-  -- Stop hopping once a hop carries the ball to the FAR end of the arena: the
-  -- back (top) wall, or the furthest (upper) stretch of a side wall. It drops
-  -- back to flat xy and stays there until the paddle strikes it again.
-  if arena then
-    local r       = self.r_size or 6
-    local far_y   = arena.y1 + (arena.y2 - arena.y1)*0.30
-    local at_top  = self.y <= arena.y1 + r + 2
-    local at_side = self.x <= arena.x1 + r + 2 or self.x >= arena.x2 - r - 2
-    if at_top or (at_side and self.y <= far_y) then
-      self:end_hop()
-      return
-    end
+  -- Hovering: keep the ground masked off while airborne (see apply_hop_filter).
+  if self.fixture and self._hop_filter_fixture ~= self.fixture then
+    self:apply_hop_filter()
   end
 
-  self.z_vel = (self.z_vel or 0) - HOP_GRAVITY*dt
+  self.z_vel = (self.z_vel or 0) - BAL('signature.hop_gravity', HOP_GRAVITY)*dt
   self.z     = math.max(0, (self.z or 0) + self.z_vel*dt)
 
-  -- Landing: crater a splash scaled by the launch charge, feed the combo meter,
-  -- then bounce back up to the same apex for the next hop.
+  -- Landing: crater a splash scaled by THIS landing's impact speed (the apex it
+  -- fell from), feed the combo meter, then rebound with HOP_RESTITUTION of the
+  -- launch speed. Successive bounces shrink until the rebound would be a
+  -- barely-visible blip — then the hop ends already at ground level, so the
+  -- return to flat 2d play is seamless instead of a snap.
   if self.z <= 0 and self.z_vel < 0 then
+    local vz_min, vz_max = BAL('signature.hop_vz_min', HOP_VZ_MIN), BAL('signature.hop_vz_max', HOP_VZ_MAX)
+    local vz0 = self.hop_vz0 or vz_min
     if arena then
-      local cp     = self.hop_charge or 0
-      local radius = HOP_RADIUS_MIN + (HOP_RADIUS_MAX - HOP_RADIUS_MIN)*cp
-      local dmg    = self:current_dmg()*(HOP_DMG_MIN + (HOP_DMG_MAX - HOP_DMG_MIN)*cp)
+      local cp     = math.clamp((vz0 - vz_min)/(vz_max - vz_min), 0, 1)
+      local r_min, r_max = BAL('signature.hop_radius_min', HOP_RADIUS_MIN), BAL('signature.hop_radius_max', HOP_RADIUS_MAX)
+      local d_min, d_max = BAL('signature.hop_dmg_min', HOP_DMG_MIN), BAL('signature.hop_dmg_max', HOP_DMG_MAX)
+      local radius = r_min + (r_max - r_min)*cp
+      -- blast_dmg, NOT current_dmg: the splash is the Cannon's whole payoff and
+      -- must skip the loadout-wide cannon_other_mult nerf on ball damage.
+      local dmg    = self:blast_dmg()*(d_min + (d_max - d_min)*cp)
       if arena.do_splash_falloff then
         arena:do_splash_falloff(self.x, self.y, radius, dmg, self.color)
       end
       local b = arena.get_nearest_brick_within and arena:get_nearest_brick_within(self.x, self.y, radius)
       if b and arena.on_brick_bounce then arena:on_brick_bounce(self, b) end
       spawn_burst(arena.effects, self.x, self.y, self.color, 4 + math.floor(cp*5), 50, 130)
-      explosion1:play{volume = 0.24 + 0.16*cp, pitch = random:float(0.8, 1.0)}
+      explosion1:play{volume = 0.18 + 0.20*cp, pitch = random:float(0.8, 1.0)}
     end
-    self.z_vel = self.hop_vz0 or HOP_VZ_MIN
+    local next_vz = vz0*BAL('signature.hop_restitution', HOP_RESTITUTION)
+    if next_vz < BAL('signature.hop_vz_end', HOP_VZ_END) then
+      self:end_hop()
+      return
+    end
+    self.hop_vz0 = next_vz
+    self.z_vel   = next_vz
   end
 end
 
@@ -4002,4 +4092,28 @@ end
 function BallHero:end_hop()
   self.hopping = false
   self.z       = 0
+  self.z_vel   = 0
+  self:clear_hop_filter()
+end
+
+
+-- The airborne ball, drawn by BallPit:draw_hop_layer AFTER the whole main
+-- group so it layers OVER the bricks it flies across (BallHero:draw skips its
+-- normal body draw while hopping). A ground shadow pins the spot under the
+-- ball — where the next splash will land — and shrinks/fades with height; the
+-- body lifts and scales up with height. The ball keeps its own skin, no morph.
+function BallHero:draw_hop()
+  local z      = self.z or 0
+  local shrink = 1/(1 + z/70)
+  graphics.push(self.x, self.y + 1, 0, 1, 0.45)
+    graphics.circle(self.x, self.y + 1, (self.r_size + 1.5)*shrink, Color(0, 0, 0, 0.16 + 0.14*shrink))
+  graphics.pop()
+  self.spring:pull(0)
+  local scale  = 1 + z/180
+  local real_y = self.y
+  self.y = self.y - z*0.9
+  graphics.push(self.x, self.y, 0, scale, scale)
+    self:draw_skin(self.spring.x)
+  graphics.pop()
+  self.y = real_y
 end

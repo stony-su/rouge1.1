@@ -158,9 +158,13 @@ PADDLES.defs = {
     start_balls = {'cannoneer', 'cannoneer'},
     -- The hop is driven by PADDLE STRIKES (Paddle:on_ball_bounce -> start_hop):
     -- height/air-time/splash scale with how hard the paddle was charging forward
-    -- into the ball; the hop ends at the far wall. Tunables live in ball_hero.lua
-    -- (HOP_* constants), so no sig fields are needed here.
-    signature = 'cannon', sig = {},
+    -- into the ball. While airborne the ball flies OVER bricks/critters/boss
+    -- (nothing on the ground can deflect it) and each landing rebounds smaller
+    -- until the hop settles flat on its own. Physics/decay tunables live in
+    -- ball_hero.lua (HOP_* constants). other_dmg_mult: every ability/projectile/
+    -- pet damage source is damped to this so the damage lives in BOUNCES —
+    -- brick-contact hits and the hop-landing splash keep full strength.
+    signature = 'cannon', sig = {other_dmg_mult = 0.35},
     blurb = 'Strike balls with the paddle to launch HOPS that crash down in splashes.',
     sig_blurb = 'pull back, then charge forward into the ball for bigger hops',
   },
@@ -638,8 +642,8 @@ function BallPit:terror_blast(x, y, radius, dmg, color, element)
       end
     end
   end
-  if     element == 'burn' then self:burn_area(x, y, radius, dmg*0.35, 3)
-  elseif element == 'slow' then self:slow_in_area(x, y, radius, 0.5, 3) end
+  if     element == 'burn' then self:burn_area(x, y, radius, dmg*BAL('signature.element_burn_dps_mult', 0.35), BAL('signature.element_burn_duration', 3))
+  elseif element == 'slow' then self:slow_in_area(x, y, radius, BAL('signature.element_slow_factor', 0.5), BAL('signature.element_slow_duration', 3)) end
   TerrorBlast{group = self.effects, x = x, y = y, radius = radius, color = color}
   camera:shake(math.clamp(radius/8, 3, 8), 0.25, 110)
   if explosion1 then explosion1:play{volume = 0.5, pitch = random:float(0.85, 1.0)} end
@@ -707,8 +711,8 @@ function BallPit:twincast_fuse_blast(x, y, radius, dmg, color, element)
   if element then
     for _, o in ipairs(self.main.objects) do
       if o:is(Brick) and not o.dead and math.distance(x, y, o.x, o.y) <= radius then
-        if     element == 'burn' and o.apply_burn then o:apply_burn(dmg*0.22, 2.5)
-        elseif element == 'slow' and o.apply_slow then o:apply_slow(0.5, 2.0) end
+        if     element == 'burn' and o.apply_burn then o:apply_burn(dmg*BAL('signature.nova_burn_dps_mult', 0.22), BAL('signature.nova_burn_duration', 2.5))
+        elseif element == 'slow' and o.apply_slow then o:apply_slow(BAL('signature.nova_slow_factor', 0.5), BAL('signature.nova_slow_duration', 2.0)) end
       end
     end
   end
@@ -750,7 +754,7 @@ function BallPit:twincast_tick(dt)
             a:set_velocity(0, 0);    b:set_velocity(0, 0)
             a.spring:pull(0.6);      b.spring:pull(0.6)
             local lvl = a.level or 1
-            local dmg = (sig.nova_dmg or 26)*(1 + 0.5*(lvl - 1))*((self.run_mods.dmg) or 1)
+            local dmg = (sig.nova_dmg or 26)*(1 + BAL('signature.nova_level_growth', 0.5)*(lvl - 1))*((self.run_mods.dmg) or 1)
             self:twincast_fuse_blast(mx, my, sig.nova_radius or 80, dmg, pr.color or blue[0], pr.element)
           end
         end

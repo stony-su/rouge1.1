@@ -248,8 +248,8 @@ function FrostArea:chill()
   local arena = main.current
   if not (arena and arena.main) then return end
   local lvl3 = self.level >= 3
-  local sf   = lvl3 and (self.slow_factor*0.7) or self.slow_factor   -- harder slow at lvl3
-  local dmg  = self.dmg * (lvl3 and 1.6 or 1)
+  local sf   = lvl3 and (self.slow_factor*BAL('effects.frost_lvl3_slow_mult', 0.7)) or self.slow_factor   -- harder slow at lvl3
+  local dmg  = self.dmg * (lvl3 and BAL('effects.frost_lvl3_dmg_mult', 1.6) or 1)
   local hit_any = false
   for _, o in ipairs(arena.main.objects) do
     if not o.dead and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
@@ -637,7 +637,9 @@ function ReactorBlast:detonate()
   explosion1:play{volume = 0.5, pitch = random:float(0.9, 1.05)}
   -- Level-3 "Demoman": a second, smaller aftershock a beat later.
   if self.lvl3 then
-    local x, y, r, d, col = self.x, self.y, self.radius*0.7, self.dmg*0.55, self.color
+    local x, y, r, d, col = self.x, self.y,
+                            self.radius*BAL('effects.reactor_aftershock_radius_mult', 0.7),
+                            self.dmg*BAL('effects.reactor_aftershock_dmg_mult', 0.55), self.color
     self.t:after(0.18, function()
       if arena.main and arena.main.world then
         arena:do_splash(x, y, r, d, col)
@@ -1205,7 +1207,8 @@ function MortarShell:land()
         arena.t:after(i*0.18, function()
           local a = main.current
           if not (a and a.world) then return end
-          a:do_splash(bx, by, r*0.7, dmg*0.5, col)
+          a:do_splash(bx, by, r*BAL('effects.mortar_cluster_radius_mult', 0.7),
+                      dmg*BAL('effects.mortar_cluster_dmg_mult', 0.5), col)
           explosion1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
         end)
       end
@@ -1300,7 +1303,7 @@ function ConsecratedGround:update(dt)
     end
     local reach     = self.rs*0.58       -- ~ the outer petals' tip reach
     local sector    = 2*math.pi/8        -- 8 outer blades (matches draw)
-    local slice_dmg = self.dmg*0.6
+    local slice_dmg = self.dmg*BAL('effects.consecrate_slice_mult', 0.6)
     if arena.main then
       for _, o in ipairs(arena.main.objects) do
         if not o.dead and o.take_damage and o.id
@@ -1639,8 +1642,8 @@ function CleaveArea:init(args)
   end
 
   if #targets > 0 then
-    local total = self.dmg*(1 + 0.15*#targets)
-    if self.level >= 3 then total = total*2 end
+    local total = self.dmg*(1 + BAL('effects.cleave_per_target_bonus', 0.15)*#targets)
+    if self.level >= 3 then total = total*BAL('effects.cleave_lvl3_mult', 2) end
     for _, o in ipairs(targets) do
       o:take_damage(total, self.color)
       HitParticle{group = self.group, x = o.x, y = o.y, color = self.color}
@@ -1729,8 +1732,8 @@ function HexSlamArea:init(args)
   end
 
   if #targets > 0 then
-    local total = self.dmg*(1 + 0.15*#targets)
-    if self.level >= 3 then total = total*2 end
+    local total = self.dmg*(1 + BAL('effects.hexslam_per_target_bonus', 0.15)*#targets)
+    if self.level >= 3 then total = total*BAL('effects.hexslam_lvl3_mult', 2) end
     for _, o in ipairs(targets) do
       o:take_damage(total, self.color)
       HitParticle{group = self.group, x = o.x, y = o.y, color = self.color}
@@ -1890,7 +1893,11 @@ function Volcano:init(args)
   self:init_game_object(args)
   self.level   = self.level or 1
   self.area    = self.area or 72
-  self.rs_full = self.rs or 24
+  -- The crown scales with the eruption AoE: the EruptionArea square has side
+  -- `area`, so its inscribed radius is area/2 — the disc grows out to that
+  -- rectangular barrier minus a medium gap, instead of staying at the tiny
+  -- SNKRX 24px crown under the buffed area. Never smaller than the passed rs.
+  self.rs_full = math.max(self.rs or 24, self.area/2 - 26)
 
   -- Crown rotation: the four rim arcs drift at a random angular speed.
   self.vr  = 0
@@ -1910,7 +1917,7 @@ function Volcano:init(args)
   fire1:play{pitch = random:float(0.95, 1.05), volume = 0.5}
 
   -- The eruption loop, on the exact SNKRX cadence.
-  self.t:every(self.level >= 3 and 0.5 or 1, function()
+  self.t:every(self.level >= 3 and BAL('effects.volcano_interval_lvl3', 0.5) or BAL('effects.volcano_interval', 1), function()
     camera:shake(4, 0.5)
     _G[random:table{'earth1', 'earth2', 'earth3'}]:play{pitch = random:float(0.95, 1.05), volume = 0.25}
     _G[random:table{'fire1', 'fire2', 'fire3'}]:play{pitch = random:float(0.95, 1.05), volume = 0.25}
@@ -1922,7 +1929,7 @@ function Volcano:init(args)
     dmg = dmg*(self.dmg_mult or 1)
     EruptionArea{group = self.group, x = self.x, y = self.y, w = self.area,
                  r = random:float(0, 2*math.pi), color = self.body_color, dmg = dmg}
-  end, self.level >= 3 and 8 or 4)
+  end, self.level >= 3 and BAL('effects.volcano_count_lvl3', 8) or BAL('effects.volcano_count', 4))
 
   self.t:after(4, function()
     self.t:every_immediate(0.05, function() self.hidden = not self.hidden end, 7, function() self.dead = true end)
@@ -1937,17 +1944,23 @@ end
 function Volcano:draw()
   if self.hidden then return end
   -- The cone: an upward triangle (push by -pi/2 because the engine's
-  -- triangles point right at angle 0) — same 13.5-wide outline as SNKRX.
+  -- triangles point right at angle 0). SNKRX drew a fixed 13.5-wide outline
+  -- inside a 24px crown; keep that 13.5/24 proportion against the live
+  -- (snap-in tweened) crown radius so cone + crown scale with the AoE
+  -- together. Line widths thicken a touch so the big shapes don't go wiry.
+  local tri_w  = (self.rs or 0)*(13.5/24)
+  local tri_lw = math.max(3, tri_w/24)
   graphics.push(self.x, self.y, -math.pi/2, self.spring.x, self.spring.x)
-    graphics.triangle_equilateral(self.x, self.y, 13.5, self.color, 3)
+    graphics.triangle_equilateral(self.x, self.y, tri_w, self.color, tri_lw)
   graphics.pop()
   -- The crown: faint disc + four slowly drifting arc segments at the rim.
+  local arc_lw = math.max(2, (self.rs or 0)/56)
   graphics.push(self.x, self.y, self.vr, self.spring.x, self.spring.x)
     graphics.circle(self.x, self.y, self.rs, self.color_transparent)
     for i = 1, 4 do
       graphics.arc('open', self.x, self.y, self.rs,
                    (i - 1)*math.pi/2 + math.pi/4 - math.pi/8,
-                   (i - 1)*math.pi/2 + math.pi/4 + math.pi/8, self.color, 2)
+                   (i - 1)*math.pi/2 + math.pi/4 + math.pi/8, self.color, arc_lw)
     end
   graphics.pop()
 end

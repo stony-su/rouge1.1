@@ -165,7 +165,8 @@ function Paddle:flip_launch(side)
           local ang   = -math.pi/2 - side*random:float(0.12, 0.34)
           local spd   = (self.launch_speed or 150)*boost
           h:set_velocity(math.cos(ang)*spd, math.sin(ang)*spd)
-          h.charge_dmg_mult = math.min(1.5, (h.charge_dmg_mult or 1)*1.12)
+          h.charge_dmg_mult = math.min(BAL('globals.flipper_charge_cap', 1.5),
+                                       (h.charge_dmg_mult or 1)*BAL('globals.flipper_charge_step', 1.12))
           h.spring:pull(0.35)
           spawn_bounce_sparks(arena.effects, h.x, h.y, ang, h.color)
           hit_any = true
@@ -353,16 +354,14 @@ end
 
 
 -- The Cannon paddle as a siege gun-carriage: a dark armored slab on two
--- spoked wheels, banded with rivets, mounting a squat upward mortar barrel at
--- the centre with a glowing bore + heat-haze. On a ball hit the spring (s)
--- pops, kicking the barrel down in recoil and flaring a muzzle flash, so the
--- paddle "fires" every bounce. Cosmetic only — the hitbox is the flat bar.
+-- spoked wheels, banded with rivets, with a breathing heat-haze aura. FLAT on
+-- top — no mortar barrel; the launcher fantasy lives in the ball hops it
+-- strikes, not in a muzzle. Cosmetic only — the hitbox is the flat bar.
 function Paddle:draw_cannon_paddle(s, color)
   local t      = love.timer.getTime()
   local x, y   = self.x, self.y
   local w, h   = self.w, self.h
   local pulse  = 0.5 + 0.5*math.sin(t*3)
-  local hit    = math.min(1, math.abs(1 - s)*2.2)   -- 0 at rest, ->1 on impact
 
   -- Breathing orange heat-haze aura.
   graphics.rectangle(x, y, w + 5 + pulse*2, h + 6, (h + 6)/2, (h + 6)/2,
@@ -391,30 +390,6 @@ function Paddle:draw_cannon_paddle(s, color)
     -- Bright bounce edge on top in the loadout colour.
     graphics.rectangle(x, y - h/2, w*0.96, 1, nil, nil, color)
   graphics.pop()
-
-  -- Squat mortar barrel rising from the centre, recoiling down on a hit.
-  local by = y - h/2 - 3 + hit*2.5
-  graphics.polygon({
-    x - 2.3, by + 3.5,
-    x + 2.3, by + 3.5,
-    x + 3.1, by - 3.5,
-    x - 3.1, by - 3.5,
-  }, Color(0.20, 0.17, 0.16, 1))
-  graphics.polygon({
-    x - 2.3, by + 3.5,
-    x + 2.3, by + 3.5,
-    x + 3.1, by - 3.5,
-    x - 3.1, by - 3.5,
-  }, Color(color.r*0.8, color.g*0.5, 0.12, 0.9), 1)
-
-  -- Glowing muzzle bore at the mouth, flaring on a fresh hit.
-  local hot = math.min(1, 0.35 + 0.35*pulse + hit*1.2)
-  graphics.circle(x, by - 3.5, 2.0, Color(1, 0.55 + 0.3*pulse, 0.2, hot))
-  graphics.circle(x, by - 3.5, 1.0, Color(1, 0.95, 0.7, hot))
-  if hit > 0.05 then
-    graphics.circle(x, by - 3.5, 2 + hit*5, Color(1, 0.85, 0.4, hit*0.9))
-    graphics.circle(x, by - 4.5, 1 + hit*3, Color(1, 1, 0.85, hit))
-  end
 end
 
 
@@ -691,8 +666,9 @@ function Paddle:on_ball_bounce(ball)
   -- reflection below). A stationary "tap" gives a weak hop; the faster the
   -- paddle is charging FORWARD (up, into the ball) when it connects, the higher +
   -- harder the hop — so pulling the paddle back then driving it up into the ball
-  -- is rewarded. Lateral motion adds a little. The hop ends at the far wall
-  -- (BallHero:update_hop), dropping the ball back to flat xy for the next strike.
+  -- is rewarded. Lateral motion adds a little. Each landing rebounds smaller
+  -- (BallHero:update_hop) until the hop dies out and the ball settles back to
+  -- flat xy on its own, ready for the next strike.
   if sig == 'cannon' and ball.start_hop then
     local maxspd  = self.speed or 220
     local up      = math.max(0, -(self.hit_vy or 0))    -- charging forward = moving up
