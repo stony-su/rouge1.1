@@ -183,6 +183,8 @@ function Terminal:register_commands()
     t:log("  level                   open level-up picker")
     t:log("  phase [2|3]             drop boss hp to next phase")
     t:log("  trace                   toggle boss path trace + readout")
+    t:log("  dmg [reset]             toggle damage-source overlay (F2)")
+    t:log("  die                     kill the player (game-over screen)")
     t:log("  powerups                list powerup kinds")
     t:log("  powerup <kind>          apply a powerup effect directly")
     t:log("  dropp <kind>            spawn a powerup orb above paddle")
@@ -251,6 +253,27 @@ function Terminal:register_commands()
 
   C.kill  = function(t, args) t:log("killed " .. clear_all_bricks(t.arena) .. " bricks") end
   C.clear = C.kill
+
+  -- Damage-source overlay: `dmg` toggles the top-right panel (same as F2),
+  -- `dmg reset` zeroes the tallies mid-run without restarting.
+  C.dmg = function(t, args)
+    if args[1] == 'reset' then
+      t.arena.dmg_tally, t.arena.dmg_tally_total = {}, 0
+      t:log("damage tally reset")
+      return
+    end
+    t.arena.show_dmg_tally = not t.arena.show_dmg_tally
+    t:log("damage overlay " .. (t.arena.show_dmg_tally and 'ON' or 'off'))
+  end
+
+  -- Kill the player outright — jumps straight to the game-over / run-report
+  -- screen (ignores godmode, since that only gates damage_player).
+  C.die = function(t, args)
+    if t.arena.game_over then t:log("already dead"); return end
+    t.arena.player_hp = 0
+    t.arena:trigger_game_over()
+    t:log("player killed — game over")
+  end
 
   C.hp = function(t, args)
     local n = tonumber(args[1])

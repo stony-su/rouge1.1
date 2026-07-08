@@ -34,8 +34,8 @@ BallPit:implement(GameObject)
 --      a low maintenance weight.
 local RANGED_ORDER      = {'shooter', 'sniper', 'spreader', 'burster', 'arc_lobber', 'spiraler'}
 local RANGED_INTRO_WAVE = 3   -- the first ranged variant unlocks on this wave
-local RANGED_NEW_WEIGHT = 3   -- weight for the variant introduced this wave (was 5; -40% to thin ranged spawns)
-local RANGED_OLD_WEIGHT = 1.2 -- weight for each ranged variant unlocked earlier (was 2; -40%)
+local RANGED_NEW_WEIGHT = 2   -- weight for the variant introduced this wave (was 3; thinned again)
+local RANGED_OLD_WEIGHT = 0.8 -- weight for each ranged variant unlocked earlier (was 1.2; thinned again)
 
 
 -- Appends the ranged variants unlocked by `wave` to `mix` (one new type per
@@ -147,13 +147,18 @@ local COMBO_RANKS = {
   {label = 'FRENZY', threshold = 1500, mult = 4.0, color_key = 'purple'},
 }
 
--- Tunables. All point values are absolute (not percentages of current).
-local COMBO_PENALTY_MISS     = 150   -- subtract when a ball falls into the pit
+-- Tunables. Gains are absolute; LOSSES are proportional to the current bar —
+-- a flat miss penalty wiped a whole B-rank bar but cost FRENZY only 10%,
+-- which punished weak play and forgave strong play (backwards for an
+-- ULTRAKILL-style meter). Now a drop always stings the same fraction.
+local COMBO_MISS_FRAC        = 0.25  -- fraction of current points lost per pit drop...
+local COMBO_MISS_MIN         = 100   -- ...but never less than this
 local COMBO_BASE_POINTS      = 10    -- baseline per brick bounce
 local COMBO_VARIETY_BONUS    = 5     -- + this if hitting a different variant than last
 local COMBO_STREAK_BONUS_CAP = 10    -- + min(streak, cap) per bounce
 local COMBO_IDLE_GRACE       = 2     -- seconds with no bounces before decay starts
-local COMBO_IDLE_DECAY       = 20    -- points/sec subtracted after grace expires
+local COMBO_IDLE_DECAY_FRAC  = 0.08  -- fraction of current points bled per idle second...
+local COMBO_IDLE_DECAY_MIN   = 6     -- ...with this floor so low bars still reach zero
 local COMBO_BOUNCE_DMG_STEP  = 0.08  -- +8% damage per bounce on the same ball
 local COMBO_BOUNCE_CAP       = 15    -- max bounces counted for damage scaling
 
@@ -329,8 +334,8 @@ function BallPit:draw_settings_heroes()
     if is_hover then
       graphics.circle(hx, hy, 10, Color(hero.color.r, hero.color.g, hero.color.b, 0.35))
     end
-    graphics.circle(hx, hy, 8, hero.color)
-    graphics.circle(hx - 2, hy - 2, 2, fg[5])      -- highlight pip, matches upgrade-card style
+    -- Live skin preview: the hero's real in-game body at roster scale.
+    BallHero.draw_preview(hero.character, hx, hy, 5)
 
     -- Level pips below the icon: 1-3 small dots.
     local lvl = hero.level or 1
@@ -761,7 +766,7 @@ function BallPit:reset_run()
     flipper_gap = pdef.sig.gap, flip_window = pdef.sig.flip_window,
     flipper_sig = pdef.sig,
     move_mode = (pdef.signature == 'glacier') and 'ice' or nil,
-    paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang', vampire = 'vampire', hive = 'hive', tesla = 'tesla', glacier = 'glacier', terrorist = 'terrorist', cannon = 'cannon'})[pdef.signature],
+    paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang', vampire = 'vampire', hive = 'hive', tesla = 'tesla', glacier = 'glacier', terrorist = 'terrorist', cannon = 'cannon', aegis = 'aegis'})[pdef.signature],
   }
 
   -- Pinball Lobber: damp the side/top walls so balls shed energy on a wall hit
@@ -800,7 +805,9 @@ function BallPit:reset_run()
   self.run_kills     = 0
   self.xp            = 0
   self.level         = 1
-  self.xp_to_next    = (pdef.xp_mode == 'flat') and PADDLES.XP_FLAT or 5
+  -- Scaling paddles: base cost of level 2 (was 5 — raised to slow the early
+  -- level spam), tunable via the paddle's balance master file.
+  self.xp_to_next    = (pdef.xp_mode == 'flat') and PADDLES.XP_FLAT or BAL('globals.xp_base', 8)
   self.wave          = 1
   self.wave_time     = 0
   self.boss          = nil
@@ -861,13 +868,16 @@ function BallPit:reset_run()
   --     `pity_step` to the next check, capped at 100%.
   --   * On a successful spawn the streak counter resets to 0.
   -- The wave-end tier-2 in advance_wave is a separate guaranteed drop.
+  -- Nerfed cadence (was 6s / 0.25 / 0.20 ≈ a powerup every ~14s — frequent
+  -- enough to read as background noise): expected drop is now roughly every
+  -- ~29s, so each catch is a real moment. BAL-tunable per paddle.
   self.powerup_pity = {
     timer          = 0,
-    check_interval = 6,
+    check_interval = BAL('powerups.check_interval', 9),
     streak         = 0,
-    base_chance    = 0.25,
-    pity_step      = 0.20,
-    tier2_chance   = 0.20,
+    base_chance    = BAL('powerups.base_chance', 0.15),
+    pity_step      = BAL('powerups.pity_step', 0.15),
+    tier2_chance   = BAL('powerups.tier2_chance', 0.20),
   }
 
   -- The level-up ball ('level_random') spawns on its OWN timer, fully separate
@@ -876,11 +886,14 @@ function BallPit:reset_run()
   -- rather than the chance/streak model the regular powerups use.
   self.levelup_pity = {
     timer   = 0,
-    next_at = random:float(20, 30),   -- first level-up ball lands ~20-30s in
+    -- First level-up ball ~30-45s in (was 20-30 — stretched alongside the
+    -- harder XP curve so the orb doesn't leak free levels around it).
+    next_at = random:float(BAL('powerups.level_orb_first_min', 30),
+                           BAL('powerups.level_orb_first_max', 45)),
   }
 
-  -- One-time signature setup for the selected paddle loadout (aegis bottom
-  -- wall, mitosis regrow timer, phantom/tesla state). See paddles.lua.
+  -- One-time signature setup for the selected paddle loadout (aegis brace
+  -- state, mitosis regrow timer, phantom/tesla state). See paddles.lua.
   self.shop_selected = self.shop_selected or 1
   self:setup_signature()
 
@@ -1336,11 +1349,21 @@ function BallPit:update(dt)
     self:terror_manual_detonate()
   end
 
+  -- Aegis loadout: E (or click) raises the shield for a sustained window —
+  -- balls and bullets turned while it's up are parried (see Paddle:start_brace).
+  if self.run_mods and self.run_mods.signature == 'aegis'
+  and (input.blink.pressed or input.click.pressed) then
+    self.paddle:start_brace()
+  end
+
   -- Aim is adjustable whenever space is held OR a ball is stuck on the paddle.
   -- Holding space is the "auto-fire" mode: the aim line shows, arrow keys
   -- nudge the angle, and any stuck ball fires immediately (returning balls
   -- skip the stuck state entirely, see BallHero:update_return).
-  local aim_active = self.stuck_count > 0 or input.launch.down
+  -- The Pinball Lobber has no stick/aim/launch flow at all (balls are served
+  -- from above and flipped, arrows are the flippers), so SPACE is dead there.
+  local pinball_rig = self.run_mods and self.run_mods.signature == 'flippers'
+  local aim_active = (self.stuck_count > 0 or input.launch.down) and not pinball_rig
   if aim_active then
     if input.aim_left.down then
       self.aim_angle = math.max(self.aim_angle - self.aim_speed*dt, -math.pi*0.92)
@@ -1411,7 +1434,8 @@ function BallPit:draw()
   self.effects:draw()
   if self.frozen then self:draw_frost_overlay() end
   if self.fire_active then self:draw_fire_overlay() end
-  if self.stuck_count > 0 or input.launch.down then self:draw_aim_line() end
+  if (self.stuck_count > 0 or input.launch.down)
+  and not (self.run_mods and self.run_mods.signature == 'flippers') then self:draw_aim_line() end
   if self.run_mods and self.run_mods.signature == 'terrorist' then self:draw_terror_prompt() end
   self.ui:draw()
   self:draw_hud()
@@ -1438,28 +1462,64 @@ end
 
 
 function BallPit:draw_aim_line()
-  -- Terrorist gets a full bounce-traced trajectory so the player can line a ball
-  -- up to land right next to a block before launching + detonating it.
-  if self.run_mods and self.run_mods.signature == 'terrorist' then
-    self:draw_aim_trajectory()
-    return
-  end
-  local px = self.paddle.x
-  local py = self.paddle.y - self.paddle.h/2 - 4
-  local len = 36
-  local ex = px + math.cos(self.aim_angle)*len
-  local ey = py + math.sin(self.aim_angle)*len
-  graphics.dashed_line(px, py, ex, ey, 3, 2, fg[0], 1)
-  graphics.circle(ex, ey, 2, fg[0])
+  -- Every paddle traces its real predicted path now; how FAR it sees comes
+  -- from its balance master file: aim.path_base px at level 1, growing by
+  -- aim.path_per_level px per level gained. The Terrorist's file carries its
+  -- original full 1300px sight with no growth, so it plays untouched.
+  local budget = BAL('aim.path_base', 110)
+               + BAL('aim.path_per_level', 10)*((self.level or 1) - 1)
+  if budget <= 0 then return end
+  self:draw_aim_trajectory(budget)
 end
 
 
--- Trace the launch ray, reflecting it off the three solid walls (left/right/top
--- inset by the ball radius), drawing a dashed segment per leg with a dot at each
--- bounce, until it descends back to the paddle's launch height, runs out of
--- bounces, or hits a total length budget. The trace stops AT the launch line so
--- it never draws behind/below the paddle (where the ball would just be caught).
-function BallPit:draw_aim_trajectory()
+-- Nearest ray hit along (dx,dy) from (x,y) against every live block's AABB,
+-- inflated by the ball radius r (slab test). Returns the hit distance and
+-- the axis of the face crossed ('x' or 'y'), or nil when nothing is hit.
+-- Used by draw_aim_trajectory so the preview bounces off blocks like the
+-- real ball, not just the walls.
+local function nearest_block_hit(arena, x, y, dx, dy, r)
+  local best_t, best_axis = math.huge, nil
+  for _, o in ipairs(arena.main.objects) do
+    if not o.dead and o:is(Brick) then
+      local hw, hh = (o.w or 12)/2 + r, (o.h or 12)/2 + r
+      local tmin, tmax, axis = -math.huge, math.huge, nil
+      local ok = true
+      if math.abs(dx) < 1e-9 then
+        if x < o.x - hw or x > o.x + hw then ok = false end
+      else
+        local t1, t2 = (o.x - hw - x)/dx, (o.x + hw - x)/dx
+        if t1 > t2 then t1, t2 = t2, t1 end
+        if t1 > tmin then tmin, axis = t1, 'x' end
+        if t2 < tmax then tmax = t2 end
+      end
+      if ok then
+        if math.abs(dy) < 1e-9 then
+          if y < o.y - hh or y > o.y + hh then ok = false end
+        else
+          local t1, t2 = (o.y - hh - y)/dy, (o.y + hh - y)/dy
+          if t1 > t2 then t1, t2 = t2, t1 end
+          if t1 > tmin then tmin, axis = t1, 'y' end
+          if t2 < tmax then tmax = t2 end
+        end
+      end
+      if ok and tmax >= tmin and tmin > 1e-3 and tmin < best_t then
+        best_t, best_axis = tmin, axis
+      end
+    end
+  end
+  return best_t, best_axis
+end
+
+
+-- Trace the launch ray, reflecting it off the three solid walls AND every
+-- live block (both inset/inflated by the ball radius), drawing a dashed
+-- segment per leg with a dot at each bounce — pale for walls, yellow for
+-- blocks — until it descends back to the paddle's launch height, runs out of
+-- bounces, or spends the `max_total` length budget (the paddle's aim sight,
+-- see draw_aim_line). The trace stops AT the launch line so it never draws
+-- behind/below the paddle (where the ball would just be caught).
+function BallPit:draw_aim_trajectory(max_total)
   local px = self.paddle.x
   local py = self.paddle.y - self.paddle.h/2 - 4
   -- Use a live ball's radius for the wall inset so the preview matches reality.
@@ -1473,8 +1533,10 @@ function BallPit:draw_aim_trajectory()
 
   local dx, dy = math.cos(self.aim_angle), math.sin(self.aim_angle)
   local x, y   = px, py
-  local total, MAX_TOTAL = 0, 1300
-  local MAX_BOUNCES = 5
+  local total, MAX_TOTAL = 0, max_total or 1300
+  -- Blocks consume bounce slots too now, so the cap is a bit roomier than
+  -- the old walls-only 5; the length budget is the real limiter.
+  local MAX_BOUNCES = 8
 
   for _ = 0, MAX_BOUNCES do
     -- Nearest positive intersection with each boundary along (dx, dy).
@@ -1483,6 +1545,11 @@ function BallPit:draw_aim_trajectory()
     elseif dx < -1e-6 then local t = (lx - x)/dx; if t > 1e-4 and t < t_best then t_best, side = t, 'x' end end
     if dy < -1e-6     then local t = (ty - y)/dy; if t > 1e-4 and t < t_best then t_best, side = t, 'y' end end
     if dy > 1e-6      then local t = (by - y)/dy; if t > 1e-4 and t < t_best then t_best, side = t, 'bottom' end end
+    -- Blocks: the ball reflects off bricks in flight, so the preview must too.
+    local bt, baxis = nearest_block_hit(self, x, y, dx, dy, r)
+    if baxis and bt < t_best then
+      t_best, side = bt, (baxis == 'x') and 'brick_x' or 'brick_y'
+    end
     if not side then break end
 
     local seg, clipped = t_best, false
@@ -1493,9 +1560,14 @@ function BallPit:draw_aim_trajectory()
 
     if clipped then break end
     if side == 'bottom' then graphics.circle(x, y, 2.5, red[0]); break end
-    -- Wall bounce: mark it + reflect the direction.
-    graphics.circle(x, y, 2.5, Color(fg[0].r, fg[0].g, fg[0].b, 0.85))
-    if side == 'x' then dx = -dx else dy = -dy end
+    -- Bounce: mark it + reflect the direction. Block bounces get a yellow
+    -- dot so the player can tell "off a brick" from "off a wall" at a glance.
+    if side == 'brick_x' or side == 'brick_y' then
+      graphics.circle(x, y, 2.5, Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.9))
+    else
+      graphics.circle(x, y, 2.5, Color(fg[0].r, fg[0].g, fg[0].b, 0.85))
+    end
+    if side == 'x' or side == 'brick_x' then dx = -dx else dy = -dy end
   end
   graphics.circle(px, py, 2, fg[0])
 end
@@ -1769,6 +1841,21 @@ function BallPit:on_brick_bounce(ball, brick)
 end
 
 
+-- Flat combo award from non-bounce sources (the Aegis bullet-parry refund).
+-- Runs the same rank-up feedback as a brick bounce but skips the
+-- streak/variety bookkeeping; the loadout Combo stat still scales it.
+function BallPit:add_combo_points(pts)
+  local c = self.combo
+  if not c or not pts or pts <= 0 then return end
+  c.idle_t = 0
+  local prev_idx = self:combo_rank_index()
+  local cm = (self.run_mods and self.run_mods.combo) or 1
+  c.points = c.points + pts*cm
+  local new_idx = self:combo_rank_index()
+  if new_idx > prev_idx then self:on_combo_rank_up(new_idx) end
+end
+
+
 -- Rank advancement feedback: a level-up SFX (pitched up per rank) plus a
 -- small camera shake at higher ranks for that ULTRAKILL "you're cooking"
 -- feeling. The centre-screen flash and big floating rank letter were removed
@@ -1790,7 +1877,12 @@ function BallPit:on_ball_missed(ball)
   if not c or c.points <= 0 then return end
   local prev_idx = self:combo_rank_index()
   local cm = (self.run_mods and self.run_mods.combo) or 1
-  c.points       = math.max(0, c.points - BAL('combo.miss_penalty', COMBO_PENALTY_MISS)*cm)
+  -- Proportional miss: a drop costs the same FRACTION of the bar at every
+  -- rank (floored so early drops still register). The loadout Combo stat
+  -- scales the fraction — hot paddles run a riskier meter.
+  local penalty  = math.max(BAL('combo.miss_min', COMBO_MISS_MIN),
+                            BAL('combo.miss_frac', COMBO_MISS_FRAC)*c.points*cm)
+  c.points       = math.max(0, c.points - penalty)
   c.streak       = 0
   c.last_variant = nil
 
@@ -1806,7 +1898,12 @@ function BallPit:tick_combo(dt)
   c.idle_t = c.idle_t + dt
   if c.idle_t > BAL('combo.idle_grace', COMBO_IDLE_GRACE) and c.points > 0 then
     local cm = (self.run_mods and self.run_mods.combo) or 1
-    c.points = math.max(0, c.points - BAL('combo.idle_decay', COMBO_IDLE_DECAY)*cm*dt)
+    -- Proportional idle bleed: high ranks drain fast (FRENZY halves in ~9s
+    -- instead of coasting for over a minute), low bars drain gently, and the
+    -- floor keeps the tail from lingering forever.
+    local rate = math.max(BAL('combo.idle_decay_min', COMBO_IDLE_DECAY_MIN),
+                          BAL('combo.idle_decay_frac', COMBO_IDLE_DECAY_FRAC)*c.points)
+    c.points = math.max(0, c.points - rate*cm*dt)
     if c.points <= 0 then
       c.streak       = 0
       c.last_variant = nil
@@ -1825,9 +1922,14 @@ function BallPit:draw_combo_meter()
   local col  = _G[rank.color_key][0]
 
   -- Anchor the meter just inside the right edge of the canvas. Width is
-  -- reserved by shrinking the XP bar in draw_hud.
-  local cx = self.x2 - 32
-  local cy = self.y1 - 10
+  -- reserved by shrinking the XP bar in draw_hud. print_centered centers
+  -- VERTICALLY too, so cy must leave at least half the fat_font glyph height
+  -- (plus the S+ pulse) above it or the rank letter's top clips off the
+  -- canvas -- it sat at y1 - 10 originally and shaved the letter. Nudged
+  -- down + left of the strict hearts/XP row so the tall rank letter clears
+  -- both the canvas top and the right edge with margin.
+  local cx = self.x2 - 50
+  local cy = self.y1 - 0
 
   -- Rank letter pulses subtly on S+ to give the meter some "life" at the
   -- top of the ladder.
@@ -1921,7 +2023,10 @@ function BallPit:level_up()
   -- Terrorist loadout: FLAT XP — every level costs the same, so the curve
   -- never runs away from you (slow opener, out-levels hard late).
   if not (self.run_mods and self.run_mods.xp_mode == 'flat') then
-    self.xp_to_next = math.floor(self.xp_to_next * 1.35 + 1)
+    -- Harder curve (was *1.35 + 1): a steeper multiplier plus a level-sized
+    -- kicker, so the opening levels stop flying by. Tunable via the balance
+    -- master files (globals.xp_curve_mult / globals.xp_base).
+    self.xp_to_next = math.floor(self.xp_to_next*BAL('globals.xp_curve_mult', 1.5) + self.level)
   end
   level_up1:play{volume = 0.5}
   Flash{group = self.effects, x = gw/2, y = gh/2, color = yellow_transparent_weak, duration = 0.15}
@@ -2087,9 +2192,9 @@ function BallPit:draw_upgrade()
     graphics.rectangle(cx, cy, card_w, card_h, 4, 4, bg[-1])
     graphics.rectangle(cx, cy, card_w, card_h, 4, 4, border, selected and 2 or 1)
 
-    local color = character_colors[choice.character] or fg[0]
-    graphics.circle(cx, cy - 18, 16, color)
-    graphics.circle(cx - 5, cy - 23, 5, fg[5])
+    -- Live skin preview: the hero's exact in-game body (BallHero.draw_preview
+    -- -> draw_skin), scaled up to card size.
+    BallHero.draw_preview(choice.character, cx, cy - 18, 11)
     graphics.print_centered(choice.character, pixul_font, cx, cy + 8, 0, 1, 1, 0, 0, fg[0])
     graphics.print_centered(choice.action == 'upgrade' and '+1 LEVEL' or 'NEW BALL', pixul_font, cx, cy + 24, 0, 1, 1, 0, 0,
       choice.action == 'upgrade' and yellow[0] or green[0])
@@ -2162,8 +2267,11 @@ function BallPit:trigger_game_over()
   self.game_over = true
   self.t:cancel('spawn_brick')
   Flash{group = self.effects, x = gw/2, y = gh/2, color = Color(0, 0, 0, 0.4), duration = 0.4}
-  -- Bank the run's kills to disk and open the paddle shop on the equipped
-  -- card (the game-over overlay IS the shop — see paddles.lua).
+  -- Land on the run-report screen; the shop is one button deeper (paddles.lua).
+  self.go_screen   = 'over'
+  self.go_selected = 1
+  -- Bank the run's kills to disk and pre-select the equipped card for when
+  -- the player opens the shop.
   PADDLES.ensure_state()
   self.shop_selected = 1
   for i, id in ipairs(PADDLES.order) do
@@ -2234,6 +2342,9 @@ end
 -- the detonations mutate self.heroes mid-loop.
 function BallPit:terror_manual_detonate()
   local arm = self:terror_blast_radius()
+  -- Slam the paddle's detonator plunger on every press, hit or whiff (see
+  -- Paddle:draw_terrorist_paddle).
+  if self.paddle then self.paddle.plunger_at = love.timer.getTime() end
   local snapshot = {}
   for _, h in ipairs(self.heroes) do snapshot[#snapshot + 1] = h end
   local any = false
@@ -2353,15 +2464,14 @@ function BallPit:do_chain_lightning(x, y, dmg, chain_len, color)
     hit_ids[target.id] = true
     hit_any = true
 
-    -- Lightning line visual.
-    local seg = Object:extend()
-    seg:implement(GameObject)
-    function seg:init(a) self:init_game_object(a); self.alpha = 1; self.t:tween(0.22, self, {alpha = 0}, math.linear, function() self.dead = true end) end
-    function seg:update(dt) self:update_game_object(dt) end
-    function seg:draw()
-      graphics.line(self.x1, self.y1, self.x2, self.y2, Color(color.r, color.g, color.b, self.alpha), 2)
-    end
-    seg{group = self.effects, x1 = cx, y1 = cy, x2 = target.x, y2 = target.y, x = (cx+target.x)/2, y = (cy+target.y)/2}
+    -- Lightning visual: a real jagged bolt (LightningArc -- coloured glow, hot
+    -- core, stray forks) that re-rolls its path over its short life so the
+    -- whole chain flickers like one strike. Jag amplitude scales with hop
+    -- length so short hops stay tight and long ones whip.
+    local hop_len = math.distance(cx, cy, target.x, target.y)
+    LightningArc{group = self.effects, x1 = cx, y1 = cy, x2 = target.x, y2 = target.y,
+                 color = color, w = 2.5, duration = 0.22, gens = 4,
+                 offset = math.clamp(hop_len*0.14, 5, 14), flicker = true}
 
     target:take_damage(dmg, color)
     spawn_burst(self.effects, target.x, target.y, color, 4, 60, 110)
@@ -2533,7 +2643,8 @@ function BallPit:tick_levelup_pity(dt)
   p.timer = p.timer + dt
   if p.timer < p.next_at then return end
   p.timer   = 0
-  p.next_at = random:float(24, 36)   -- gap until the next level-up ball
+  p.next_at = random:float(BAL('powerups.level_orb_gap_min', 36),
+                           BAL('powerups.level_orb_gap_max', 54))   -- gap until the next level-up ball (was 24-36)
   self:spawn_levelup_powerup()
 end
 

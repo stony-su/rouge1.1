@@ -7,8 +7,11 @@
 --   * w / speed / color / aim_mult arrive as ctor args from reset_run,
 --   * `flippers` switches the body to the Pinball Lobber's two-fixture rig,
 --   * `move_mode = 'ice'` switches movement to the Glacier's sliding model,
---   * on_ball_bounce gates per-signature behavior (aegis wipe, cannon mortar
---     launch, tesla zap, hive maggots) off arena.run_mods.
+--   * on_ball_bounce gates per-signature behavior (aegis parry, cannon mortar
+--     launch, tesla zap, hive maggots) off arena.run_mods,
+--   * the Aegis brace state (start_brace / the ticks in update / the rim flash
+--     in draw) lives here — see the parry branches in on_ball_bounce and
+--     EnemyProjectile:update.
 
 Paddle = Object:extend()
 Paddle:implement(GameObject)
@@ -37,6 +40,11 @@ function Paddle:init(args)
   -- swarm.lua / enemies.lua / the HUD instead of hiding it behind the band const.
   self.top_reach = self.y_anchor - DODGE_BAND_UP
   self.color = self.color or fg[0]
+
+  -- Aegis shield state (inert on every other loadout): brace_t is the open
+  -- shield window, brace_lock_t the recharge cooldown after it closes.
+  self.brace_t      = 0
+  self.brace_lock_t = 0
 
   if self.flippers then
     local sig          = self.flipper_sig or {}
@@ -169,6 +177,29 @@ function Paddle:flip_launch(side)
                                        (h.charge_dmg_mult or 1)*BAL('globals.flipper_charge_step', 1.12))
           h.spring:pull(0.35)
           spawn_bounce_sparks(arena.effects, h.x, h.y, ang, h.color)
+          -- Pinball RAM: every successful flip on this ball raises both its
+          -- chance to enter RAM mode and how many blocks a RAM smashes.
+          -- pb_flip_hits stacks PER BALL; a drain resets it (pinball_serve).
+          -- Flipping a ball that is ALREADY ramming skips the roll: the RAM is
+          -- maintained and gains one stack (ram_stack).
+          h.pb_flip_hits = (h.pb_flip_hits or 0) + 1
+          if (h.ram_left or 0) > 0 and h.ram_stack then
+            h:ram_stack()
+          elseif h.ram_start then
+            local chance = math.min(BAL('signature.ram_chance_max', 0.65),
+                                    BAL('signature.ram_chance_base', 0.18)
+                                    + BAL('signature.ram_chance_step', 0.08)*(h.pb_flip_hits - 1))
+            if random:bool(chance*100) then
+              -- Block count grows with the flip streak AND the run level —
+              -- the paddle's ram smashes deeper as the run levels up.
+              local lvl_blocks = math.floor(((arena.level or 1) - 1)
+                                            /BAL('signature.ram_levels_per_block', 3))
+              local blocks = math.min(h:ram_cap(),
+                                      BAL('signature.ram_blocks_base', 2)
+                                      + math.floor((h.pb_flip_hits - 1)/2) + lvl_blocks)
+              h:ram_start(blocks)
+            end
+          end
           hit_any = true
         end
       end
@@ -194,6 +225,19 @@ function Paddle:update(dt)
     self.flip_r_t = math.max(0, (self.flip_r_t or 0) - dt)
     if input.aim_left.pressed  then self.flip_l_t = self.flip_window; self:flip_launch(-1) end
     if input.aim_right.pressed then self.flip_r_t = self.flip_window; self:flip_launch( 1) end
+  end
+
+  -- Aegis shield: tick the raised window down; when it closes the shield
+  -- drops into its recharge cooldown — hit or not — so raising it is a real
+  -- commitment, not something to mash.
+  if (self.brace_t or 0) > 0 then
+    self.brace_t = self.brace_t - dt
+    if self.brace_t <= 0 then
+      self.brace_lock_t = self.brace_lockout or 2.5
+      bounce1:play{volume = 0.2, pitch = 0.55}
+    end
+  elseif (self.brace_lock_t or 0) > 0 then
+    self.brace_lock_t = self.brace_lock_t - dt
   end
 
   -- A/D move horizontally; W/S move vertically inside the dodge band. Aim
@@ -257,6 +301,22 @@ function Paddle:update(dt)
 end
 
 
+-- Aegis shield: raise it for a sustained window (E / click, see
+-- BallPit:update). Anything turned while it's up is a parry — balls come off
+-- charged and piercing (on_ball_bounce), bullets flip gold and fly back
+-- (EnemyProjectile:reflect). When the window closes the shield recharges for
+-- parry_lockout seconds; ignored while already raised or recharging.
+function Paddle:start_brace()
+  if (self.brace_t or 0) > 0 or (self.brace_lock_t or 0) > 0 then return end
+  local arena = main.current
+  local sigt  = (arena and arena.run_mods and arena.run_mods.sig) or {}
+  self.brace_window  = sigt.parry_window or 0.6
+  self.brace_lockout = sigt.parry_lockout or 2.5
+  self.brace_t       = self.brace_window
+  pop1:play{volume = 0.3, pitch = 0.8}
+end
+
+
 function Paddle:draw()
   local s = self.hfx.hit.x
   local body_color = self.hfx.hit.f and fg[0] or self.color
@@ -309,10 +369,93 @@ function Paddle:draw()
     return
   end
 
+  if self.paddle_skin == 'aegis' then
+    self:draw_aegis_paddle(s, body_color)
+    return
+  end
+
   graphics.push(self.x, self.y, 0, s, 1/s)
     graphics.rectangle(self.x, self.y, self.w, self.h, 2, 2, body_color)
     graphics.rectangle(self.x, self.y - self.h/2, self.w, 1, nil, nil, fg[5])
   graphics.pop()
+end
+
+
+-- The Aegis paddle as an ancient Greek aspis seen edge-on: a bronze-faced
+-- slab with a raised central boss (omphalos), gold meander ticks along the
+-- face and a riveted rim. The parry states are readable at a glance:
+--   ready  -> warm bronze; the boss catch-light glints on a slow pulse
+--   braced -> the face flares gold and a flat blue aura arc — the shield
+--             itself — hangs above the paddle, dimming as the window closes
+--   locked -> the bronze dulls cold and a thin blue re-arm bar refills along
+--             the top across the recharge (full = shield ready again)
+function Paddle:draw_aegis_paddle(s, color)
+  local w, h    = self.w, self.h
+  local t       = love.timer.getTime()
+  local braced  = (self.brace_t or 0) > 0
+  local locked  = (self.brace_lock_t or 0) > 0
+  local k       = braced and math.clamp(self.brace_t/(self.brace_window or 0.6), 0, 1) or 0
+
+  -- Bronze face palette; dulled while locked out, gold-flared while braced.
+  local face  = Color(0.72, 0.54, 0.24, 1)
+  local belly = Color(0.48, 0.35, 0.16, 1)
+  local gold  = Color(1, 0.85, 0.35, 1)
+  if locked then
+    face  = Color(0.45, 0.36, 0.24, 1)
+    belly = Color(0.30, 0.24, 0.16, 1)
+  elseif braced then
+    face  = Color(0.95, 0.78, 0.30, 1)
+    belly = Color(0.72, 0.54, 0.20, 1)
+  end
+  if self.hfx.hit.f then face = fg[0] end
+
+  graphics.push(self.x, self.y, 0, s, 1/s)
+    -- Face slab, with the shield's curved belly falling into shadow below.
+    graphics.rectangle(self.x, self.y, w, h, 2, 2, face)
+    graphics.rectangle(self.x, self.y + h*0.25, w - 3, h*0.5, 1, 1, belly)
+    -- Hammered top rim.
+    graphics.rectangle(self.x, self.y - h/2, w, 1, nil, nil, braced and fg[5] or gold)
+    -- Meander (Greek-key) suggestion: evenly spaced gold ticks along the face.
+    local n = math.max(3, math.floor(w/10))
+    for i = 0, n - 1 do
+      local mx = self.x - w/2 + (i + 0.5)*(w/n)
+      graphics.rectangle(mx, self.y, 1.4, h*0.35, nil, nil, gold)
+    end
+    -- Rim rivets.
+    graphics.circle(self.x - w/2 + 2, self.y, 1.1, gold)
+    graphics.circle(self.x + w/2 - 2, self.y, 1.1, gold)
+    -- Central boss: a raised dome poking past the slab. Its catch-light
+    -- glints on a slow pulse while the shield is ready, so "parry is up" is
+    -- visible without extra chrome; it goes flat while locked out.
+    local glint = (not braced and not locked) and (0.6 + 0.4*math.sin(t*3)) or 1
+    local br    = h*0.95 + (braced and 1.2 or 0)
+    graphics.circle(self.x, self.y, br + 1.1, belly)
+    graphics.circle(self.x, self.y, br, braced and gold or face)
+    graphics.circle(self.x - br*0.3, self.y - br*0.35, br*0.32,
+                    Color(1, 0.92, 0.60, locked and 0.25 or 0.9*glint))
+  graphics.pop()
+
+  -- The raised shield: a flat blue aura arc floating above the paddle —
+  -- layered strokes (soft glow, body, bright inner edge) so it reads as an
+  -- energy barrier, dimming as the window runs out.
+  if braced then
+    local half = w/2 + 8
+    local sag  = 8                                -- crest height over the arc's endpoints
+    local R    = (half*half + sag*sag)/(2*sag)    -- circle through crest + endpoints
+    local cy   = self.y - h/2 - 4 - sag + R       -- its center sits far below the crest
+    local th   = math.asin(half/R)
+    local a1, a2 = -math.pi/2 - th, -math.pi/2 + th
+    graphics.arc('open', self.x, cy, R + 2.5, a1, a2, Color(0.45, 0.75, 1, 0.10 + 0.18*k), 5)
+    graphics.arc('open', self.x, cy, R,       a1, a2, Color(0.55, 0.80, 1, 0.30 + 0.45*k), 2)
+    graphics.arc('open', self.x, cy, R - 1.5, a1, a2, Color(0.85, 0.95, 1, 0.25 + 0.35*k), 1)
+  elseif locked then
+    -- Re-arm readout: refills left-to-right across the recharge.
+    local rk = 1 - math.clamp(self.brace_lock_t/(self.brace_lockout or 2.5), 0, 1)
+    if rk > 0 then
+      graphics.rectangle(self.x - w/2 + (w*rk)/2, self.y - h/2 - 3, w*rk, 1,
+                         nil, nil, Color(0.55, 0.80, 1, 0.5))
+    end
+  end
 end
 
 
@@ -341,12 +484,22 @@ function Paddle:draw_terrorist_paddle(s, color)
     graphics.rectangle(x, y - h/2, w, 1, nil, nil, color)
   graphics.pop()
 
-  -- Plunger-box detonator perched on top-centre.
-  local by = y - h/2 - 3.5
+  -- Plunger-box detonator hanging under the slab, handle pointing down. On an
+  -- E press (plunger_at, stamped by terror_manual_detonate) the plunger SLAMS
+  -- in -- knob against the box with a white pop, box jolting down -- then
+  -- eases back out over a beat as if re-priming, so the detonate press reads
+  -- on the paddle itself.
+  local pk = math.clamp(1 - (t - (self.plunger_at or -10))/0.35, 0, 1)
+  pk = pk*pk                                     -- ease-out: fast slam, slow re-prime
+  local by  = y + h/2 + 3.5 + pk*1.2
+  local ext = 3*(1 - 0.92*pk)                    -- stem extension: ~0 at the slam
   graphics.rectangle(x, by, 8, 4, 1, 1, Color(0.62, 0.12, 0.09, 1))
   graphics.rectangle(x, by, 8, 4, 1, 1, Color(1, 0.5, 0.4, 0.7), 1)
-  graphics.rectangle(x, by - 2.6, 2, 3, nil, nil, Color(0.25, 0.25, 0.25, 1))   -- plunger stem
-  graphics.circle(x, by - 4.2, 1.6, Color(0.85, 0.2, 0.15, 1))                  -- plunger knob
+  graphics.rectangle(x, by + 1.1 + ext/2, 2, ext + 1, nil, nil, Color(0.25, 0.25, 0.25, 1))  -- plunger stem
+  graphics.circle(x, by + 1.6 + ext, 1.6, Color(0.85, 0.2, 0.15, 1))                         -- plunger knob
+  if pk > 0.55 then                              -- press pop: brief white flash on the knob
+    graphics.circle(x, by + 1.6 + ext, 2.2, Color(1, 1, 1, (pk - 0.55)/0.45*0.8))
+  end
   -- Blinking "armed" light at the right end of the slab.
   local lit = math.sin(t*8) > 0
   graphics.circle(x + w/2 - 3, y - 0.5, 1.5, lit and Color(1, 0.35, 0.2, 1) or Color(0.4, 0.12, 0.1, 1))
@@ -605,12 +758,57 @@ function Paddle:draw_flipper(pivx, pivy, tipx, tipy, color)
 end
 
 
+-- UI preview of a paddle loadout using the REAL in-game draw path (Paddle:draw
+-- + the per-loadout skin painters above), so the shop cards show exactly what
+-- the player will pilot. Renders through a cached lightweight stub per paddle
+-- id -- no physics body, a faked hit-flash -- at the loadout's true in-game
+-- width (36 * Size stat). The Pinball rig gets a compact (60%) flipper pose
+-- that idly demo-flips on the shared frame clock.
+local paddle_preview_stubs = {}
+function Paddle.draw_preview(id, def, x, y)
+  local stub = paddle_preview_stubs[id]
+  if not stub then
+    local sig = def.sig or {}
+    stub = setmetatable({
+      w   = math.floor(36*(def.size or 1) + 0.5),
+      h   = 4,
+      hfx = {hit = {x = 1, f = false}},
+      -- Same signature -> skin map reset_run uses when it builds the real paddle.
+      paddle_skin = ({mitosis = 'mitosis', boomerang = 'boomerang', vampire = 'vampire',
+                      hive = 'hive', tesla = 'tesla', glacier = 'glacier',
+                      terrorist = 'terrorist', cannon = 'cannon', aegis = 'aegis'})[def.signature],
+    }, Paddle)
+    if def.signature == 'flippers' then
+      stub.flippers      = true
+      stub.flipper_gap   = (sig.gap or 14)*0.6
+      stub.flip_window   = sig.flip_window or 0.16
+      stub.flipper_len   = (sig.flipper_len or 34)*0.6
+      stub.flipper_thick = math.max(3, (sig.flipper_thick or 5) - 1)
+      stub.rest_tilt     = sig.rest_tilt or 0.30
+      stub.flip_up       = sig.flip_up or 0.62
+      stub.flip_l_t, stub.flip_r_t = 0, 0
+    end
+    paddle_preview_stubs[id] = stub
+  end
+  stub.x, stub.y = x, y
+  stub.color = _G[def.color_key][0]
+  if stub.flippers then
+    -- Idle demo flips: each bat kicks up on its own beat.
+    local t  = time or 0
+    local fw = stub.flip_window
+    stub.flip_l_t = (math.max(0, math.sin(t*1.6))^6)*fw
+    stub.flip_r_t = (math.max(0, math.sin(t*1.6 + math.pi))^6)*fw
+  end
+  stub:draw()
+end
+
+
 -- Called when a ball collides with the paddle. Tilts the reflection so the
 -- player can aim by hitting the ball with the edge of the paddle, and ramps
 -- the ball's speed multiplier so chained bounces feel rewarding.
--- Loadout signatures hook in here: Aegis wipes the streak instead of ramping,
--- Cannon launches charged balls into the mortar arc, Tesla/Hive fire their
--- per-bounce effects after the reflection.
+-- Loadout signatures hook in here: Aegis parries braced balls (and skips the
+-- ramp on soft blocks), Cannon launches charged balls into the mortar arc,
+-- Tesla/Hive fire their per-bounce effects after the reflection.
 function Paddle:on_ball_bounce(ball)
   self.hfx:use('hit', 0.18, 200, 10)
 
@@ -641,13 +839,29 @@ function Paddle:on_ball_bounce(ball)
   ball.boomerang_home = nil
 
   if sig == 'aegis' then
-    -- Aegis "hurts" balls: touching the paddle wipes the speed/charge streak.
-    -- You want balls living on the bottom wall, not on you.
-    ball.speed_mult      = 1.0
-    ball.charge_dmg_mult = 1.0
-    ball.bounces         = 0
-    ball.spring:pull(0.3)
-    bounce1:play{volume = 0.35, pitch = 0.7}
+    if (self.brace_t or 0) > 0 then
+      -- PERFECT PARRY: a ball turned by the raised shield comes off charged —
+      -- its next few brick contacts hit for parry_dmg_mult and punch straight
+      -- through (see BallHero:apply_parry / on_brick_hit) — and gets shoved
+      -- out fast.
+      local sigt = (mods and mods.sig) or {}
+      ball:apply_parry(sigt.parry_hits or 4, sigt.parry_dmg_mult or 2.5)
+      ball.speed_mult = math.min(ball.speed_mult_max or 4,
+                                 math.max(ball.speed_mult or 1, sigt.parry_speed_mult or 1.6))
+      -- Success juice: a gold ring snaps out of the point of contact so the
+      -- parry itself (not just its aftermath) is visible.
+      if arena then
+        TelegraphRing{group = arena.effects, x = ball.x, y = ball.y, radius = 16,
+                      color = Color(1, 0.85, 0.35, 1), duration = 0.25}
+      end
+      buff1:play{volume = 0.4, pitch = random:float(1.15, 1.3)}
+      camera:shake(2, 0.12, 90)
+    else
+      -- Soft block: the resting shield just returns the ball — no speed ramp,
+      -- no wipe. The loadout's damage budget lives in the parry window.
+      ball.spring:pull(0.2)
+      bounce1:play{volume = 0.3, pitch = 0.75}
+    end
   elseif sig == 'glacier' then
     -- Ice rink: the air-hockey mallet COOLS the puck — touching it zeroes the
     -- glide charge, so its built-up speed + damage bleed back to base. The

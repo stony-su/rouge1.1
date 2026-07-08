@@ -256,7 +256,7 @@ function FrostArea:chill()
       if math.distance(self.x, self.y, o.x, o.y) <= self.rs then
         hit_any = true
         if o.apply_slow   then o:apply_slow(sf, self.slow_dur) end
-        if o.take_damage  then o:take_damage(dmg, self.color, true) end
+        if o.take_damage  then o:take_damage(dmg, self.color, true, 'cryomancer') end
         if random:bool(40) then
           SmokePuff{group = arena.effects, x = o.x + random:float(-4, 4), y = o.y + random:float(-4, 4),
                     color = Color(0.72, 0.86, 1, 1), rs = random:float(0.8, 1.6), alpha = 0.7,
@@ -352,7 +352,7 @@ function VoidPool:pool_tick()
     if not o.dead and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
       if math.distance(self.x, self.y, o.x, o.y) <= self.rs then
         hit_any = true
-        if o.take_damage then o:take_damage(self.dmg, self.color, true) end
+        if o.take_damage then o:take_damage(self.dmg, self.color, true, 'witch') end
         if random:bool(22) then
           SmokePuff{group = arena.effects, x = o.x + random:float(-4, 4), y = o.y + random:float(-4, 4),
                     color = Color(self.color.r, self.color.g*0.5, self.color.b, 1), rs = random:float(0.8, 1.5),
@@ -369,7 +369,7 @@ function VoidPool:pool_shoot()
   local target = arena:get_nearest_brick_within(self.x, self.y, 180)
   if not target then return end
   local r = math.atan2(target.y - self.y, target.x - self.x)
-  Projectile{group = arena.main, x = self.x, y = self.y, r = r, type = 'knife',
+  Projectile{group = arena.main, x = self.x, y = self.y, r = r, type = 'knife', source = 'witch',
              dmg = self.shoot_dmg, speed = 230, color = self.color, chain = 1}
   _G[random:table{'scout1', 'scout2'}]:play{pitch = random:float(0.95, 1.05), volume = 0.3}
 end
@@ -452,7 +452,7 @@ function PsyWell:expire_burst()
     local done = {}
     for _, o in ipairs(arena.main.objects) do
       if o:is(Brick) and not o.dead and math.distance(self.x, self.y, o.x, o.y) <= self.rs then
-        if o.take_damage then o:take_damage(self.dmg, self.color) end
+        if o.take_damage then o:take_damage(self.dmg, self.color, nil, 'psykino') end
         if o.swarm and not done[o.swarm] then
           done[o.swarm] = true
           o.swarm:apply_knockback(28, math.atan2(o.y - self.y, o.x - self.x))   -- shove outward
@@ -622,7 +622,7 @@ function ReactorBlast:detonate()
   self.detonated = true
   local arena = main.current
   if not arena then return end
-  arena:do_splash(self.x, self.y, self.radius, self.dmg, self.color)
+  arena:do_splash(self.x, self.y, self.radius, self.dmg, self.color, 'bomber')
   -- Plasma debris + smoke spray on top of the splash.
   spawn_burst(arena.effects, self.x, self.y, self.color, 14, 90, 240)
   spawn_burst(arena.effects, self.x, self.y, Color(yellow[0].r, yellow[0].g, yellow[0].b, 1), 8, 60, 180)
@@ -642,7 +642,7 @@ function ReactorBlast:detonate()
                             self.dmg*BAL('effects.reactor_aftershock_dmg_mult', 0.55), self.color
     self.t:after(0.18, function()
       if arena.main and arena.main.world then
-        arena:do_splash(x, y, r, d, col)
+        arena:do_splash(x, y, r, d, col, 'bomber')
         camera:shake(3, 0.2, 120)
         explosion1:play{volume = 0.35, pitch = random:float(0.95, 1.1)}
       end
@@ -805,7 +805,7 @@ function AllyTurret:fire_burst()
       self.aim_a   = r
       self.flash_t = 0.1
       local mx, my = self.x + math.cos(r)*bl, self.y + math.sin(r)*bl
-      Projectile{group = arena.main, x = mx, y = my, r = r, type = 'arrow',
+      Projectile{group = arena.main, x = mx, y = my, r = r, type = 'arrow', source = 'engineer',
                  dmg = self.dmg, speed = self.shot_speed, color = self.color, pierce = 1}
       spawn_burst(arena.effects, mx, my, self.color, 2, 40, 90)
       shoot1:play{volume = 0.12, pitch = random:float(1.0, 1.15)}
@@ -1043,6 +1043,9 @@ function LightningArc:init(args)
   self.offset   = self.offset or 9
   self.alpha    = 1
   self:generate()
+  -- Optional restrike: re-roll the jag a few times over the bolt's life so it
+  -- flickers like a real strike (the wizard's bounce-zap chain uses this).
+  if self.flicker then self.t:every(0.05, function() self:generate() end) end
   self.t:tween(self.duration, self, {alpha = 0, w = math.max(1, self.w*0.4)}, math.linear,
     function() self.dead = true end)
   -- A spark at each endpoint so the bolt reads as landing on something.
@@ -1190,7 +1193,7 @@ function MortarShell:land()
   self.exploded = true
   local arena = main.current
   if arena then
-    arena:do_splash(self.tx, self.ty, self.blast_radius, self.dmg, self.color)
+    arena:do_splash(self.tx, self.ty, self.blast_radius, self.dmg, self.color, 'cannoneer')
     explosion1:play{volume = 0.5, pitch = random:float(0.9, 1.0)}
     for _ = 1, 6 do
       SmokePuff{group = self.group, x = self.tx + random:float(-self.blast_radius*0.4, self.blast_radius*0.4),
@@ -1208,7 +1211,7 @@ function MortarShell:land()
           local a = main.current
           if not (a and a.world) then return end
           a:do_splash(bx, by, r*BAL('effects.mortar_cluster_radius_mult', 0.7),
-                      dmg*BAL('effects.mortar_cluster_dmg_mult', 0.5), col)
+                      dmg*BAL('effects.mortar_cluster_dmg_mult', 0.5), col, 'cannoneer')
           explosion1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
         end)
       end
@@ -1315,7 +1318,7 @@ function ConsecratedGround:update(dt)
             local rel = (math.atan2(o.y - self.y, o.x - self.x) - self.spin_a) % sector
             if rel > sector/2 then rel = rel - sector end
             if math.abs(rel) <= 0.30 then
-              o:take_damage(slice_dmg, red[0], true)
+              o:take_damage(slice_dmg, red[0], true, 'cleric')
               self.slice_cd[o.id] = 0.45
               spawn_burst(arena.effects, o.x, o.y, red[0], 3, 60, 150)
             end
@@ -1336,7 +1339,7 @@ function ConsecratedGround:update(dt)
         if not o.dead and o.take_damage
         and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
           if math.distance(self.x, self.y, o.x, o.y) <= self.rs then
-            o:take_damage(tick, self.color, true)
+            o:take_damage(tick, self.color, true, 'cleric')
             if random:bool(8) then
               SporeMote{group = arena.effects, x = o.x + random:float(-4, 4), y = o.y,
                         color = self.color, vx = random:float(-18, 18), vy = random:float(-26, -6),
@@ -1678,7 +1681,7 @@ function CleaveArea:init(args)
     local total = self.dmg*(1 + BAL('effects.cleave_per_target_bonus', 0.15)*#targets)
     if self.level >= 3 then total = total*BAL('effects.cleave_lvl3_mult', 2) end
     for _, o in ipairs(targets) do
-      o:take_damage(total, self.color)
+      o:take_damage(total, self.color, nil, 'swordsman')
       HitParticle{group = self.group, x = o.x, y = o.y, color = self.color}
       HitParticle{group = self.group, x = o.x, y = o.y, color = o.color}
     end
@@ -1768,7 +1771,7 @@ function HexSlamArea:init(args)
     local total = self.dmg*(1 + BAL('effects.hexslam_per_target_bonus', 0.15)*#targets)
     if self.level >= 3 then total = total*BAL('effects.hexslam_lvl3_mult', 2) end
     for _, o in ipairs(targets) do
-      o:take_damage(total, self.color)
+      o:take_damage(total, self.color, nil, 'barbarian')
       HitParticle{group = self.group, x = o.x, y = o.y, color = self.color}
       HitParticle{group = self.group, x = o.x, y = o.y, color = o.color}
     end
@@ -1869,7 +1872,7 @@ function EruptionArea:init(args)
         local lx =  dx*cos_r + dy*sin_r
         local ly = -dx*sin_r + dy*cos_r
         if math.abs(lx) <= half and math.abs(ly) <= half then
-          o:take_damage(self.dmg, self.color)
+          o:take_damage(self.dmg, self.color, nil, 'vulcanist')
           HitParticle{group = self.group, x = o.x, y = o.y, color = self.color}
           HitParticle{group = self.group, x = o.x, y = o.y, color = o.color}
         end

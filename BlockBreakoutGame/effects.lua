@@ -1043,6 +1043,9 @@ function LightningArc:init(args)
   self.offset   = self.offset or 9
   self.alpha    = 1
   self:generate()
+  -- Optional restrike: re-roll the jag a few times over the bolt's life so it
+  -- flickers like a real strike (the wizard's bounce-zap chain uses this).
+  if self.flicker then self.t:every(0.05, function() self:generate() end) end
   self.t:tween(self.duration, self, {alpha = 0, w = math.max(1, self.w*0.4)}, math.linear,
     function() self.dead = true end)
   -- A spark at each endpoint so the bolt reads as landing on something.

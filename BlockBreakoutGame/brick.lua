@@ -101,9 +101,13 @@ function Brick:init(args)
   self.h = BRICK_H + (self.rows - 1) * CELL_H
 
   -- HP and XP scale linearly with cell count — bigger bricks are tougher and
-  -- more rewarding in proportion to the area they cover.
+  -- more rewarding in proportion to the area they cover. hp_mult re-anchors
+  -- the tuning to the EXPECTED combo operating point (~A rank with modest
+  -- bounce bonus ≈ 2.5x effective damage) instead of the D-rank baseline the
+  -- VARIANTS numbers were written against — without it, a mid-rank player
+  -- melts everything. THE playtest knob; live-tunable via balance files.
   self.cell_count = n_cells
-  self.max_hp     = v.hp * (1 + 0.2*(main.current.wave or 1)) * n_cells
+  self.max_hp     = v.hp * BAL('enemies.hp_mult', 1.5) * (1 + 0.2*(main.current.wave or 1)) * n_cells
   self.hp         = self.max_hp
   self.xp_value   = v.xp * n_cells
   self.color      = _G[v.color][0]
@@ -243,6 +247,17 @@ function Brick:hold_fire()
   local arena = main.current
   if not arena or not arena.paddle then return false end
   if arena.frozen then return true end
+  -- Global live-bullet cap: a packed late-wave field can hold dozens of
+  -- ranged bricks, so once this many enemy shots are in flight every further
+  -- cast holds fire until some despawn — the screen stays readable no matter
+  -- how many shooters are alive.
+  local cap, shots = BAL('enemies.max_live_shots', 20), 0
+  for _, o in ipairs(arena.main.objects) do
+    if not o.dead and o:is(EnemyProjectile) then
+      shots = shots + 1
+      if shots >= cap then return true end
+    end
+  end
   return (arena.paddle.y - self.y) < RANGED_HOLD_FIRE_DIST
 end
 
@@ -415,13 +430,12 @@ function Brick:cast_arc_lob()
       local angle = math.atan2(ly - sy, lx - sx)
       -- Arc lobber: slow heavy homing lob. Slow enough that the homing curve
       -- reads visually as a tracking threat rather than an instant hit. No
-      -- `life` timer -- it homes until it hits the paddle or curves past it and
-      -- off a wall (off-screen cleanup in EnemyProjectile:update); the capped
-      -- turn rate + the paddle being pinned to the bottom guarantee it exits
-      -- rather than vanishing in mid-air or orbiting forever.
+      -- `life` timer -- once its homing window runs dry (EnemyProjectile's
+      -- homing_time decay) it flies straight and exits via the off-screen
+      -- cleanup, so it can't orbit the paddle forever.
       EnemyProjectile{group = arena.main, x = sx, y = sy, color = yellow[0],
                       kind = 'bomb', angle = angle, speed = 55, dmg = 2,
-                      homing = true, homing_turn = 1.2}
+                      homing = true, homing_turn = 0.8}
     end
   end)
 end
@@ -846,9 +860,10 @@ function Brick:on_ball_contact(ball)
   -- then layer on the per-ball bounce multiplier and the arena-wide combo
   -- multiplier. With both at max this gives ~8.8x — big payoff for keeping
   -- a single ball alive through a chain at high rank. terror_other_mult guts
-  -- contact damage on the Terrorist paddle (its blast is the real damage); nil
-  -- = 1 for every other ball.
-  local dmg = ball.dmg*(ball.charge_dmg_mult or 1)*(ball.terror_other_mult or 1)
+  -- contact damage on the Terrorist paddle (its blast is the real damage);
+  -- parry_dmg_mult is the Aegis perfect-parry payload (spent per contact in
+  -- BallHero:on_brick_hit); both are nil = 1 for every other ball.
+  local dmg = ball.dmg*(ball.charge_dmg_mult or 1)*(ball.terror_other_mult or 1)*(ball.parry_dmg_mult or 1)
   local arena = main.current
   if arena and arena.combo then
     dmg = dmg * arena:bounce_dmg_mult(ball.bounces or 0) * arena:combo_mult()

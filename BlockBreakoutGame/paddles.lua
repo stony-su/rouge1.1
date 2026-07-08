@@ -8,7 +8,7 @@
 --     the engine auto-loads `state` at boot and saves it on quit; we save
 --     explicitly on death and on every shop transaction too,
 --   * the arena-side signature helpers (mitosis clones, hive maggots, tesla
---     zaps, phantom blink, the cannon's falloff splash, aegis wall setup),
+--     zaps, phantom blink, the cannon's falloff splash, aegis brace reset),
 --   * the shop screen that replaces the plain game-over overlay. The shop is
 --     also the paddle-select screen: click an unlocked paddle to equip it.
 --
@@ -23,6 +23,24 @@ PADDLES = {}
 -- a flat 14 is slower for the first few levels and dramatically faster from
 -- ~level 6 on — "slow opener, out-level hard late".
 PADDLES.XP_FLAT = 14
+
+-- Positional unlock pricing: the Nth paddle you BUY costs the Nth entry
+-- here, regardless of WHICH paddle it is — unlock in any order you like
+-- (boomerang first, then cannon, then pinball...), each successive unlock
+-- just costs more. The per-def `price` fields below are no longer read.
+PADDLES.PRICE_LADDER = {100, 250, 500, 750, 1000, 1500, 2500, 3000, 4000, 5000}
+
+-- Cost of the player's next unlock: count the PAID paddles already owned
+-- (the free Standard doesn't count) and index the ladder. Past the ladder's
+-- end (can't happen — it covers every paid paddle) the last entry repeats.
+function PADDLES.next_price()
+  PADDLES.ensure_state()
+  local owned = 0
+  for id in pairs(state.paddles_owned or {}) do
+    if id ~= 'standard' then owned = owned + 1 end
+  end
+  return PADDLES.PRICE_LADDER[math.min(owned + 1, #PADDLES.PRICE_LADDER)]
+end
 
 PADDLES.order = {
   'standard', 'pinball', 'aegis', 'mitosis', 'hive', 'vampire', 'boomerang',
@@ -65,9 +83,11 @@ PADDLES.defs = {
     size = 1.4, move = 0.6, ball = 0.7, charge = 0.2, aim = 0.5, dmg = 0.7,
     xp = 0.9, combo = 0.6, hp = 7, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'cleric', 'cleric'},
-    signature = 'aegis', sig = {reflect_dmg = 20},
-    blurb = 'The pit is closed: balls bounce off a bottom wall forever.',
-    sig_blurb = 'parries bullets back; touching the paddle wipes a ball',
+    signature = 'aegis', sig = {reflect_dmg = 60, parry_window = 0.6, parry_lockout = 2.5,
+                                parry_hits = 4, parry_dmg_mult = 2.5, parry_speed_mult = 1.6,
+                                parry_combo = 25},
+    blurb = 'A shield that answers: raise it at the right moment to parry balls and bullets.',
+    sig_blurb = 'E/click raises the shield; parried balls pierce and hit harder, bullets flip gold and fly back',
   },
   mitosis = {
     id = 'mitosis', name = 'Mitosis', price = 500, color_key = 'green',
@@ -126,7 +146,7 @@ PADDLES.defs = {
     sig_blurb = 'charge the binary; strongest right after a fusion',
   },
   tesla = {
-    id = 'tesla', name = 'Tesla', price = 4500, color_key = 'blue',
+    id = 'tesla', name = 'Tesla', price = 3000, color_key = 'blue',
     size = 1.0, move = 1.0, ball = 0.8, charge = 0.8, aim = 0.9, dmg = 1.4,
     xp = 1.0, combo = 1.1, hp = 4, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'wizard', 'wizard', 'wizard', 'wizard'},
@@ -135,7 +155,7 @@ PADDLES.defs = {
     sig_blurb = 'damage scales with ball count',
   },
   terrorist = {
-    id = 'terrorist', name = 'Terrorist', price = 6500, color_key = 'red',
+    id = 'terrorist', name = 'Terrorist', price = 4000, color_key = 'red',
     size = 1.0, move = 1.0, ball = 1.1, charge = 1.0, aim = 1.0, dmg = 1.6,
     xp = 1.0, combo = 1.0, hp = 3, hp_mode = 'hearts', xp_mode = 'flat',
     start_balls = {'bomber', 'bomber', 'bomber', 'bomber'},
@@ -152,7 +172,7 @@ PADDLES.defs = {
     sig_blurb = 'spent balls are gone; level-ups auto-arm a new random ball',
   },
   cannon = {
-    id = 'cannon', name = 'Cannon', price = 7500, color_key = 'orange',
+    id = 'cannon', name = 'Cannon', price = 5000, color_key = 'orange',
     size = 0.9, move = 1.0, ball = 0.6, charge = 1.7, aim = 0.9, dmg = 1.5,
     xp = 1.0, combo = 1.1, hp = 4, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'cannoneer', 'cannoneer'},
@@ -224,15 +244,15 @@ function BallPit:setup_signature()
   self.tesla_cd         = false
   self.phantom_anchor   = nil
   self.phantom_cd_ready = true
-  self.aegis_wall       = nil
   self.twin_fx          = nil
 
   if sigid == 'aegis' then
-    -- Close the pit. A separate field from floor_wall so the floor powerup's
-    -- wave-end teardown in advance_wave never removes it.
-    local thick = 6
-    self.aegis_wall = self:spawn_wall((self.x1 + self.x2)/2, self.y2 + thick/2 + 2,
-                                      self.x2 - self.x1 + thick, thick)
+    -- Perfect Parry: the state (brace_t window / brace_lock_t whiff lockout)
+    -- lives on the paddle — ticked in Paddle:update, raised by E/click via
+    -- BallPit:update. The pit is OPEN (the old bottom wall is gone); missed
+    -- balls recall like any other loadout.
+    self.paddle.brace_t      = 0
+    self.paddle.brace_lock_t = 0
   elseif sigid == 'mitosis' then
     -- Regrow: a drafted hero type with zero live balls comes back on its own,
     -- so the player never permanently loses a variant.
@@ -899,20 +919,43 @@ function TwinNova:draw()
 end
 
 
--- ----- The post-death paddle shop -----
+-- ----- The post-death screens: run report + paddle shop -----
 --
--- The existing game_over flag doubles as "shop open": trigger_game_over banks
--- the wallet + selects the equipped card, BallPit:update routes input here
--- while game_over is set, and the draw_game_over override below renders the
--- shop instead of the old plain overlay. R still restarts (with whatever
--- paddle is equipped).
+-- The game_over flag routes BallPit:update into update_shop and draw into the
+-- draw_game_over override below, which now hosts TWO screens picked by
+-- self.go_screen (set to 'over' by trigger_game_over):
+--   'over'  the run report -- headline, stats panel, RESTART / SHOP buttons.
+--   'shop'  the paddle shop -- card grid + detail panel, BACK returns to the
+--           report. Cards render the loadout's REAL paddle body via
+--           Paddle.draw_preview. R still restarts from either screen.
 
 local SHOP_COLS   = 4
 local CARD_W      = 104
 local CARD_H      = 78
 local CARD_GAP_X  = 112
 local CARD_GAP_Y  = 88
-local GRID_TOP    = 150
+local GRID_TOP    = 130
+
+-- Run-report buttons + the shop's BACK button.
+local GO_BUTTONS = {
+  {id = 'restart', label = 'RESTART'},
+  {id = 'shop',    label = 'SHOP'},
+}
+local GO_BTN_W, GO_BTN_H = 160, 26
+
+local function go_button_pos(i)
+  return gw/2, gh/2 + 84 + (i - 1)*36
+end
+
+local function shop_back_rect()
+  return 40, 26, 56, 18
+end
+
+local function draw_menu_button(bx, by, w, h, label, selected)
+  graphics.rectangle(bx, by, w, h, 4, 4, selected and bg[1] or bg[-1])
+  graphics.rectangle(bx, by, w, h, 4, 4, selected and yellow[0] or fg_transparent_weak, selected and 2 or 1)
+  graphics.print_centered(label, pixul_font, bx, by - 4, 0, 1, 1, 0, 0, selected and yellow[0] or fg[0])
+end
 
 function BallPit:shop_card_pos(i)
   local total = #PADDLES.order
@@ -941,7 +984,53 @@ end
 
 function BallPit:update_shop(dt)
   PADDLES.ensure_state()
+  self.go_screen     = self.go_screen or 'over'
   self.shop_selected = self.shop_selected or 1
+
+  -- Run report screen: RESTART / SHOP buttons (mouse hover + click, or
+  -- up/down + enter).
+  if self.go_screen == 'over' then
+    self.go_selected = self.go_selected or 1
+    local hovered = nil
+    for i = 1, #GO_BUTTONS do
+      local bx, by = go_button_pos(i)
+      if math.abs(mouse.x - bx) <= GO_BTN_W/2 and math.abs(mouse.y - by) <= GO_BTN_H/2 then hovered = i end
+    end
+    if hovered and hovered ~= self.go_selected then
+      self.go_selected = hovered
+      ui_switch1:play{volume = 0.25}
+    end
+    if input.move_up.pressed or input.aim_left.pressed then
+      self.go_selected = math.max(1, self.go_selected - 1)
+      ui_switch1:play{volume = 0.3}
+    end
+    if input.move_down.pressed or input.aim_right.pressed then
+      self.go_selected = math.min(#GO_BUTTONS, self.go_selected + 1)
+      ui_switch1:play{volume = 0.3}
+    end
+    if (hovered and input.click.pressed) or input.confirm.pressed then
+      local id = GO_BUTTONS[self.go_selected].id
+      if id == 'restart' then
+        confirm1:play{volume = 0.4}
+        self:reset_run()
+      else
+        self.go_screen = 'shop'
+        ui_switch1:play{volume = 0.35}
+      end
+    end
+    return
+  end
+
+  -- Shop screen. The BACK button returns to the run report; eat the click so
+  -- it can't also land on a card underneath.
+  local bx, by, bw, bh = shop_back_rect()
+  if input.click.pressed
+  and math.abs(mouse.x - bx) <= bw/2 and math.abs(mouse.y - by) <= bh/2 then
+    self.go_screen = 'over'
+    ui_switch1:play{volume = 0.3}
+    input.click.pressed = false
+    return
+  end
 
   -- Mouse: hover selects, click buys/equips.
   local hovered = self:shop_card_under_mouse()
@@ -993,8 +1082,8 @@ function BallPit:shop_activate(i)
       system.save_state()
       confirm1:play{volume = 0.4}
     end
-  elseif state.wallet >= def.price then
-    state.wallet = state.wallet - def.price
+  elseif state.wallet >= PADDLES.next_price() then
+    state.wallet = state.wallet - PADDLES.next_price()
     state.paddles_owned[id] = true
     state.selected_paddle = id
     system.save_state()
@@ -1011,23 +1100,80 @@ end
 
 
 -- Replaces the original plain game-over overlay (this file is required after
--- ballpit.lua, so this definition wins).
+-- ballpit.lua, so this definition wins). Routes between the run report and
+-- the paddle shop (see the section comment above).
 function BallPit:draw_game_over()
   PADDLES.ensure_state()
+  if self.go_screen == 'shop' then
+    self:draw_shop_screen()
+  else
+    self:draw_game_over_screen()
+  end
+end
+
+
+-- The run report: dark backdrop, ember-pulsing headline, a stats panel for
+-- the run that just ended, and the RESTART / SHOP buttons.
+function BallPit:draw_game_over_screen()
+  local now = love.timer.getTime()
+  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, Color(0, 0, 0, 0.82))
+
+  -- Headline with a slow ember pulse, over a thin accent rule.
+  local pulse = 0.5 + 0.5*math.sin(now*1.6)
+  graphics.print_centered('GAME OVER', fat_font, gw/2, gh/2 - 150, 0, 1.5, 1.5, 0, 0,
+                          Color(red[0].r, red[0].g*(0.6 + 0.3*pulse), red[0].b*(0.6 + 0.3*pulse), 1))
+  graphics.rectangle(gw/2, gh/2 - 126, 200, 1, nil, nil, Color(red[0].r, red[0].g, red[0].b, 0.5))
+  graphics.print_centered('the swarm broke through on wave ' .. self.wave,
+                          pixul_font, gw/2, gh/2 - 112, 0, 0.95, 0.95, 0, 0, fg_alt[0])
+
+  -- Run report panel: label column left, value column right.
+  local pw, ph   = 260, 132
+  local pcx, pcy = gw/2, gh/2 - 20
+  graphics.rectangle(pcx, pcy, pw, ph, 4, 4, bg[-1])
+  graphics.rectangle(pcx, pcy, pw, ph, 4, 4, fg_transparent_weak, 1)
+  local rt   = self.run_time or 0
+  local rows = {
+    {'WAVE',          tostring(self.wave)},
+    {'SCORE',         tostring(self.score)},
+    {'KILLS',         tostring(self.run_kills or 0)},
+    {'LEVEL',         tostring(self.level or 1)},
+    {'TIME',          string.format('%d:%02d', math.floor(rt/60), math.floor(rt % 60))},
+    {'BLOCKS EARNED', '+' .. (self.run_kills or 0)},
+  }
+  local ry = pcy - ph/2 + 14
+  for i, r in ipairs(rows) do
+    local vcol = (i == #rows) and yellow[0] or fg[0]
+    graphics.print(r[1], pixul_font, pcx - pw/2 + 14, ry - 4, 0, 1, 1, 0, 0, fg_alt[0])
+    local vw = pixul_font:get_text_width(r[2])
+    graphics.print(r[2], pixul_font, pcx + pw/2 - 14 - vw, ry - 4, 0, 1, 1, 0, 0, vcol)
+    ry = ry + 19
+  end
+
+  -- RESTART / SHOP buttons.
+  for i, b in ipairs(GO_BUTTONS) do
+    local bx, by = go_button_pos(i)
+    draw_menu_button(bx, by, GO_BTN_W, GO_BTN_H, b.label, (self.go_selected or 1) == i)
+  end
+end
+
+
+-- The paddle shop: wallet + card grid + detail panel, with a BACK button
+-- returning to the run report.
+function BallPit:draw_shop_screen()
   local now = love.timer.getTime()
 
-  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, Color(0, 0, 0, 0.78))
-  graphics.print_centered('GAME OVER', fat_font, gw/2, 26, 0, 1.1, 1.1, 0, 0, red[0])
-  graphics.print_centered('Wave ' .. self.wave .. '   Score ' .. self.score ..
-                          '   Kills ' .. (self.run_kills or 0),
-                          pixul_font, gw/2, 48, 0, 1, 1, 0, 0, fg[0])
+  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, Color(0, 0, 0, 0.82))
+  graphics.print_centered('PADDLE SHOP', fat_font, gw/2, 30, 0, 1.0, 1.0, 0, 0, yellow[0])
 
   local denied = self.shop_denied_t and (now - self.shop_denied_t) < 0.35
   local wcol   = denied and red[0] or yellow[0]
   graphics.print_centered('BLOCKS  ' .. math.floor(state.wallet or 0),
-                          fat_font, gw/2, 72, 0, 0.9, 0.9, 0, 0, wcol)
-  graphics.print_centered('hover + click (or arrows + enter) to buy / equip   —   R to restart',
-                          pixul_font, gw/2, 94, 0, 0.9, 0.9, 0, 0, fg_alt[0])
+                          fat_font, gw/2, 58, 0, 0.8, 0.8, 0, 0, wcol)
+
+  -- BACK button (top-left), hover-lit.
+  local bx, by, bw, bh = shop_back_rect()
+  local back_hover = math.abs(mouse.x - bx) <= bw/2 and math.abs(mouse.y - by) <= bh/2
+  draw_menu_button(bx, by, bw, bh, 'BACK', back_hover)
 
   for i, id in ipairs(PADDLES.order) do
     local def = PADDLES.get(id)
@@ -1051,27 +1197,10 @@ function BallPit:draw_game_over()
                          Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.7*(1 - k)), 2)
     end
 
-    -- Paddle glyph. Width tracks the Size stat so the cards preview the
-    -- hitbox; the Pinball Lobber draws its two tilted flippers instead.
+    -- Live paddle preview: the loadout's REAL in-game body (skin painters via
+    -- Paddle.draw_preview) at its true width, so the card IS the paddle.
     local gy = cy - 18
-    if def.signature == 'flippers' then
-      for side = -1, 1, 2 do
-        graphics.push(cx + side*9, gy, side*0.3)
-          graphics.rectangle(cx + side*9, gy, 13, 4, 1, 1, col)
-        graphics.pop()
-      end
-    elseif def.signature == 'twincast' then
-      -- Twin Cast preview: two orbiting twins joined by a fusion bond.
-      local sp = 11
-      graphics.line(cx - sp, gy, cx + sp, gy, Color(col.r, col.g, col.b, 0.6), 1)
-      graphics.circle(cx - sp, gy, 3, col)
-      graphics.circle(cx + sp, gy, 3, col)
-      graphics.circle(cx, gy, 2.5, fg[0])
-    else
-      local gw_card = math.clamp(26*def.size, 14, 38)
-      graphics.rectangle(cx, gy, gw_card, 5, 2, 2, col)
-      graphics.rectangle(cx, gy - 2.5, gw_card, 1, nil, nil, fg[5])
-    end
+    Paddle.draw_preview(id, def, cx, gy)
 
     graphics.print_centered(def.name, pixul_font, cx, cy + 2, 0, 0.9, 0.9, 0, 0, fg[0])
 
@@ -1080,14 +1209,15 @@ function BallPit:draw_game_over()
     elseif owned then
       graphics.print_centered('OWNED', pixul_font, cx, cy + 18, 0, 1, 1, 0, 0, green[0])
     else
-      local afford = (state.wallet or 0) >= def.price
+      -- Positional pricing: every locked card wears the NEXT unlock's cost.
+      local price  = PADDLES.next_price()
+      local afford = (state.wallet or 0) >= price
       local pcol = afford and fg[0] or Color(red[0].r, red[0].g, red[0].b, 0.7)
-      graphics.print_centered(def.price .. ' BLOCKS', pixul_font, cx, cy + 18, 0, 1, 1, 0, 0, pcol)
+      graphics.print_centered(price .. ' BLOCKS', pixul_font, cx, cy + 18, 0, 1, 1, 0, 0, pcol)
     end
 
-    if equipped or owned then
-      graphics.print_centered(equipped and 'press R to play' or 'click to equip',
-                              pixul_font, cx, cy + 30, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+    if owned and not equipped then
+      graphics.print_centered('click to equip', pixul_font, cx, cy + 30, 0, 0.8, 0.8, 0, 0, fg_alt[0])
     end
   end
 

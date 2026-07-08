@@ -87,7 +87,12 @@ function EnemyCritter:draw()
   graphics.circle(self.x, self.y, self.r_size*0.28*s*core_p, fg[5])
 end
 
-function EnemyCritter:take_damage(amount, color)
+function EnemyCritter:take_damage(amount, color, no_flash, source)
+  -- Admin damage tally (see BallPit:track_damage); overkill-clamped.
+  local arena = main.current
+  if arena and arena.track_damage then
+    arena:track_damage(source, math.min(amount, math.max(self.hp, 0)))
+  end
   self.hp = self.hp - amount
   self.hfx:use('hit', 0.25, 200, 10)
   spawn_burst(main.current.effects, self.x, self.y, color or self.color, 3, 40, 100)
@@ -133,8 +138,13 @@ function EnemyProjectile:init(args)
   self.angle        = self.angle or math.pi/2
   -- Optional homing: turns velocity vector toward the paddle at `homing_turn`
   -- rad/s. Used by arc-lobber variant and can be wired up by future enemies.
+  -- Tracking is a WINDOW, not forever: the turn rate decays to zero across
+  -- homing_time seconds (see update), so a dodged seeker overshoots and flies
+  -- straight instead of circling back to re-acquire endlessly.
   self.homing       = self.homing or false
-  self.homing_turn  = self.homing_turn or 1.5
+  self.homing_turn  = self.homing_turn or 1.0
+  self.homing_time  = self.homing_time or 3.0
+  self.homing_t     = 0
   -- Visual kind. Each ranged enemy type uses a distinct kind so the screen
   -- reads at a glance even when multiple attack patterns overlap. Default
   -- 'spike' preserves the original red 4-pointed shooter look.
@@ -199,18 +209,35 @@ function EnemyProjectile:update(dt)
   self:update_game_object(dt)
   local arena = main.current
 
-  -- Homing: smoothly rotate velocity toward the paddle. Capped turn rate so
-  -- the player can still dodge by moving — these aren't perfect trackers.
-  if self.homing and arena and arena.paddle then
-    local vx, vy = self:get_velocity()
-    local cur    = math.atan2(vy, vx)
-    local want   = math.atan2(arena.paddle.y - self.y, arena.paddle.x - self.x)
-    -- Wrap diff to [-π, π] so we always turn the short way around the circle.
-    local diff   = math.loop(want - cur, 2*math.pi)
-    if diff > math.pi then diff = diff - 2*math.pi end
-    local step   = math.clamp(diff, -self.homing_turn*dt, self.homing_turn*dt)
-    local new_a  = cur + step
-    self:set_velocity(math.cos(new_a)*self.speed, math.sin(new_a)*self.speed)
+  -- Homing: smoothly rotate velocity toward the target. Capped turn rate so
+  -- the player can still dodge by moving — these aren't perfect trackers —
+  -- and the tracking STRENGTH fades to zero over homing_time, so late in its
+  -- flight the shot commits to a straight line instead of endlessly curving
+  -- back onto the paddle. A REFLECTED (parried) shot hunts the other way:
+  -- its target is the nearest brick, or the boss when no bricks are up.
+  local home_x, home_y
+  if self.reflected then
+    local ht = arena and arena:get_nearest_brick(self.x, self.y)
+    if not ht and arena and arena.boss and not arena.boss.dead then ht = arena.boss end
+    if ht then home_x, home_y = ht.x, ht.y end
+  elseif arena and arena.paddle then
+    home_x, home_y = arena.paddle.x, arena.paddle.y
+  end
+  if self.homing and home_x then
+    self.homing_t = (self.homing_t or 0) + dt
+    local strength = 1 - math.clamp(self.homing_t/(self.homing_time or 3.0), 0, 1)
+    if strength > 0 then
+      local vx, vy = self:get_velocity()
+      local cur    = math.atan2(vy, vx)
+      local want   = math.atan2(home_y - self.y, home_x - self.x)
+      -- Wrap diff to [-π, π] so we always turn the short way around the circle.
+      local diff   = math.loop(want - cur, 2*math.pi)
+      if diff > math.pi then diff = diff - 2*math.pi end
+      local turn   = self.homing_turn*strength
+      local step   = math.clamp(diff, -turn*dt, turn*dt)
+      local new_a  = cur + step
+      self:set_velocity(math.cos(new_a)*self.speed, math.sin(new_a)*self.speed)
+    end
   end
 
   -- Off-arena cleanup. Original only killed on the bottom edge — angled
@@ -226,27 +253,26 @@ function EnemyProjectile:update(dt)
   local p_prev_y = self.y - p_vy*dt
   local p_ylo    = math.min(p_prev_y, self.y) - self.r_size
   local p_yhi    = math.max(p_prev_y, self.y) + self.r_size
-  if  math.abs(self.x - arena.paddle.x) < arena.paddle.w/2 + self.r_size
+  if  not self.reflected
+  and math.abs(self.x - arena.paddle.x) < arena.paddle.w/2 + self.r_size
   and p_yhi >= arena.paddle.y - arena.paddle.h/2
   and p_ylo <= arena.paddle.y + arena.paddle.h/2 then
-    local sig = arena.run_mods and arena.run_mods.signature
-    if sig == 'aegis' and not self.unbreakable then
-      -- Aegis loadout: the paddle PARRIES bullets — the shot dies and is
-      -- flipped into a friendly projectile aimed at the nearest brick.
+    local sig    = arena.run_mods and arena.run_mods.signature
+    local braced = sig == 'aegis' and arena.paddle and (arena.paddle.brace_t or 0) > 0
+    if braced and not self.unbreakable then
+      -- Aegis PERFECT PARRY: only a BRACED shield turns a shot (see
+      -- Paddle:start_brace) — THIS very bullet flips gold and flies back at
+      -- the swarm (see reflect below) instead of being swapped for a
+      -- stand-in arrow, and the parry refunds a slug of combo points. An
+      -- unbraced Aegis paddle eats bullets like any other loadout (below).
       -- Unbreakable boss bullets punch through (the boss stays honest).
-      local bx, by = self.x, self.y
-      spawn_burst(arena.effects, bx, by, blue2[0], 6, 70, 140)
-      buff1:play{volume = 0.3, pitch = random:float(1.2, 1.35)}
-      local t = arena:get_nearest_brick(bx, by)
-      local r = t and math.atan2(t.y - by, t.x - bx) or -math.pi/2
-      local reflect_dmg = (arena.run_mods.sig and arena.run_mods.sig.reflect_dmg) or 20
-      arena.t:after(0, function()
-        if arena.main and arena.main.world then
-          Projectile{group = arena.main, x = bx, y = by, r = r,
-                     type = 'arrow', dmg = reflect_dmg, speed = 260, color = blue2[0]}
-        end
-      end)
-      self.dead = true
+      local sigt = arena.run_mods.sig or {}
+      self:reflect(sigt.reflect_dmg or 60)
+      spawn_burst(arena.effects, self.x, self.y, self.color, 8, 90, 170)
+      buff1:play{volume = 0.35, pitch = random:float(1.25, 1.4)}
+      if arena.add_combo_points then
+        arena:add_combo_points(sigt.parry_combo or 25)
+      end
     else
       -- Hit the paddle directly. Admin godmode swallows the hp loss but still
       -- plays the impact feedback so the operator can see what would have hit.
@@ -262,6 +288,25 @@ function EnemyProjectile:update(dt)
     end
   end
 
+  -- Reflected (parried) bullet: it fights for the player now — burst on the
+  -- first brick it reaches. Manual proximity test because enemy shots never
+  -- collide with bricks at the Box2D level (they'd die at the muzzle
+  -- otherwise). Falls back to the boss so a parry still lands something
+  -- during the fight's breakable-bullet phases.
+  if self.reflected and not self.dead then
+    local hit = arena:get_nearest_brick_within(self.x, self.y, self.r_size + 10)
+    if not hit and arena.boss and not arena.boss.dead
+    and math.distance(self.x, self.y, arena.boss.x, arena.boss.y) < self.r_size + (arena.boss.r_size or 14) then
+      hit = arena.boss
+    end
+    if hit then
+      hit:take_damage(self.dmg, self.color, nil, 'parry')
+      spawn_burst(arena.effects, self.x, self.y, self.color, 8, 80, 160)
+      pop1:play{volume = 0.3, pitch = random:float(1.2, 1.35)}
+      self.dead = true
+    end
+  end
+
   -- Visual state: spin + sampled trail. The trail is what most reliably
   -- separates this from an XP orb at a glance — orbs sit still and pickups
   -- drift; a streaking line below the cursor reads as "incoming."
@@ -273,6 +318,32 @@ function EnemyProjectile:update(dt)
     if #self.trail > 8 then table.remove(self.trail) end
   end
 end
+
+-- Aegis PERFECT PARRY (the braced branch in update): flip THIS bullet to the
+-- player's side — molten gold, faster, and hunting the nearest brick (boss
+-- fallback). update branches on self.reflected for the homing target, the
+-- skipped paddle test and the brick-contact burst; the shape keeps drawing
+-- itself, just in gold, so the returned shot stays recognizable instead of
+-- shrinking into a stand-in pellet.
+function EnemyProjectile:reflect(dmg)
+  self.reflected   = true
+  self.color       = Color(1, 0.84, 0.25, 1)
+  self.dmg         = dmg or 60
+  self.speed       = math.max((self.speed or 60)*1.5, 300)
+  -- Fresh, harder tracking window than any enemy seeker gets: the return
+  -- trip is a reward, it should feel like it wants to land.
+  self.homing      = true
+  self.homing_turn = 5.0
+  self.homing_time = 2.5
+  self.homing_t    = 0
+  local arena = main.current
+  local t = arena and arena:get_nearest_brick(self.x, self.y)
+  if not t and arena and arena.boss and not arena.boss.dead then t = arena.boss end
+  local a = t and math.atan2(t.y - self.y, t.x - self.x) or -math.pi/2
+  self:set_velocity(math.cos(a)*self.speed, math.sin(a)*self.speed)
+  self.hfx:use('hit', 0.2, 200, 10)
+end
+
 
 -- Velocity-aligned facing angle, used by shapes that point along their
 -- travel direction (dart/triangle/bolt). Falls back to the initial fire
@@ -317,20 +388,29 @@ function EnemyProjectile:draw()
   -- whatever shape they are, so the player can tell at a glance which shots
   -- can't be blocked by a ball.
   if self.unbreakable then self:draw_armor() end
+  -- A reflected (parried) shot wears a thin gilded halo so the gold reads as
+  -- "ours now" even on shapes with busy bodies.
+  if self.reflected then
+    graphics.circle(self.x, self.y, self.r_size + 1.5, Color(1, 0.90, 0.50, 0.4), 1)
+  end
 end
 
 
 -- 'spike' (shooter, default): original red 4-pointed spike + red halo + red
 -- trail. Color is hardcoded red regardless of self.color so the projectile
--- always reads as "danger" and can never be confused for a colored XP gem.
+-- always reads as "danger" and can never be confused for a colored XP gem —
+-- EXCEPT a reflected (parried) spike, which flips to its gold self.color so
+-- it reads as "ours" on the return trip.
 function EnemyProjectile:draw_spike()
-  self:draw_trail(red[0])
+  local base = self.reflected and self.color or red[0]
+  self:draw_trail(base)
 
   local pulse = 1 + math.sin((time or 0)*9)*0.18
-  graphics.circle(self.x, self.y, (self.r_size + 2)*pulse, red_transparent_weak)
+  graphics.circle(self.x, self.y, (self.r_size + 2)*pulse,
+                  self.reflected and Color(base.r, base.g, base.b, 0.22) or red_transparent_weak)
 
   local s   = self.hfx.hit.x or 1
-  local col = self.hfx.hit.f and fg[0] or red[0]
+  local col = self.hfx.hit.f and fg[0] or base
   graphics.push(self.x, self.y, self.spin_t)
     graphics.rectangle(self.x, self.y, self.r_size*2.6*s, self.r_size*0.9*s, 0.6, 0.6, col)
     graphics.rectangle(self.x, self.y, self.r_size*0.9*s, self.r_size*2.6*s, 0.6, 0.6, col)
@@ -592,7 +672,7 @@ function AllyCritter:on_brick_contact(brick)
   if brick.on_ball_contact then
     brick:on_ball_contact(self)
   elseif brick.take_damage then
-    brick:take_damage(self.dmg, self.color)
+    brick:take_damage(self.dmg, self.color, nil, self.source or 'ally')
   end
   spawn_burst(main.current.effects, self.x, self.y, self.color, 4, 60, 110)
   self.dead = true
@@ -687,7 +767,7 @@ end
 function Locust:on_brick_contact(brick)
   if brick.dead or self.hit_ids[brick.id] then return end
   self.hit_ids[brick.id] = true
-  if brick.take_damage then brick:take_damage(self.dmg, self.color) end
+  if brick.take_damage then brick:take_damage(self.dmg, self.color, nil, (self.parent and self.parent.character) or 'infestor') end
   local killed = brick.dead or (brick.hp ~= nil and brick.hp <= 0)
   spawn_burst(main.current.effects, self.x, self.y, self.color, 3, 50, 100)
   self.hfx:use('hit', 0.2)
@@ -1047,7 +1127,7 @@ function Boss:attack_homing()
     shoot1:play{volume = 0.3, pitch = 0.9}
     for _, off in ipairs({-0.5, 0, 0.5}) do
       self:fire{kind = 'comet', angle = math.pi/2 + off, speed = 60, r_size = 3.4,
-                life = 7, homing = true, homing_turn = 0.85}
+                life = 7, homing = true, homing_turn = 0.55}
     end
   end)
 end
@@ -1187,7 +1267,7 @@ function Boss:update(dt)
   -- Burn DoT: same shape as Brick's burn handling (brick.lua:260).
   if self.burn_timer > 0 then
     self.burn_timer = self.burn_timer - dt
-    self:take_damage(self.burn_dps*dt, orange[0], true)
+    self:take_damage(self.burn_dps*dt, orange[0], true, 'burn')
     if random:bool(15) then
       HitParticle{
         group = main.current.effects,
@@ -1252,13 +1332,18 @@ function Boss:on_ball_contact(ball)
   -- the formation knockback path (boss is solo).
   if self.hp <= 0 then return end
   local dmg = ball.dmg*(ball.charge_dmg_mult or 1)
-  self:take_damage(dmg, ball.color)
+  self:take_damage(dmg, ball.color, nil, ball.source or ball.character)
 end
 
 
-function Boss:take_damage(amount, color, no_flash)
+function Boss:take_damage(amount, color, no_flash, source)
   if self.hp <= 0 then return end
   amount = amount * (self.curse_mult or 1)
+  -- Admin damage tally (see BallPit:track_damage); overkill-clamped.
+  local arena = main.current
+  if arena and arena.track_damage then
+    arena:track_damage(source, math.min(amount, self.hp))
+  end
   self.hp = self.hp - amount
   if not no_flash then
     self.hfx:use('hit', 0.25, 200, 10)

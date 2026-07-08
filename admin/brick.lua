@@ -101,9 +101,13 @@ function Brick:init(args)
   self.h = BRICK_H + (self.rows - 1) * CELL_H
 
   -- HP and XP scale linearly with cell count — bigger bricks are tougher and
-  -- more rewarding in proportion to the area they cover.
+  -- more rewarding in proportion to the area they cover. hp_mult re-anchors
+  -- the tuning to the EXPECTED combo operating point (~A rank with modest
+  -- bounce bonus ≈ 2.5x effective damage) instead of the D-rank baseline the
+  -- VARIANTS numbers were written against — without it, a mid-rank player
+  -- melts everything. THE playtest knob; live-tunable via balance files.
   self.cell_count = n_cells
-  self.max_hp     = v.hp * (1 + 0.2*(main.current.wave or 1)) * n_cells
+  self.max_hp     = v.hp * BAL('enemies.hp_mult', 1.5) * (1 + 0.2*(main.current.wave or 1)) * n_cells
   self.hp         = self.max_hp
   self.xp_value   = v.xp * n_cells
   self.color      = _G[v.color][0]
@@ -243,6 +247,17 @@ function Brick:hold_fire()
   local arena = main.current
   if not arena or not arena.paddle then return false end
   if arena.frozen then return true end
+  -- Global live-bullet cap: a packed late-wave field can hold dozens of
+  -- ranged bricks, so once this many enemy shots are in flight every further
+  -- cast holds fire until some despawn — the screen stays readable no matter
+  -- how many shooters are alive.
+  local cap, shots = BAL('enemies.max_live_shots', 20), 0
+  for _, o in ipairs(arena.main.objects) do
+    if not o.dead and o:is(EnemyProjectile) then
+      shots = shots + 1
+      if shots >= cap then return true end
+    end
+  end
   return (arena.paddle.y - self.y) < RANGED_HOLD_FIRE_DIST
 end
 
@@ -415,13 +430,12 @@ function Brick:cast_arc_lob()
       local angle = math.atan2(ly - sy, lx - sx)
       -- Arc lobber: slow heavy homing lob. Slow enough that the homing curve
       -- reads visually as a tracking threat rather than an instant hit. No
-      -- `life` timer -- it homes until it hits the paddle or curves past it and
-      -- off a wall (off-screen cleanup in EnemyProjectile:update); the capped
-      -- turn rate + the paddle being pinned to the bottom guarantee it exits
-      -- rather than vanishing in mid-air or orbiting forever.
+      -- `life` timer -- once its homing window runs dry (EnemyProjectile's
+      -- homing_time decay) it flies straight and exits via the off-screen
+      -- cleanup, so it can't orbit the paddle forever.
       EnemyProjectile{group = arena.main, x = sx, y = sy, color = yellow[0],
                       kind = 'bomb', angle = angle, speed = 55, dmg = 2,
-                      homing = true, homing_turn = 1.2}
+                      homing = true, homing_turn = 0.8}
     end
   end)
 end
@@ -485,7 +499,7 @@ function Brick:update(dt)
 
   if self.burn_timer > 0 then
     self.burn_timer = self.burn_timer - dt
-    self:take_damage(self.burn_dps*dt, orange[0], true)
+    self:take_damage(self.burn_dps*dt, orange[0], true, 'burn')
     -- Disintegration: small dark ash flakes drift up off the burn front (the
     -- line where missing HP meets live brick), with the odd ember spark.
     local front_y = self.y + (self.cell_min_cy - self.shape_cy)*CELL_H - BRICK_H/2
@@ -515,7 +529,7 @@ function Brick:update(dt)
   -- above). Ticks bleed_dps each second and weeps a few dark droplets downward.
   if self.bleed_timer > 0 then
     self.bleed_timer = self.bleed_timer - dt
-    self:take_damage(self.bleed_dps*dt, self.bleed_color or purple[0], true)
+    self:take_damage(self.bleed_dps*dt, self.bleed_color or purple[0], true, 'bleed')
     if random:bool(10) then
       HitParticle{
         group = main.current.effects,
@@ -546,7 +560,7 @@ function Brick:update(dt)
       self.infest_spread_t = BAL('dots.infest_spread_cd', INFEST_SPREAD_CD) + random:float(-0.15, 0.2)
       self:infest_spread()
     end
-    self:take_damage(self.infest_dps*dt, self.infest_color, true)
+    self:take_damage(self.infest_dps*dt, self.infest_color, true, 'infest')
   end
 
   -- Curse: vulnerability mark applied by launcher/jester/etc. Ticks down,
@@ -825,9 +839,15 @@ function Brick:draw_type_icon()
 end
 
 
-function Brick:take_damage(amount, color, no_flash)
+function Brick:take_damage(amount, color, no_flash, source)
   if self.hp <= 0 then return end
   amount = amount * (self.curse_mult or 1)
+  -- Admin damage tally: report the effective (overkill-clamped) amount under
+  -- its source tag so the F2 overlay's percentages reflect damage that landed.
+  local arena = main.current
+  if arena and arena.track_damage then
+    arena:track_damage(source, math.min(amount, self.hp))
+  end
   self.hp = self.hp - amount
   if not no_flash then
     self.hfx:use('hit', 0.25, 200, 10)
@@ -846,14 +866,15 @@ function Brick:on_ball_contact(ball)
   -- then layer on the per-ball bounce multiplier and the arena-wide combo
   -- multiplier. With both at max this gives ~8.8x — big payoff for keeping
   -- a single ball alive through a chain at high rank. terror_other_mult guts
-  -- contact damage on the Terrorist paddle (its blast is the real damage); nil
-  -- = 1 for every other ball.
-  local dmg = ball.dmg*(ball.charge_dmg_mult or 1)*(ball.terror_other_mult or 1)
+  -- contact damage on the Terrorist paddle (its blast is the real damage);
+  -- parry_dmg_mult is the Aegis perfect-parry payload (spent per contact in
+  -- BallHero:on_brick_hit); both are nil = 1 for every other ball.
+  local dmg = ball.dmg*(ball.charge_dmg_mult or 1)*(ball.terror_other_mult or 1)*(ball.parry_dmg_mult or 1)
   local arena = main.current
   if arena and arena.combo then
     dmg = dmg * arena:bounce_dmg_mult(ball.bounces or 0) * arena:combo_mult()
   end
-  self:take_damage(dmg, ball.color)
+  self:take_damage(dmg, ball.color, nil, ball.source or ball.character)
   if self.swarm and not self.dead then
     local vx, vy = ball:get_velocity()
     local mag    = math.sqrt(vx*vx + vy*vy)
@@ -998,7 +1019,7 @@ function Brick:die()
       for _ = 1, 4 do
         Projectile{group = arena.main, x = jx + 8*math.cos(r), y = jy + 8*math.sin(r),
                    r = r, speed = 250, dmg = jdmg, color = jcolor, type = 'knife',
-                   pierce = jlvl3 and 2 or 0, homing = jlvl3}
+                   pierce = jlvl3 and 2 or 0, homing = jlvl3, source = 'jester'}
         r = r + math.pi/2
       end
     end)
@@ -1057,7 +1078,7 @@ function Brick:cast_explode_on_death()
   for _, o in ipairs(arena.main.objects) do
     if o:is(Brick) and not o.dead and o.id ~= self.id then
       if math.distance(self.x, self.y, o.x, o.y) <= radius then
-        o:take_damage(self.max_hp*frac, blue[0])
+        o:take_damage(self.max_hp*frac, blue[0], nil, 'exploder')
       end
     end
   end

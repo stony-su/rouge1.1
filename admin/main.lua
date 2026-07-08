@@ -41,6 +41,7 @@ function init()
   -- Admin terminal toggle. `bind_all` doesn't include backtick, so we add an
   -- explicit action that listens to both backtick and F1.
   input:bind('toggle_terminal', {'`', 'f1'})
+  input:bind('toggle_dmg_tally', {'f2'})   -- admin damage-source overlay
 
   local s = {tags = {sfx}}
 

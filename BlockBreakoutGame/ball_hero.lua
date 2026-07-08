@@ -51,13 +51,13 @@ local HERO_STATS = {
   -- as a WallArrow. Level 3: the bolt ricochets off the side/top walls 3
   -- times first. skin draws the ball as a tower base with a compact
   -- swiveling crossbow turret mounted on top.
-  archer      = {r = 5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'crossbow', range = 160, cd = 2.0,  speed = 260, skin = 'crossbow'},
+  archer      = {r = 5.5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'crossbow', range = 160, cd = 2.0,  speed = 260, skin = 'crossbow'},
 
   -- ----- Chain knife (SNKRX scout port; behavior = 'chain_knife') -----
   -- The knife CHAINS: on each hit it leaps to a random nearby brick it
   -- hasn't hit, +25% speed per hop. Level 3: 6 chains and +25% damage per
   -- hop on top. skin switches the draw to the spinning bandit shuriken.
-  scout       = {r = 5, base_speed = 180, dmg = 6,  color = 'red',    behavior = 'chain_knife', range = 64, cd = 2.0, speed = 240, chain = 3, skin = 'shuriken'},
+  scout       = {r = 5.5, base_speed = 180, dmg = 6,  color = 'red',    behavior = 'chain_knife', range = 64, cd = 2.0, speed = 240, chain = 3, skin = 'shuriken'},
 
   -- ----- Spellblade (SNKRX spellblade port; behavior = 'blade_storm') -----
   -- SNKRX player.lua:400 + :2013 -- a spinning blade-shard fired in a RANDOM
@@ -72,7 +72,7 @@ local HERO_STATS = {
   -- area = the visual square side; the hit square is 1.5x that (see
   -- CleaveArea in effects.lua). skin switches the draw to the crescent-slash
   -- body instead of the plain ball.
-  swordsman   = {r = 7, base_speed = 150, dmg = 14, color = 'yellow', behavior = 'cleave', range = 48, cd = 3.0, area = 96, skin = 'crescent'},
+  swordsman   = {r = 6.5, base_speed = 150, dmg = 14, color = 'yellow', behavior = 'cleave', range = 48, cd = 3.0, area = 96, skin = 'crescent'},
 
   -- ----- Melee splash (behavior = 'melee_splash') -----
   -- ----- Barbarian (SNKRX barbarian port; behavior = 'hammer_slam') -----
@@ -82,7 +82,7 @@ local HERO_STATS = {
   -- x2 at level 3) but VERY BIG and drawn as a HEXAGON shockwave instead of a
   -- square slash (see HexSlamArea in effects.lua). skin = 'hammer' is a heavy
   -- maul-head orb that recoils on each slam. area = hexagon circumradius.
-  barbarian   = {r = 8, base_speed = 140, dmg = 16, color = 'yellow', behavior = 'hammer_slam', range = 96, cd = 5.0, area = 110, skin = 'hammer'},
+  barbarian   = {r = 7, base_speed = 140, dmg = 16, color = 'yellow', behavior = 'hammer_slam', range = 96, cd = 5.0, area = 110, skin = 'hammer'},
 
   -- ----- Consecrated Ground (cleric rework; behavior = 'consecrate') -----
   -- Every cd seconds the cleric plants a verdant healing sigil at the paddle:
@@ -120,7 +120,7 @@ local HERO_STATS = {
   -- (implosion -> flash -> shockwaves). Level 3 ("Demoman") DOUBLES blast radius +
   -- damage and adds an aftershock. The bomber ball is a heavy reactor core: SLOW +
   -- dampened, lumbering on drooping arcs, venting plasma (skin = 'bomber').
-  bomber      = {r = 7, base_speed = 125, dmg = 10, color = 'orange', behavior = 'bomb_drop', cd = 7, bomb_radius = 60, fuse = 8, trigger_radius = 16, count = 1, blast_mult = 2.0, skin = 'bomber'},
+  bomber      = {r = 6.5, base_speed = 125, dmg = 10, color = 'orange', behavior = 'bomb_drop', cd = 7, bomb_radius = 60, fuse = 8, trigger_radius = 16, count = 1, blast_mult = 2.0, skin = 'bomber'},
 
   -- ----- Engineer "Builder" (SNKRX engineer port; behavior = 'turret_drop') -----
   -- SNKRX player.lua:409 / Turret:3196 -- every cd seconds the engineer DEPLOYS a
@@ -169,7 +169,7 @@ local HERO_STATS = {
   -- never disconnects. A roll of 6 is the jackpot. Level 3 ("Multicast"): a nested
   -- 60/40/20% chance to re-roll + fire again. The ball is a gold ball with a tumbling
   -- die on top: fast + bouncy, with erratic "gambled" ricochets (skin='dice').
-  gambler     = {r = 7, base_speed = 170, dmg = 8, color = 'yellow2', behavior = 'gamble', cd = 2, range = 360, payout_mult = 3.0, skin = 'dice'},
+  gambler     = {r = 6.5, base_speed = 170, dmg = 8, color = 'yellow2', behavior = 'gamble', cd = 2, range = 360, payout_mult = 3.0, skin = 'dice'},
 
   -- ----- Volcano (SNKRX vulcanist port; behavior = 'volcano') -----
   -- Every 12s, plants a Volcano at the midpoint between this ball and the
@@ -188,12 +188,16 @@ local HERO_STATS = {
   -- scope + explosion live in MortarShell (effects.lua). Slow, dampened, heavy mover;
   -- Three barrel-circles in a triangle fire in an endless ROUND-ROBIN, ~1 shot/sec
   -- (one circle pops + lobs, then the next). See shoot_mortar + draw_cannon.
-  cannoneer   = {r = 7, base_speed = 132, dmg = 16, color = 'orange', behavior = 'cannon_shot', skin = 'cannon',
+  cannoneer   = {r = 6.5, base_speed = 132, dmg = 16, color = 'orange', behavior = 'cannon_shot', skin = 'cannon',
                  cd = 1.0, range = 240, blast_radius = 50, blast_mult = 1.0,
                  bombard = 2, shell_delay = 0.8},
 
   -- ----- On-bounce exceptions: ability triggers per ball-bounce, not a timer.
-  wizard      = {r = 5, base_speed = 170, dmg = 7,  color = 'blue',   on_bounce = 'chain_lightning', bounce_cd = 0.3},
+  -- Wizard "Storm Sage": VISUAL overhaul only -- the bounce-triggered chain zap
+  -- (on_bounce, bounce_cd, dmg) is UNCHANGED. skin = 'wizard' draws a robe-blue
+  -- conjurer orb churning around a swirling storm-vortex core, inside a turning
+  -- rune ring; the ring, vortex spin + rim micro-arcs read the charge state.
+  wizard      = {r = 5.5, base_speed = 170, dmg = 7,  color = 'blue',   on_bounce = 'chain_lightning', bounce_cd = 0.3, skin = 'wizard'},
   -- ----- Cryomancer "Frostbite" (SNKRX cryomancer port; behavior = 'frost_aura') -----
   -- SNKRX player.lua:481 / DotArea -- a rotating blue frost field that FOLLOWS the
   -- cryomancer, SLOWING (slow_factor) every brick inside and dealing cold DoT each
@@ -286,7 +290,9 @@ function BallHero:init(args)
   self.speed_mult_max   = 4.0     -- was 3.0 (orig 2.5)
   -- Per-bounce ramp increment (+50% at baseline — doubled as part of the
   -- slow-launch pace tuning, see BASE_SPEED_MULT at top). The loadout's
-  -- Charge stat scales it: Aegis 0.2 -> x1.10/bounce, Pinball 1.8 -> x1.90.
+  -- Charge stat scales it: Pinball 1.8 -> x1.90/bounce. (Aegis skips the
+  -- ramp entirely — its soft block leaves speed_mult alone, see
+  -- Paddle:on_ball_bounce.)
   self.speed_mult_step  = 1 + 0.5*(mods.charge or 1)
 
   -- ULTRAKILL-style chain counter. Increments on every brick bounce; resets
@@ -701,6 +707,49 @@ function BallHero:init(args)
     end)
   end
 
+  -- Wizard "Storm Sage" skin: an arcane conjurer -- a robe-blue orb churning
+  -- around a swirling storm-vortex core, ringed by a slowly-turning rune
+  -- circle. While the bounce-zap is charged (ability_ready) the ring tightens
+  -- + brightens, the vortex whips up and micro-arcs crawl the rim; a cast
+  -- whites out the vortex eye (cast_flash_t, set by the on_bounce trigger).
+  --   wiz_t          idle clock (aura breathe, ring shimmer, eye pulse)
+  --   rune_a         rune-ring rotation (spins faster while charged)
+  --   wiz_vortex_a   vortex-core churn (counter-spins against the ring)
+  --   cast_flash_t   cast flare, decays in update
+  --   wiz_arcs       short-lived rim micro-arcs seeded by the crackle timer
+  -- Trail: a sparse ArcaneSpark glint (a slow spinning cross -- arcane, not
+  -- the stormweaver's raw StormSpark static). Movement is untouched.
+  if s.skin == 'wizard' then
+    self.wiz_t        = random:float(0, 2*math.pi)
+    self.rune_a       = random:float(0, 2*math.pi)
+    self.wiz_vortex_a = random:float(0, 2*math.pi)
+    self.cast_flash_t = 0
+    self.wiz_arcs     = {}
+    self.t:every(0.09, function()
+      if self.stuck or self.returning or self.mortar then return end
+      -- Rim micro-arcs crawl the body while the bounce-zap is charged.
+      if self.ability_ready and random:bool(70) then
+        local rs = self.r_size
+        local a1 = random:float(0, 2*math.pi)
+        local a2 = a1 + random:float(0.7, 1.6)
+        local am = (a1 + a2)/2
+        local br = rs*random:float(1.15, 1.5)
+        table.insert(self.wiz_arcs, {
+          x1 = math.cos(a1)*rs, y1 = math.sin(a1)*rs,
+          x2 = math.cos(a2)*rs, y2 = math.sin(a2)*rs,
+          mx = math.cos(am)*br, my = math.sin(am)*br,
+          life = 0.14, max = 0.14,
+        })
+      end
+      -- Sparse arcane glint trail.
+      if random:bool(22) then
+        ArcaneSpark{group = main.current.effects, x = self.x + random:float(-2, 2),
+                    y = self:fx_y() + random:float(-2, 2), color = self.color,
+                    rs = random:float(1.2, 2.2), duration = random:float(0.25, 0.45)}
+      end
+    end)
+  end
+
   -- Cannoneer "Triple Mortar" skin: three barrel-circles in a TRIANGLE (a multi-barrel
   -- turret) that fire in an endless ROUND-ROBIN -- one circle pops + lobs a shell, then
   -- the next, ~once a second. The cluster spins slowly; the barrel that just fired flares
@@ -966,7 +1015,16 @@ function BallHero:pinball_serve()
   self.speed_mult      = 1.0
   self.charge_dmg_mult = 1.0
   self.bounces         = 0
-  if self.body then self.body:setActive(true) end
+  -- A drain wipes the ball's RAM progress: both the flip streak that feeds
+  -- the RAM roll and any unspent RAM charges.
+  self.pb_flip_hits    = 0
+  self.ram_left        = 0
+  -- The tractor haul has to pass THROUGH the flipper rig: with the body live,
+  -- the pull pins the ball against a bat fixture from below and it jams there
+  -- (and every frame of contact re-pulls the spring, ballooning the ball).
+  -- So the ball is transparent while being served — body off, position driven
+  -- directly in update_serving — and turns solid again at the release point.
+  if self.body then self.body:setActive(false) end
   self:set_piercing(arena.pierce_active == true)
   self.serve_off_x = random:float(-34, 34)
   self.serve_y     = math.clamp(arena.paddle.y - 200,
@@ -989,12 +1047,80 @@ function BallHero:update_serving(dt)
   local d = math.sqrt(dx*dx + dy*dy)
   if d < 5 then
     self.serving = false
+    -- Solid again: reactivate the body at the serve point, then release.
+    if self.body then
+      self.body:setActive(true)
+      self.body:setPosition(self.x, self.y)
+    end
     self:set_velocity(random:float(-24, 24), 30)   -- let go into gravity
     self.spring:pull(0.2)
     return
   end
+  -- Body is inactive for the ride (see pinball_serve), so move it directly —
+  -- same pattern as update_return on the catching paddles.
   local pull = math.min(820, 140 + d*4)
-  self:set_velocity(dx/d*pull, dy/d*pull)
+  self.x = self.x + dx/d*pull*dt
+  self.y = self.y + dy/d*pull*dt
+  if self.body then self.body:setPosition(self.x, self.y) end
+end
+
+
+-- Pinball RAM mode: a lucky flip turns this ball into a battering ram — its
+-- next `blocks` brick contacts kill the block outright and the ball plows
+-- straight through instead of bouncing (see the RAM branch in on_brick_hit).
+-- Chance + block count scale with the ball's flip streak AND the run level
+-- (Paddle:flip_launch); flipping an already-ramming ball adds a stack instead
+-- of re-rolling (ram_stack); a drain wipes everything (pinball_serve).
+function BallHero:ram_start(blocks)
+  self.ram_left = math.max(self.ram_left or 0, blocks)
+  local arena = main.current
+  if arena then
+    TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 16,
+                  color = orange[0], duration = 0.3}
+    spawn_burst(arena.effects, self.x, self.y, orange[0], 10, 80, 180)
+  end
+  self.spring:pull(0.25)
+  buff1:play{volume = 0.4, pitch = random:float(1.15, 1.3)}
+end
+
+
+-- How many RAM charges a ball can hold: the tunable base cap plus a run-level
+-- bonus, so the paddle's ram deepens as the run levels up.
+function BallHero:ram_cap()
+  local arena = main.current
+  local lvl   = (arena and arena.level) or 1
+  return BAL('signature.ram_blocks_max', 7)
+         + math.floor((lvl - 1)/BAL('signature.ram_levels_per_block', 3))
+end
+
+
+-- A flip on an already-ramming ball: RAM is maintained and gains one stack
+-- (capped by ram_cap). Lighter, higher-pitched juice than the initial proc.
+function BallHero:ram_stack()
+  self.ram_left = math.min(self:ram_cap(), (self.ram_left or 0) + 1)
+  local arena = main.current
+  if arena then
+    TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 12,
+                  color = orange[0], duration = 0.22}
+    spawn_burst(arena.effects, self.x, self.y, orange[0], 6, 70, 150)
+  end
+  self.spring:pull(0.15)
+  buff1:play{volume = 0.3, pitch = random:float(1.35, 1.5)}
+end
+
+
+-- Aegis PERFECT PARRY buff (Paddle:on_ball_bounce during a braced window):
+-- the ball's next `hits` brick contacts hit for `mult` and punch straight
+-- through real bricks (see the parry branch in on_brick_hit). Re-parrying
+-- refreshes the charges rather than stacking them.
+function BallHero:apply_parry(hits, mult)
+  self.parry_hits_left = math.max(self.parry_hits_left or 0, hits or 4)
+  self.parry_dmg_mult  = mult or 2.5
+  self.spring:pull(0.35)
+  local arena = main.current
+  if arena then
+    spawn_burst(arena.effects, self.x, self.y, Color(1, 0.85, 0.35, 1), 8, 90, 170)
+  end
 end
 
 
@@ -1011,6 +1137,9 @@ function BallHero:launch_from_paddle()
   self:set_position(px, py)
   self.speed_mult = 1.0
   self.bounces    = 0
+  -- A recalled ball also drops any unspent Aegis parry charges.
+  self.parry_hits_left = 0
+  self.parry_dmg_mult  = nil
   -- Inherit pierce from the active buff for this fresh launch.
   self:set_piercing(arena.pierce_active == true)
   local angle = -math.pi/2 + random:float(-0.25, 0.25)
@@ -2164,6 +2293,21 @@ function BallHero:update(dt)
     if (self.cast_flash_t or 0) > 0 then self.cast_flash_t = self.cast_flash_t - dt end
   end
 
+  -- Wizard skin: advance the idle/ring clocks, decay the cast flare, and age
+  -- out the rim micro-arcs seeded by the init crackle timer.
+  if self.stats.skin == 'wizard' then
+    self.wiz_t  = (self.wiz_t or 0) + dt
+    self.rune_a = (self.rune_a or 0) + 0.9*dt*(self.ability_ready and 1.8 or 1)
+    -- Vortex-core churn: idles slow, whips up while the zap is charged.
+    self.wiz_vortex_a = (self.wiz_vortex_a or 0) + dt*(2.2 + (self.ability_ready and 2.6 or 0))
+    if (self.cast_flash_t or 0) > 0 then self.cast_flash_t = self.cast_flash_t - dt end
+    for i = #(self.wiz_arcs or {}), 1, -1 do
+      local arc = self.wiz_arcs[i]
+      arc.life = arc.life - dt
+      if arc.life <= 0 then table.remove(self.wiz_arcs, i) end
+    end
+  end
+
   -- Cannoneer "Triple Mortar" skin: advance the idle clock, slowly spin the 3-barrel
   -- cluster, and decay each barrel's fire-pop (the round-robin firing is in shoot_mortar).
   if self.stats.skin == 'cannon' then
@@ -2186,6 +2330,21 @@ function BallHero:update(dt)
       m.a = m.a + m.sp*dt
       m.j = m.j + dt*6
     end
+  end
+
+  -- Pinball RAM trail: sample the ball's path while ramming — drawn as a
+  -- golden comet aftertrail of fading shadow-copies behind it (see the draw
+  -- overlay). The leftover samples drain out quickly once the ram ends.
+  if (self.ram_left or 0) > 0 then
+    self.ram_trail   = self.ram_trail or {}
+    self.ram_trail_t = (self.ram_trail_t or 0) + dt
+    if self.ram_trail_t >= 0.025 then
+      self.ram_trail_t = 0
+      table.insert(self.ram_trail, 1, {x = self.x, y = self:fx_y()})
+      if #self.ram_trail > 12 then table.remove(self.ram_trail) end
+    end
+  elseif self.ram_trail and #self.ram_trail > 0 then
+    table.remove(self.ram_trail)
   end
 
   if self.stuck then
@@ -2424,8 +2583,6 @@ function BallHero:update(dt)
   end
 
   -- Ball fell into the pit (no bottom wall) — magnetic recall back to paddle.
-  -- The Aegis wall normally makes this unreachable; if a ball ever tunnels
-  -- past it the recall is the graceful fallback.
   if self.y > arena.y2 + 12 then
     self:start_return()
   end
@@ -2712,6 +2869,10 @@ function BallHero:draw_skin(s)
     -- Stormweaver: a caged-lightning orb -- a white-hot nucleus, crackling rim
     -- arcs and a breathing static aura; flares + discharges chain bolts on cast.
     self:draw_stormweaver(s)
+  elseif self.stats.skin == 'wizard' then
+    -- Wizard: an arcane conjurer -- robe orb + storm-vortex core + turning rune
+    -- ring; ring, vortex and rim crackle all whip up while the zap is charged.
+    self:draw_wizard(s)
   elseif self.stats.skin == 'cannon' then
     -- Cannoneer: an iron siege mortar -- heavy base + a swiveling barrel that
     -- recoils + muzzle-flashes on fire, with a reload ember and a heat-haze aura.
@@ -2724,6 +2885,73 @@ function BallHero:draw_skin(s)
     graphics.circle(self.x, self.y, self.r_size*s, self.color)
     graphics.circle(self.x - self.r_size*0.3, self.y - self.r_size*0.3, math.max(1, self.r_size*0.35), fg[5])
   end
+end
+
+
+-- UI preview of a hero ball using its REAL in-game skin painter (draw_skin),
+-- so the draft cards / settings roster show exactly what flies in the arena.
+-- Renders through a cached lightweight stub per character -- no physics body,
+-- no timers -- with every skin's idle clock driven off the shared frame clock
+-- so previews animate. Timer-fed state that can't be faked cheaply (trails,
+-- wizard rim-arcs) stays empty: the resting pose. Cooldown-progress reads see
+-- no trigger data (stub.t = {}) and default to the fully-charged look.
+-- `r_size` overrides the drawn size; nil uses the hero's true size.
+local preview_stubs = {}
+function BallHero.draw_preview(character, x, y, r_size)
+  local stats = BallHero.stats_for(character)
+  local stub  = preview_stubs[character]
+  if not stub then
+    stub = setmetatable({
+      character     = character,
+      level         = 1,
+      stats         = stats,
+      t             = {},          -- no triggers -> crossbow/cannon/rune read "ready"
+      tri_pop       = {0, 0, 0},
+      ability_ready = true,        -- wizard previews its charged look
+    }, BallHero)
+    -- Hive preview: a wreath of locust motes (the live ball churns these from
+    -- its init timer; here they orbit on the shared clock below).
+    if stats.skin == 'swarm' then
+      stub.swarm_motes = {}
+      for i = 1, 10 do
+        stub.swarm_motes[i] = {a0 = random:float(0, 2*math.pi), sp = random:float(0.6, 1.6),
+                               rad = (stats.r or 6)*random:float(0.35, 0.95),
+                               j = 0, rr = random:float(0, 1), a = 0}
+      end
+    end
+    preview_stubs[character] = stub
+  end
+
+  stub.x, stub.y = x, y
+  stub.r_size    = r_size or stats.r or 6
+  stub.color     = character_colors[character] or fg[0]
+
+  -- Drive every skin's idle clock / spin off the shared frame clock.
+  local t = time or 0
+  stub.jester_t, stub.storm_t, stub.wiz_t, stub.swarm_t = t, t, t, t
+  stub.bomber_t, stub.eng_t, stub.frost_t, stub.flame_t = t, t, t, t
+  stub.witch_t, stub.psy_t, stub.dice_t, stub.spell_t   = t, t, t, t
+  stub.bloom_pulse = t
+  stub.spin_a, stub.checker_a, stub.arc_phase  = t*2.0, t*0.8, t*1.4
+  stub.rune_a, stub.ring_a, stub.tri_a         = t*0.9, t*0.8, t*0.5
+  stub.eng_gear_a, stub.orbit_a, stub.hammer_a = t*1.2, t*3.0, t*2.0
+  stub.dice_a       = t*2.0
+  stub.dice_face    = (math.floor(t*0.7) % 6) + 1
+  stub.wiz_vortex_a = t*3.2
+  stub.face_a    = -math.pi/2                   -- crescent slashes upward
+  stub.aim_a     = -math.pi/2                   -- crossbow aims upward
+
+  -- Stormweaver spokes / hive motes tick on live timers; approximate here.
+  if stats.skin == 'stormweaver' and (t - (stub._gen_t or -1)) > 0.1 then
+    stub._gen_t = t
+    stub:gen_storm_bolts()
+  end
+  for _, m in ipairs(stub.swarm_motes or {}) do
+    m.a = m.a0 + t*m.sp
+    m.j = m.a0*7 + t*6
+  end
+
+  stub:draw_skin(1)
 end
 
 
@@ -2754,6 +2982,45 @@ function BallHero:draw()
   self:draw_skin(s)
 
   if grow < 1 then graphics.pop() end
+
+  -- Pinball RAM comet aftertrail: golden shadow-copies of the ball at the
+  -- sampled path positions, shrinking and dimming down the tail — a soft
+  -- gilded bloom around each ghost, a hot near-white core toward the head,
+  -- and a faint flicker so the wake reads as blazing. Drawn tail-first so
+  -- the head ghosts stack brightest, and drawn whenever samples exist so it
+  -- drains out smoothly after the ram ends.
+  local trail = self.ram_trail or {}
+  for i = #trail, 1, -1 do
+    local p = trail[i]
+    local k = 1 - (i - 1)/12
+    local flicker = 0.85 + 0.15*math.sin(love.timer.getTime()*14 + i*1.7)
+    graphics.circle(p.x, p.y, self.r_size*1.15*k + 1, Color(1, 0.72, 0.18, 0.10*k*flicker))
+    graphics.circle(p.x, p.y, self.r_size*0.85*k, Color(1, 0.82, 0.30, 0.28*k))
+    graphics.circle(p.x, p.y, self.r_size*0.45*k, Color(1, 0.93, 0.58, 0.35*k*flicker))
+  end
+
+  -- Pinball RAM aura: a layered power-glow — two soft energy discs under a
+  -- hot pulsing rim ring — with one pip per remaining charge.
+  if (self.ram_left or 0) > 0 then
+    local rt    = love.timer.getTime()
+    local pulse = 0.5 + 0.5*math.sin(rt*10)
+    graphics.circle(self.x, self.y, self.r_size*2.1 + pulse*2.0, Color(1, 0.45, 0.15, 0.14 + 0.08*pulse))
+    graphics.circle(self.x, self.y, self.r_size*1.5 + pulse*1.2, Color(1, 0.60, 0.25, 0.22 + 0.10*pulse))
+    graphics.circle(self.x, self.y, self.r_size + 1.5 + pulse,   Color(1, 0.85, 0.50, 0.50 + 0.20*pulse), 1.5)
+    local n = math.min(self.ram_left, 10)
+    for i = 1, n do
+      graphics.rectangle(self.x - (n - 1)*1.5 + (i - 1)*3, self.y - self.r_size - 5, 1.6, 1.6, nil, nil, Color(1, 0.6, 0.25, 0.9))
+    end
+  end
+
+  -- Aegis parried ball: a thin pulsing gold rim while charged hits remain, so
+  -- the player can track which ball is carrying the parry payload.
+  if (self.parry_hits_left or 0) > 0 then
+    local pt    = love.timer.getTime()
+    local pulse = 0.5 + 0.5*math.sin(pt*12)
+    graphics.circle(self.x, self.y, self.r_size + 2 + pulse,
+                    Color(1, 0.85, 0.35, 0.35 + 0.20*pulse), 1.5)
+  end
 
   -- Terrorist armed telegraph: a ball within detonation range pulses a red
   -- warning ring with a lit, sparking fuse over it, so the player can read at a
@@ -3173,6 +3440,81 @@ function BallHero:draw_stormweaver(s)
     local orr = rs*(0.95 + 0.15*math.sin(t*4 + i))
     graphics.circle(self.x + math.cos(oa)*orr, self.y + math.sin(oa)*orr, 1.1, Color(hot.r, hot.g, hot.b, 0.8))
   end
+end
+
+
+-- The wizard's "Storm Sage" body: a robe-blue orb churning around a swirling
+-- storm-vortex core, ringed by a slow rune circle. The ring, the vortex spin
+-- and the rim micro-arcs all read the charge state: dim and lazy while the
+-- bounce-zap recharges, tight + fast + crackling when it's ready. On a cast
+-- the vortex eye whites out and a discharge ring snaps out (cast_flash_t +
+-- the spring pull set by the on_bounce trigger). The counter-swirling centre
+-- is what keeps it from reading as the cryomancer's snowflake at a glance.
+function BallHero:draw_wizard(s)
+  s = s or 1
+  local rs    = self.r_size
+  local rb    = rs*s
+  local c     = self.color
+  local t     = self.wiz_t or 0
+  local ready = self.ability_ready and 1 or 0
+  local flare = math.clamp((self.cast_flash_t or 0)/0.25, 0, 1)
+  local hot   = Color(math.min(1, c.r*0.4 + 0.6), math.min(1, c.g*0.4 + 0.6), math.min(1, c.b*0.3 + 0.7), 1)
+  local deep  = Color(c.r*0.45, c.g*0.45, c.b*0.75, 1)   -- midnight robe blue
+
+  -- Arcane aura: a soft breathing disc that swells when charged / on a cast.
+  local breathe = 0.5 + 0.5*math.sin(t*2.6)
+  graphics.circle(self.x, self.y, rs*(1.7 + 0.2*breathe) + ready*1.5 + flare*8,
+                  Color(c.r, c.g, c.b, 0.08 + 0.05*breathe + 0.05*ready + flare*0.20))
+
+  -- Cast discharge ring.
+  if flare > 0.01 then
+    graphics.circle(self.x, self.y, rs + 4 + (1 - flare)*24, Color(hot.r, hot.g, hot.b, flare*0.5), 2)
+  end
+
+  -- Rune ring: a turning circle of glyph dashes. Bright + tight when the zap
+  -- is charged, dim + lazy while it recharges (rune_a spin lives in update).
+  local ring_r = rs*(1.55 - 0.15*ready) + 0.6*math.sin(t*3.2)
+  local rcol   = Color(hot.r, hot.g, hot.b, 0.30 + 0.45*ready + 0.25*flare)
+  for i = 0, 5 do
+    local a1 = (self.rune_a or 0) + i*(math.pi/3)
+    local a2 = a1 + 0.30
+    graphics.line(self.x + math.cos(a1)*ring_r, self.y + math.sin(a1)*ring_r,
+                  self.x + math.cos(a2)*ring_r, self.y + math.sin(a2)*ring_r, rcol, 1)
+  end
+
+  -- Robe body: outline, deep-blue orb, and a lighter off-centre disc so the
+  -- sphere reads shaded rather than flat.
+  graphics.circle(self.x, self.y, rb + 0.5, bg[-2])
+  graphics.circle(self.x, self.y, rb, deep)
+  graphics.circle(self.x - rs*0.22, self.y - rs*0.16, rb*0.72, c)
+
+  -- Storm-vortex core: three spiral arc-blades swirl one way while an inner
+  -- pair counter-swirls (wiz_vortex_a, whipped up while charged), around a
+  -- white-hot eye that swells with the charge and whites out on a cast.
+  local va   = self.wiz_vortex_a or 0
+  local vcol = Color(hot.r, hot.g, hot.b, 0.55 + 0.25*ready + 0.20*flare)
+  for i = 0, 2 do
+    local a0 = va + i*(2*math.pi/3)
+    graphics.arc('open', self.x, self.y, rb*0.66, a0, a0 + 1.6, vcol, 1.5)
+  end
+  local icol = Color(1, 1, 1, 0.40 + 0.25*ready + 0.25*flare)
+  for i = 0, 1 do
+    local a0 = -va*1.6 + i*math.pi
+    graphics.arc('open', self.x, self.y, rb*0.38, a0, a0 + 1.9, icol, 1)
+  end
+  local eye_r = rb*(0.20 + 0.04*math.sin(t*5.0) + 0.10*ready) + flare*rb*0.35
+  graphics.circle(self.x, self.y, math.max(1.2, eye_r + 0.8), Color(hot.r, hot.g, hot.b, 0.9))
+  graphics.circle(self.x, self.y, math.max(0.7, eye_r), Color(1, 1, 1, 0.7 + 0.3*flare))
+
+  -- Rim micro-arcs (seeded while charged by the init crackle timer): a 2-seg
+  -- jagged tick from rim point to rim point, bulging outward.
+  for _, arc in ipairs(self.wiz_arcs or {}) do
+    local aa   = math.clamp(arc.life/arc.max, 0, 1)
+    local acol = Color(hot.r, hot.g, hot.b, 0.85*aa)
+    graphics.line(self.x + arc.x1, self.y + arc.y1, self.x + arc.mx, self.y + arc.my, acol, 1)
+    graphics.line(self.x + arc.mx, self.y + arc.my, self.x + arc.x2, self.y + arc.y2, acol, 1)
+  end
+
 end
 
 
@@ -3855,6 +4197,34 @@ function BallHero:on_brick_hit(brick)
   -- in the BallPit collision callback handles the visual pass-through.
   -- Pierce ends when the ball bonks the top wall (see that callback).
   if self.piercing then return end
+  -- Pinball RAM: this ball is a battering ram — the block dies outright, the
+  -- ball keeps its heading (same deferred velocity restore the pierce flight
+  -- uses) and one charge is spent. Combo still flows so a good ram feeds the
+  -- meter. Only true Bricks can be rammed: critters take a normal hit below
+  -- and the boss is never insta-killed.
+  if (self.ram_left or 0) > 0 and brick.is and brick:is(Brick) then
+    self.ram_left = self.ram_left - 1
+    self.bounces  = (self.bounces or 0) + 1
+    brick:take_damage(brick.hp + 1, self.color, nil, self.character)
+    local lvx, lvy = self._last_vx, self._last_vy
+    if arena then
+      if arena.on_brick_bounce then arena:on_brick_bounce(self, brick) end
+      spawn_burst(arena.effects, self.x, self.y, orange[0], 8, 90, 190)
+      camera:shake(2, 0.12, 90)
+      if lvx then
+        arena.t:after(0, function()
+          if self.body and not self.dead then self:set_velocity(lvx, lvy) end
+        end)
+      end
+      -- Spent: the ram aura collapses with a last ring.
+      if self.ram_left <= 0 then
+        TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 12,
+                      color = orange[0], duration = 0.2}
+      end
+    end
+    explosion1:play{volume = 0.28, pitch = random:float(1.05, 1.2)}
+    return
+  end
   -- Hive loadout: balls deal ZERO contact damage — every brick bounce spawns
   -- a maggot instead, and the combo meter is fed manually since we skip
   -- Brick:on_ball_contact (where it's normally awarded).
@@ -3865,6 +4235,19 @@ function BallHero:on_brick_hit(brick)
     if arena and arena.hive_spawn_maggot then arena:hive_spawn_maggot(self) end
     return
   end
+  -- Aegis PARRIED ball: while charged hits remain the ball punches THROUGH
+  -- real bricks instead of bouncing (same deferred velocity restore the
+  -- pinball RAM uses). The damage itself still flows through the normal
+  -- contact path below — Brick:on_ball_contact folds in parry_dmg_mult.
+  -- Critters and the boss take the boosted hit but bounce the ball normally.
+  if (self.parry_hits_left or 0) > 0 and brick.is and brick:is(Brick) then
+    local lvx, lvy = self._last_vx, self._last_vy
+    if arena and lvx then
+      arena.t:after(0, function()
+        if self.body and not self.dead then self:set_velocity(lvx, lvy) end
+      end)
+    end
+  end
   -- Bump the chain counter BEFORE damage so Brick:on_ball_contact reads the
   -- post-increment value (a clean hit counts as the 1st bounce, not the 0th).
   self.bounces = (self.bounces or 0) + 1
@@ -3873,7 +4256,12 @@ function BallHero:on_brick_hit(brick)
   if brick.on_ball_contact then
     brick:on_ball_contact(self)
   else
-    brick:take_damage(self.dmg, self.color)
+    brick:take_damage(self.dmg*(self.parry_dmg_mult or 1), self.color)
+  end
+  -- Spend one parry charge per contact; the buff expires with the last one.
+  if (self.parry_hits_left or 0) > 0 then
+    self.parry_hits_left = self.parry_hits_left - 1
+    if self.parry_hits_left <= 0 then self.parry_dmg_mult = nil end
   end
 
   -- Glacier loadout: every brick hit chills the struck block.
@@ -3903,6 +4291,9 @@ function BallHero:on_brick_hit(brick)
   if trigger == 'chain_lightning' then
     if self.ability_ready then
       self.ability_ready = false
+      -- Storm Sage skin feedback: white-out the vortex eye + pop the body.
+      self.cast_flash_t = 0.25
+      self.spring:pull(0.12)
       arena:do_chain_lightning(self.x, self.y, self:current_dmg()*BAL('on_bounce.chain_dmg_mult', 0.7),
                                BAL('on_bounce.chain_links_base', 3) + self.level, self.color)
       wizard1:play{volume = 0.3, pitch = random:float(0.95, 1.05)}

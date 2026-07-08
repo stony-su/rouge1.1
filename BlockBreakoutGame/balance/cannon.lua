@@ -110,9 +110,11 @@ return {
     base_points       = 10,    -- per brick bounce
     variety_bonus     = 5,     -- + when hitting a different variant than last
     streak_bonus_cap  = 10,    -- + min(streak, cap) per bounce
-    miss_penalty      = 150,   -- lost when a ball falls into the pit
+    miss_frac         = 0.25,  -- fraction of current points lost per pit drop
+    miss_min          = 100,   -- ...but never less than that many points
     idle_grace        = 2,     -- seconds without a bounce before decay
-    idle_decay        = 20,    -- points/sec after the grace expires
+    idle_decay_frac   = 0.08,  -- fraction of current points bled per idle second
+    idle_decay_min    = 6,     -- ...with this floor so low bars still reach zero
   },
 
   -- ======================================================================
@@ -221,15 +223,15 @@ return {
     -- projectile shooter: arrow at nearest brick in range
     vagrant     = {dmg = 8,  cd = 0.5,  range = 96,  speed = 220, r = 6, base_speed = 160},
     -- crossbow bolt: infinite pierce, level 3 wall-ricochet
-    archer      = {dmg = 10, cd = 2.0,  range = 160, speed = 260, r = 5, base_speed = 175},
+    archer      = {dmg = 10, cd = 2.0,  range = 160, speed = 260, r = 5.5, base_speed = 175},
     -- chain knife: leaps brick to brick (chain = hops)
-    scout       = {dmg = 6,  cd = 2.0,  range = 64,  speed = 240, chain = 3, r = 5, base_speed = 180},
+    scout       = {dmg = 6,  cd = 2.0,  range = 64,  speed = 240, chain = 3, r = 5.5, base_speed = 180},
     -- constant spiral blade stream (spellblade_dmg_mult applies per shard)
     spellblade  = {dmg = 7,  cd = 0.1,  range = 9999, speed = 200, orbit_vr = 6, r = 6, base_speed = 160},
     -- cleave square (area = visual side; hit square is 1.5x)
-    swordsman   = {dmg = 14, cd = 3.0,  range = 48,  area = 96,  r = 7, base_speed = 150},
+    swordsman   = {dmg = 14, cd = 3.0,  range = 48,  area = 96,  r = 6.5, base_speed = 150},
     -- hexagon hammer slam (big cleave)
-    barbarian   = {dmg = 16, cd = 5.0,  range = 96,  area = 110, r = 8, base_speed = 140},
+    barbarian   = {dmg = 16, cd = 5.0,  range = 96,  area = 110, r = 7, base_speed = 140},
     -- consecrated ground: heals player, damages bricks at holy_mult x dmg/sec
     cleric      = {dmg = 4,  cd = 7,    ground_rs = 64, ground_duration = 6, heal_interval = 2.0, holy_mult = 0.6, blade_mult = 1.5, r = 6, base_speed = 145},
     -- pandemonium hex: dead hexed bricks burst into knife_mult x dmg knives
@@ -237,7 +239,7 @@ return {
     -- roaming void pool: dps_mult x dmg per second, shoot_mult at level 3
     witch       = {dmg = 6,  cd = 4,    pool_rs = 44, tick = 0.25, dps_mult = 0.7, dur_min = 11, dur_max = 15, shoot_mult = 2.5, r = 6, base_speed = 140},
     -- proximity mine: blast_mult x dmg over bomb_radius
-    bomber      = {dmg = 10, cd = 7,    bomb_radius = 60, fuse = 8, trigger_radius = 16, count = 1, blast_mult = 2.0, r = 7, base_speed = 125},
+    bomber      = {dmg = 10, cd = 7,    bomb_radius = 60, fuse = 8, trigger_radius = 16, count = 1, blast_mult = 2.0, r = 6.5, base_speed = 125},
     -- deployable turret: turret_mult x dmg per shot, burst_count per volley
     engineer    = {dmg = 8,  cd = 8,    lifetime = 16, turret_cd = 3.0, burst_count = 3, burst_gap = 0.12, turret_range = 256, turret_mult = 2.0, shot_speed = 220, lvl3_count = 2, r = 6, base_speed = 150},
     -- gravity well: pulls swarms; level 3 expire burst = dmg_mult x dmg
@@ -247,16 +249,25 @@ return {
     -- locust drizzle: each locust gnaws for locust_dmg x dmg
     infestor    = {dmg = 5,  cd = 0.13, range = 150, locust_dmg = 1.25, locust_speed = 155, dart = 0.32, r = 6, base_speed = 165},
     -- die roll: N laser strikes at payout_mult x dmg each
-    gambler     = {dmg = 8,  cd = 2,    range = 360, payout_mult = 3.0, r = 7, base_speed = 170},
+    gambler     = {dmg = 8,  cd = 2,    range = 360, payout_mult = 3.0, r = 6.5, base_speed = 170},
     -- volcano: eruptions at dmg x ranged_dmg_mult over `area` square
     vulcanist   = {dmg = 14, cd = 12,   area = 360, volcano_rs = 24, r = 6, base_speed = 150},
     -- artillery mortar: blast_mult x dmg splash, bombard clusters at level 3
-    cannoneer   = {dmg = 16, cd = 1.0,  range = 240, blast_radius = 50, blast_mult = 1.0, bombard = 2, shell_delay = 0.8, r = 7, base_speed = 132},
+    cannoneer   = {dmg = 16, cd = 1.0,  range = 240, blast_radius = 50, blast_mult = 1.0, bombard = 2, shell_delay = 0.8, r = 6.5, base_speed = 132},
     -- on-bounce chain lightning (see on_bounce.chain_*)
-    wizard      = {dmg = 7,  bounce_cd = 0.3, r = 5, base_speed = 170},
+    wizard      = {dmg = 7,  bounce_cd = 0.3, r = 5.5, base_speed = 170},
     -- following frost aura: dps_mult x dmg per tick + slow
     cryomancer  = {dmg = 6,  area_rs = 58, tick = 0.5, dps_mult = 0.8, slow_factor = 0.5, slow_duration = 1.5, r = 6, base_speed = 135},
     -- on-bounce burn area (see on_bounce.burn_*)
     pyromancer  = {dmg = 8,  bounce_cd = 0.4, r = 6, base_speed = 160},
+  },
+
+  -- Aim-line sight: predicted launch-path length in px. Total length =
+  -- path_base + path_per_level*(level - 1); the trace bounces off walls
+  -- AND enemy blocks (see BallPit:draw_aim_trajectory).
+  -- Cannon: artillery rangefinding — long.
+  aim = {
+    path_base      = 180,
+    path_per_level = 16,
   },
 }

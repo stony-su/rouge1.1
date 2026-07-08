@@ -20,7 +20,8 @@ Powerup:implement(Physics)
 -- Static description table: per-kind label, color, glyph, tier, and an
 -- arena-side apply function reference (resolved by name on use so we don't
 -- have to forward-declare). Tier 1 = standard catch, Tier 2 = deflect-and-
--- catch. Glyph is a single ASCII char for the pixul font.
+-- catch. Glyph is a single ASCII char kept for text listings only -- the
+-- in-world orb bodies are the per-kind vector ICONS painters above :draw.
 Powerup.KINDS = {
   heal          = {label = 'heal',     color = 'green',   glyph = '+',  tier = 1},
   wide_paddle   = {label = 'wide',     color = 'yellow',  glyph = 'W',  tier = 1},
@@ -277,52 +278,208 @@ function Powerup:draw_level_rune()
 end
 
 
+-- Per-kind elemental icon painters. Each draws the powerup's BODY -- a small
+-- vector silhouette of the effect itself (a medic cross, a stretching paddle,
+-- a licking flame, a snowflake, ...) instead of the old anonymous diamond +
+-- letter. Icons are drawn UPRIGHT for readability; the physics tumble stays
+-- visible on the tier-2 outline ring in :draw. `s` is the catch/deflect
+-- spring scale, `now` the shared clock driving each icon's mini-animation.
+local ICONS = {}
+
+-- Heal: a medic cross with a lub-dub heartbeat swell.
+ICONS.heal = function(self, s, now)
+  local c, r = self.color, self.r_size
+  local ph   = (now*1.3) % 1
+  local beat = 0
+  if ph < 0.15 then beat = math.sin(ph/0.15*math.pi)
+  elseif ph > 0.22 and ph < 0.37 then beat = math.sin((ph - 0.22)/0.15*math.pi) end
+  local k  = (1 + 0.14*beat)*s
+  local aw = r*2.2*k                                  -- cross arm length
+  local at = r*0.85*k                                 -- cross arm thickness
+  graphics.rectangle(self.x, self.y, aw + 1.6, at + 1.6, 1, 1, bg[-2])
+  graphics.rectangle(self.x, self.y, at + 1.6, aw + 1.6, 1, 1, bg[-2])
+  graphics.rectangle(self.x, self.y, aw, at, 1, 1, c)
+  graphics.rectangle(self.x, self.y, at, aw, 1, 1, c)
+  graphics.rectangle(self.x, self.y, at*0.55, at*0.55, nil, nil, fg[5])
+end
+
+-- Wide: the paddle bar itself, with stretch chevrons sliding off both ends.
+ICONS.wide_paddle = function(self, s, now)
+  local c, r = self.color, self.r_size
+  local bw, bh = r*2.4*s, r*0.8*s
+  graphics.rectangle(self.x, self.y, bw + 1.6, bh + 1.6, 2, 2, bg[-2])
+  graphics.rectangle(self.x, self.y, bw, bh, 2, 2, c)
+  local ph  = (now*1.6) % 1
+  local off = bw/2 + 1 + ph*r*1.2
+  local ch  = Color(c.r, c.g, c.b, 1 - ph)
+  for _, dir in ipairs({1, -1}) do
+    local x0 = self.x + dir*off
+    graphics.line(x0, self.y - bh*0.8, x0 + dir*r*0.5, self.y, ch, 1.5)
+    graphics.line(x0 + dir*r*0.5, self.y, x0, self.y + bh*0.8, ch, 1.5)
+  end
+end
+
+-- Big: a ball mid-growth -- an expanding ghost ring swells off the rim.
+ICONS.big_ball = function(self, s, now)
+  local c, r = self.color, self.r_size
+  local br = r*0.95*s
+  graphics.circle(self.x, self.y, br + 0.8, bg[-2])
+  graphics.circle(self.x, self.y, br, c)
+  graphics.circle(self.x - br*0.3, self.y - br*0.3, br*0.32, fg[5])
+  local ph = (now*1.2) % 1
+  graphics.circle(self.x, self.y, br + 1 + ph*r*1.6, Color(c.r, c.g, c.b, (1 - ph)*0.8), 1.5)
+end
+
+-- Fire: a licking flame -- round base, swaying/fluttering tip, hot core.
+ICONS.fire_trail = function(self, s, now)
+  local c, r = self.color, self.r_size
+  local fb  = r*0.95*s                                -- flame base radius
+  local by  = self.y + r*0.45                         -- base sits low
+  local tip = -r*1.9 - r*0.25*math.sin(now*13)        -- tip height flutters
+  local tx  = r*0.30*math.sin(now*9)                  -- ...and sways
+  graphics.circle(self.x, by, fb + 0.8, bg[-2])
+  graphics.polygon({self.x - fb - 0.8, by, self.x + fb + 0.8, by, self.x + tx, by + tip - 1}, bg[-2])
+  graphics.circle(self.x, by, fb, c)
+  graphics.polygon({self.x - fb, by, self.x + fb, by, self.x + tx, by + tip}, c)
+  local core = Color(1, 0.75, 0.35, 1)
+  graphics.circle(self.x, by, fb*0.55, core)
+  graphics.polygon({self.x - fb*0.55, by, self.x + fb*0.55, by, self.x + tx*0.6, by + tip*0.55}, core)
+  graphics.circle(self.x, by - fb*0.2, fb*0.26, Color(1, 0.95, 0.7, 1))
+end
+
+-- Freeze: a six-armed snowflake, V-ticked arms, turning lazily.
+ICONS.freeze_wave = function(self, s, now)
+  local c, r = self.color, self.r_size
+  local al = r*1.7*s                                  -- arm length
+  local a0 = now*0.7                                  -- lazy cosmetic spin
+  for i = 0, 5 do                                     -- dark under-strokes first
+    local a = a0 + i*(math.pi/3)
+    graphics.line(self.x, self.y, self.x + math.cos(a)*al, self.y + math.sin(a)*al, bg[-2], 2.5)
+  end
+  for i = 0, 5 do
+    local a  = a0 + i*(math.pi/3)
+    local ca, sa = math.cos(a), math.sin(a)
+    graphics.line(self.x, self.y, self.x + ca*al, self.y + sa*al, c, 1.2)
+    local bx, by = self.x + ca*al*0.6, self.y + sa*al*0.6
+    for _, da in ipairs({0.6, -0.6}) do
+      graphics.line(bx, by, bx + math.cos(a + da)*r*0.55, by + math.sin(a + da)*r*0.55, c, 1)
+    end
+  end
+  graphics.circle(self.x, self.y, r*0.4*s,
+    Color(math.min(1, c.r*0.5 + 0.5), math.min(1, c.g*0.5 + 0.55), math.min(1, c.b*0.5 + 0.6), 1))
+end
+
+-- Water: a deep pool badge with two crests rolling across it.
+ICONS.water_wave = function(self, s, now)
+  local c, r = self.color, self.r_size
+  local br = r*1.3*s
+  graphics.circle(self.x, self.y, br + 0.8, bg[-2])
+  graphics.circle(self.x, self.y, br, Color(c.r*0.55, c.g*0.6, c.b*0.85, 1))
+  local crest = Color(math.min(1, c.r*0.5 + 0.5), math.min(1, c.g*0.5 + 0.55), math.min(1, c.b*0.5 + 0.65), 1)
+  for row = 0, 1 do
+    local yy  = self.y + (row == 0 and -br*0.25 or br*0.35)
+    local amp = br*0.22
+    local pts = {crest, 1.2}
+    local n   = 6
+    for i = 0, n do
+      pts[#pts + 1] = self.x - br*0.8 + (i/n)*br*1.6
+      pts[#pts + 1] = yy + math.sin(now*4 + row*1.7 + i*1.1)*amp
+    end
+    graphics.polyline(unpack(pts))
+  end
+end
+
+-- Multi: three little hero-balls orbiting a common centre -- the split, live.
+ICONS.multi_ball = function(self, s, now)
+  local c, r = self.color, self.r_size
+  local orb  = r*0.55*s
+  local ring = r*0.95
+  for i = 0, 2 do
+    local a = now*1.6 + i*(2*math.pi/3)
+    local bx, by = self.x + math.cos(a)*ring, self.y + math.sin(a)*ring
+    graphics.circle(bx, by, orb + 0.8, bg[-2])
+    graphics.circle(bx, by, orb, c)
+    graphics.circle(bx - orb*0.3, by - orb*0.3, orb*0.33, fg[5])
+  end
+end
+
+-- Pierce: an arrow punched clean through a brick, shards off the exit face.
+ICONS.pierce = function(self, s, now)
+  local c, r = self.color, self.r_size
+  local bs = r*1.5*s                                  -- the brick being pierced
+  graphics.rectangle(self.x, self.y, bs + 1.6, bs + 1.6, 1, 1, bg[-2])
+  graphics.rectangle(self.x, self.y, bs, bs, 1, 1, Color(c.r*0.5, c.g*0.5, c.b*0.7, 1))
+  local push_x = r*0.3*math.abs(math.sin(now*4))      -- nudges forward on a loop
+  local x0, x1 = self.x - r*2.2 + push_x, self.x + r*1.3 + push_x
+  graphics.line(x0, self.y, x1, self.y, bg[-2], 2.6)
+  graphics.line(x0, self.y, x1, self.y, c, 1.4)
+  graphics.triangle(x1 + r*0.35, self.y, r*1.0 + 1.2, r*1.1 + 1.2, bg[-2])
+  graphics.triangle(x1 + r*0.35, self.y, r*1.0, r*1.1, c)
+  for i, dy in ipairs({-1, 1}) do                     -- exit-face shards
+    local ph = (now*2 + i*0.4) % 1
+    graphics.rectangle(self.x + bs/2 + 1 + ph*r*1.1, self.y + dy*(bs*0.35 + ph*r*0.7),
+                       1.3, 1.3, nil, nil, Color(c.r, c.g, c.b, 1 - ph))
+  end
+end
+
+-- Floor: a safety line with a ball bouncing off it, squashing on impact.
+ICONS.floor = function(self, s, now)
+  local c, r = self.color, self.r_size
+  local fy = self.y + r*1.0
+  local fw = r*2.6*s
+  graphics.rectangle(self.x, fy, fw + 1.6, 2.6, 1, 1, bg[-2])
+  graphics.rectangle(self.x, fy, fw, 1.6, 1, 1, c)
+  local ph = math.abs(math.sin(now*3.2))
+  local by = fy - 2 - ph*r*1.7
+  local squash = math.min(1, 0.7 + ph)
+  graphics.push(self.x, by, 0, 1, squash)
+    graphics.circle(self.x, by, r*0.55 + 0.8, bg[-2])
+    graphics.circle(self.x, by, r*0.55, fg[0])
+  graphics.pop()
+  if ph < 0.22 then                                   -- impact ticks
+    local ta = 1 - ph/0.22
+    graphics.line(self.x - fw*0.32, fy - 2, self.x - fw*0.32 - r*0.5, fy - 2 - r*0.4, Color(c.r, c.g, c.b, ta), 1)
+    graphics.line(self.x + fw*0.32, fy - 2, self.x + fw*0.32 + r*0.5, fy - 2 - r*0.4, Color(c.r, c.g, c.b, ta), 1)
+  end
+end
+
+
 function Powerup:draw()
   self.spring:pull(0)
   if self.kind == 'level_random' then return self:draw_level_rune() end
-  local s     = self.spring.x
-  local now   = time or 0
-  local pulse = 1 + 0.10*math.sin(now*7)
-  -- Spin is read straight off the physics body, so what you see is the orb's
-  -- real angular velocity tumbling through the air (and the english from a
-  -- paddle deflect), not a cosmetic clock.
+  local s   = self.spring.x
+  local now = time or 0
   local rot = self:get_angle() or 0
-
-  local inner_sz = self.r_size * 1.9 * s * pulse
-  local outer_sz = self.r_size * 2.7 * pulse
 
   -- Outer halo glow. Pulses brighter when armed (tier-2 mid-flight) so the
   -- catch-attempt-that-counts is unmistakable.
-  local halo_a = self.armed and (0.55 + 0.35*math.abs(math.sin(now*10))) or 0.32
-  local halo_c = Color(self.color.r, self.color.g, self.color.b, halo_a)
-  graphics.push(self.x, self.y, rot + math.pi/4)
-    graphics.rectangle(self.x, self.y, outer_sz*1.05, outer_sz*1.05, 1, 1, halo_c)
-  graphics.pop()
+  local halo_a = self.armed and (0.55 + 0.35*math.abs(math.sin(now*10))) or 0.28
+  graphics.circle(self.x, self.y, self.r_size*2.4*(1 + 0.06*math.sin(now*7)),
+                  Color(self.color.r, self.color.g, self.color.b, halo_a*0.5))
 
-  -- Body. Drawn as a rotated square (= diamond) so the orb is clearly NOT
-  -- a ball or an XP orb. Dark backing for contrast against the bg grid,
-  -- then the coloured face, then a small highlight quad for depth.
-  graphics.push(self.x, self.y, rot + math.pi/4)
-    graphics.rectangle(self.x, self.y, inner_sz + 1.5, inner_sz + 1.5, 1, 1, bg[-2])
-    graphics.rectangle(self.x, self.y, inner_sz, inner_sz, 1, 1, self.color)
-    -- Inner darker square for facet depth.
-    graphics.rectangle(self.x, self.y, inner_sz*0.65, inner_sz*0.65, 1, 1,
-      Color(self.color.r*0.65, self.color.g*0.65, self.color.b*0.85, 1))
-  graphics.pop()
-
-  -- Tier-2 outline, rigidly attached to the body (offset 45 deg from the face
-  -- diamond so the pair reads as a spinning star). Pure yellow = "rare one".
+  -- Tier-2 outline ring, rigidly attached to the tumbling body -- the physics
+  -- spin (and the english from a deflect) stays visible here even though the
+  -- elemental icon itself is drawn upright. Pure yellow = "rare one".
   if self.tier == 2 then
     graphics.push(self.x, self.y, rot)
-      graphics.rectangle(self.x, self.y, outer_sz, outer_sz, 1, 1, yellow[0], 1)
+      graphics.rectangle(self.x, self.y, self.r_size*2.7, self.r_size*2.7, 1, 1, yellow[0], 1)
     graphics.pop()
   end
 
-  -- Center glyph: NOT inside the rotated push, so the letter stays upright
-  -- and readable while the diamond spins behind it.
-  graphics.print_centered(self.glyph, pixul_font, self.x, self.y - 4, 0, 1, 1, 0, 0, fg[0])
+  -- Elemental icon body (see the ICONS painters above).
+  local icon = ICONS[self.kind]
+  if icon then
+    icon(self, s, now)
+  else
+    -- Unknown kind fallback: the old anonymous diamond.
+    local inner_sz = self.r_size*1.9*s
+    graphics.push(self.x, self.y, rot + math.pi/4)
+      graphics.rectangle(self.x, self.y, inner_sz + 1.5, inner_sz + 1.5, 1, 1, bg[-2])
+      graphics.rectangle(self.x, self.y, inner_sz, inner_sz, 1, 1, self.color)
+    graphics.pop()
+  end
 
-  -- Sparkle: a few tiny offsets that orbit the diamond, sold as "this is
+  -- Sparkle: a few tiny offsets that orbit the icon, sold as "this is
   -- not background scenery, grab me". Clock-driven so they keep orbiting even
   -- after the body's spin damps out.
   local spark_r = self.r_size + 4

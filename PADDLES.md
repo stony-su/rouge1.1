@@ -74,15 +74,26 @@ Charge 1.4, Combo 1.4) — boost, not raw speed, so the ball stays catchable.
   bats on one kinematic body) + `Paddle:flip_launch` (tap → upward impulse to
   nearby balls). Ball/flipper restitution low; side walls damped in `reset_run`.
 
-### Aegis — *defensive / grind*
-Spawns a **bottom wall** (the pit is closed): balls auto-bounce off it instead of
-recalling, so they **never charge speed via paddle bounces** (Charge 0.2, hence
-low Ball/Dmg). The paddle **reflects enemy bullets** back as damage and **hurts
-any ball that touches it** — you want balls on the bottom wall, not on you. Tanky
-at 7 hearts.
-- **Downside:** no speed/charge ramp = low scaling damage; slow defensive grind.
-- **Hook:** `reset_run` adds a bottom wall + disables `BallHero:start_return`;
-  bullet-reflect in the paddle collision callback.
+### Aegis — *defensive / timing*
+The pit is open (no bottom wall). The signature is the **shield**: tap E (or
+click) to raise it for a sustained beat (0.6s) — a **flat blue aura arc**
+hangs over the paddle while it's up. A ball turned by the raised shield is
+**parried** — its next few brick contacts hit for a multiplied payload and
+**punch straight through** the swarm, and it leaves the paddle fast. An enemy
+bullet turned by it is **reflected — the bullet itself flips golden and flies
+back** at the swarm, refunding combo points. Unshielded contact is a flat,
+no-ramp bounce and unshielded bullets hurt like on any other paddle — the
+loadout's whole damage budget lives under the arc. When the window closes the
+shield **recharges** (2.5s, hit or not), shown as a thin blue re-arm bar
+refilling over the paddle — raising it is a commitment, not a twitch.
+Tanky at 7 hearts.
+- **Downside:** low passive damage (Dmg 0.7, no ramp); miss your parries and
+  the run is a glacial grind under live bullet fire.
+- **Hook:** `Paddle:start_brace` + brace tick (paddle.lua) and the Greek
+  aspis skin `Paddle:draw_aegis_paddle` (ready glint / gold flare / re-arm
+  bar); parry branch in `Paddle:on_ball_bounce`; brace-gated
+  `EnemyProjectile:reflect` (enemies.lua); charged hits spent in
+  `BallHero:on_brick_hit` / read in `Brick:on_ball_contact`.
 
 ### Mitosis — *snowball / swarm*
 Each brick kill spawns a **temporary clone ball (2.5s life)**. If any hero variant

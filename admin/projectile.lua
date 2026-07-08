@@ -244,7 +244,7 @@ function Projectile:on_hit_brick(brick)
   if self.type == 'cannonball' then self:cannon_explode(); return end
   if self.hits[brick.id] then return end
   self.hits[brick.id] = true
-  brick:take_damage(self.dmg, self.color)
+  brick:take_damage(self.dmg, self.color, nil, self.source or self.type)
 
   -- Assassin on-hit: the struck brick starts bleeding, and a crit sprays extra
   -- particles. bleed is the TOTAL over bleed_dur, so pass it through as dps.
@@ -335,7 +335,8 @@ function Projectile:cannon_explode()
   local radius = self.blast_radius or 56
   local dmg    = self.dmg
   local col    = self.color
-  arena:do_splash(self.x, self.y, radius, dmg, col)
+  local src    = self.source or self.type
+  arena:do_splash(self.x, self.y, radius, dmg, col, src)
   explosion1:play{volume = 0.5, pitch = random:float(0.9, 1.0)}
   for _ = 1, 6 do
     SmokePuff{group = arena.effects, x = self.x + random:float(-radius*0.4, radius*0.4),
@@ -354,7 +355,7 @@ function Projectile:cannon_explode()
         local a = main.current
         if not (a and a.world) then return end
         a:do_splash(bx, by, radius*BAL('effects.mortar_cluster_radius_mult', 0.7),
-                    dmg*BAL('effects.mortar_cluster_dmg_mult', 0.5), col)
+                    dmg*BAL('effects.mortar_cluster_dmg_mult', 0.5), col, src)
         explosion1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
       end)
     end
