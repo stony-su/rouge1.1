@@ -42,9 +42,11 @@ function Paddle:init(args)
   self.color = self.color or fg[0]
 
   -- Aegis shield state (inert on every other loadout): brace_t is the open
-  -- shield window, brace_lock_t the recharge cooldown after it closes.
+  -- shield window, brace_lock_t the recharge cooldown after it closes,
+  -- greater marks the current window as a bulwark-fueled Greater Aegis.
   self.brace_t      = 0
   self.brace_lock_t = 0
+  self.greater      = false
 
   if self.flippers then
     local sig          = self.flipper_sig or {}
@@ -234,7 +236,14 @@ function Paddle:update(dt)
     self.brace_t = self.brace_t - dt
     if self.brace_t <= 0 then
       self.brace_lock_t = self.brace_lockout or 2.5
-      bounce1:play{volume = 0.2, pitch = 0.55}
+      if self.greater then
+        -- A Greater dome goes out with a bang instead of a click.
+        self.greater = false
+        local arena = main.current
+        if arena and arena.aegis_greater_nova then arena:aegis_greater_nova() end
+      else
+        bounce1:play{volume = 0.2, pitch = 0.55}
+      end
     end
   elseif (self.brace_lock_t or 0) > 0 then
     self.brace_lock_t = self.brace_lock_t - dt
@@ -312,7 +321,21 @@ function Paddle:start_brace()
   local sigt  = (arena and arena.run_mods and arena.run_mods.sig) or {}
   self.brace_window  = sigt.parry_window or 0.6
   self.brace_lockout = sigt.parry_lockout or 2.5
-  self.brace_t       = self.brace_window
+  -- GREATER AEGIS: a full bulwark meter is spent on this raise. The dome
+  -- goes gold and lasts greater_window_mult longer; parried payloads double
+  -- (on_ball_bounce / EnemyProjectile), hero balls themselves turn bullets,
+  -- incoming damage is halved (BallPit:damage_player) and the raise restores
+  -- hearts. The dome ends in a nova (see the brace tick in update).
+  self.greater = false
+  if arena and (arena.bulwark or 0) >= (sigt.bulwark_max or 5) then
+    self.greater      = true
+    arena.bulwark     = 0
+    self.brace_window = self.brace_window*(sigt.greater_window_mult or 2.0)
+    arena:heal_hearts(sigt.greater_heal or 2)
+    buff1:play{volume = 0.5, pitch = 0.9}
+    camera:shake(2, 0.15, 90)
+  end
+  self.brace_t = self.brace_window
   pop1:play{volume = 0.3, pitch = 0.8}
 end
 
@@ -415,11 +438,24 @@ function Paddle:draw_aegis_paddle(s, color)
     graphics.rectangle(self.x, self.y + h*0.25, w - 3, h*0.5, 1, 1, belly)
     -- Hammered top rim.
     graphics.rectangle(self.x, self.y - h/2, w, 1, nil, nil, braced and fg[5] or gold)
-    -- Meander (Greek-key) suggestion: evenly spaced gold ticks along the face.
-    local n = math.max(3, math.floor(w/10))
+    -- Meander (Greek-key) ticks double as the BULWARK meter: parries light
+    -- them gold left-to-right, and a full row pulses — the next raise is a
+    -- Greater Aegis. Dark ticks are the unfilled sockets.
+    local arena = main.current
+    local bmax, bw_ = 5, 0
+    if arena and arena.run_mods and arena.run_mods.signature == 'aegis' then
+      bmax = (arena.run_mods.sig and arena.run_mods.sig.bulwark_max) or 5
+      bw_  = arena.bulwark or 0
+    end
+    local n     = math.max(3, math.floor(w/10))
+    local lit   = math.floor(n*math.min(bw_, bmax)/bmax + 0.5)
+    local full  = bw_ >= bmax
+    local pulse = full and (0.6 + 0.4*math.sin(t*8)) or 1
     for i = 0, n - 1 do
       local mx = self.x - w/2 + (i + 0.5)*(w/n)
-      graphics.rectangle(mx, self.y, 1.4, h*0.35, nil, nil, gold)
+      local c  = (i < lit) and Color(1, 0.85, 0.35, pulse)
+                           or Color(0.35, 0.28, 0.18, 1)
+      graphics.rectangle(mx, self.y, 1.4, h*0.35, nil, nil, c)
     end
     -- Rim rivets.
     graphics.circle(self.x - w/2 + 2, self.y, 1.1, gold)
@@ -437,17 +473,22 @@ function Paddle:draw_aegis_paddle(s, color)
 
   -- The raised shield: a flat blue aura arc floating above the paddle —
   -- layered strokes (soft glow, body, bright inner edge) so it reads as an
-  -- energy barrier, dimming as the window runs out.
+  -- energy barrier, dimming as the window runs out. A GREATER dome trades
+  -- the blue for gold and swells wider and taller.
   if braced then
-    local half = w/2 + 8
-    local sag  = 8                                -- crest height over the arc's endpoints
+    local g    = self.greater
+    local half = w/2 + (g and 14 or 8)
+    local sag  = g and 22 or 8                    -- crest height over the arc's endpoints
     local R    = (half*half + sag*sag)/(2*sag)    -- circle through crest + endpoints
     local cy   = self.y - h/2 - 4 - sag + R       -- its center sits far below the crest
     local th   = math.asin(half/R)
     local a1, a2 = -math.pi/2 - th, -math.pi/2 + th
-    graphics.arc('open', self.x, cy, R + 2.5, a1, a2, Color(0.45, 0.75, 1, 0.10 + 0.18*k), 5)
-    graphics.arc('open', self.x, cy, R,       a1, a2, Color(0.55, 0.80, 1, 0.30 + 0.45*k), 2)
-    graphics.arc('open', self.x, cy, R - 1.5, a1, a2, Color(0.85, 0.95, 1, 0.25 + 0.35*k), 1)
+    local cA = g and Color(1, 0.80, 0.30, 0.12 + 0.20*k) or Color(0.45, 0.75, 1, 0.10 + 0.18*k)
+    local cB = g and Color(1, 0.85, 0.35, 0.35 + 0.45*k) or Color(0.55, 0.80, 1, 0.30 + 0.45*k)
+    local cC = g and Color(1, 0.95, 0.70, 0.30 + 0.35*k) or Color(0.85, 0.95, 1, 0.25 + 0.35*k)
+    graphics.arc('open', self.x, cy, R + 2.5, a1, a2, cA, g and 7 or 5)
+    graphics.arc('open', self.x, cy, R,       a1, a2, cB, g and 3 or 2)
+    graphics.arc('open', self.x, cy, R - 1.5, a1, a2, cC, 1)
   elseif locked then
     -- Re-arm readout: refills left-to-right across the recharge.
     local rk = 1 - math.clamp(self.brace_lock_t/(self.brace_lockout or 2.5), 0, 1)
@@ -843,9 +884,12 @@ function Paddle:on_ball_bounce(ball)
       -- PERFECT PARRY: a ball turned by the raised shield comes off charged —
       -- its next few brick contacts hit for parry_dmg_mult and punch straight
       -- through (see BallHero:apply_parry / on_brick_hit) — and gets shoved
-      -- out fast.
+      -- out fast. A Greater dome doubles the charged-hit count, and each
+      -- parried ball banks bulwark toward the next Greater raise.
       local sigt = (mods and mods.sig) or {}
-      ball:apply_parry(sigt.parry_hits or 4, sigt.parry_dmg_mult or 2.5)
+      local hits = (sigt.parry_hits or 4)*((self.greater and (sigt.greater_hits_mult or 2)) or 1)
+      ball:apply_parry(hits, sigt.parry_dmg_mult or 2.5)
+      if arena and arena.bulwark_add then arena:bulwark_add(sigt.bulwark_ball or 2) end
       ball.speed_mult = math.min(ball.speed_mult_max or 4,
                                  math.max(ball.speed_mult or 1, sigt.parry_speed_mult or 1.6))
       -- Success juice: a gold ring snaps out of the point of contact so the

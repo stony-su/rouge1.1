@@ -83,11 +83,19 @@ PADDLES.defs = {
     size = 1.4, move = 0.6, ball = 0.7, charge = 0.2, aim = 0.5, dmg = 0.7,
     xp = 0.9, combo = 0.6, hp = 7, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'cleric', 'cleric'},
-    signature = 'aegis', sig = {reflect_dmg = 60, parry_window = 0.6, parry_lockout = 2.5,
-                                parry_hits = 4, parry_dmg_mult = 2.5, parry_speed_mult = 1.6,
-                                parry_combo = 25},
+    signature = 'aegis', sig = {
+      reflect_dmg = 60, parry_window = 0.6, parry_lockout = 2.5,
+      parry_hits = 4, parry_dmg_mult = 2.5, parry_speed_mult = 1.6,
+      parry_combo = 25,
+      -- Bulwark meter -> Greater Aegis (see paddles.lua helpers).
+      bulwark_max = 5, bulwark_bullet = 1, bulwark_ball = 2,
+      bulwark_decay = 0.1, bulwark_grace = 4,
+      greater_window_mult = 2.0, greater_reflect_mult = 2.0,
+      greater_hits_mult = 2.0, greater_heal = 2, greater_dr = 0.5,
+      greater_nova_dmg = 40, greater_nova_radius = 120,
+    },
     blurb = 'A shield that answers: raise it at the right moment to parry balls and bullets.',
-    sig_blurb = 'E/click raises the shield; parried balls pierce and hit harder, bullets flip gold and fly back',
+    sig_blurb = 'E/click raises the shield; parries bank bulwark — a full meter turns the next raise gold',
   },
   mitosis = {
     id = 'mitosis', name = 'Mitosis', price = 500, color_key = 'green',
@@ -219,6 +227,12 @@ end
 
 function BallPit:damage_player(hearts)
   local amount = hearts or 1
+  -- Greater Aegis: while the gold dome is up the player takes greater_dr of
+  -- all damage. This is what HALF-hearts exist for — a 1-dmg bullet through
+  -- the dome costs half a heart (see draw_steel_hearts).
+  if self.paddle and self.paddle.greater then
+    amount = amount*((self.run_mods and self.run_mods.sig and self.run_mods.sig.greater_dr) or 0.5)
+  end
   if self.run_mods and self.run_mods.hp_mode == 'bar' then amount = amount*20 end
   self.player_hp = self.player_hp - amount
 end
@@ -247,12 +261,16 @@ function BallPit:setup_signature()
   self.twin_fx          = nil
 
   if sigid == 'aegis' then
-    -- Perfect Parry: the state (brace_t window / brace_lock_t whiff lockout)
+    -- Perfect Parry: the state (brace_t window / brace_lock_t recharge)
     -- lives on the paddle — ticked in Paddle:update, raised by E/click via
     -- BallPit:update. The pit is OPEN (the old bottom wall is gone); missed
-    -- balls recall like any other loadout.
+    -- balls recall like any other loadout. The BULWARK meter banks parries
+    -- toward a Greater Aegis raise (bulwark_add / aegis_tick below).
     self.paddle.brace_t      = 0
     self.paddle.brace_lock_t = 0
+    self.paddle.greater      = false
+    self.bulwark             = 0
+    self.bulwark_idle_t      = 0
   elseif sigid == 'mitosis' then
     -- Regrow: a drafted hero type with zero live balls comes back on its own,
     -- so the player never permanently loses a variant.
@@ -290,6 +308,243 @@ function BallPit:setup_signature()
       for _, h in ipairs(self.heroes) do if h and not h.dead then return end end
       self:add_hero(hero_pool[random:int(1, #hero_pool)])
     end, nil, nil, 'terror_regrow')
+  end
+end
+
+
+-- ----- Aegis bulwark meter + Greater Aegis + steel hearts -----
+
+-- Parries bank pips (bullet = bulwark_bullet, ball = bulwark_ball, capped at
+-- bulwark_max). A FULL meter turns the next raise into a GREATER AEGIS (see
+-- Paddle:start_brace): gold dome, doubled window/payloads, balls turn
+-- bullets, half damage taken, +greater_heal hearts, ends in a nova. Gains
+-- pause while the gold dome itself is up (no self-feeding). The meter is
+-- drawn as the shield face's meander ticks (Paddle:draw_aegis_paddle).
+function BallPit:bulwark_add(pips)
+  if not (self.run_mods and self.run_mods.signature == 'aegis') then return end
+  if self.paddle and self.paddle.greater then return end
+  local sigt = self.run_mods.sig or {}
+  local max  = sigt.bulwark_max or 5
+  local prev = self.bulwark or 0
+  self.bulwark        = math.min(max, prev + (pips or 1))
+  self.bulwark_idle_t = 0
+  if prev < max and self.bulwark >= max then
+    -- Bank full: one clear chime — the next raise goes gold.
+    level_up1:play{volume = 0.3, pitch = 1.4}
+  end
+end
+
+
+-- Idle bleed: a banked meter slowly drains after bulwark_grace seconds
+-- without a parry, so a full dome can't sit in the pocket all wave.
+function BallPit:aegis_tick(dt)
+  if not (self.run_mods and self.run_mods.signature == 'aegis') then return end
+  local sigt = self.run_mods.sig or {}
+  self.bulwark_idle_t = (self.bulwark_idle_t or 0) + dt
+  if (self.bulwark or 0) > 0 and self.bulwark_idle_t > (sigt.bulwark_grace or 4) then
+    self.bulwark = math.max(0, self.bulwark - (sigt.bulwark_decay or 0.1)*dt)
+  end
+end
+
+
+-- Greater Aegis finale: the gold dome collapses outward as a nova — a
+-- falloff blast centered just above the paddle that clears the space the
+-- shield was holding. Fired from the Paddle brace tick the frame the
+-- empowered window closes.
+function BallPit:aegis_greater_nova()
+  local sigt   = (self.run_mods and self.run_mods.sig) or {}
+  local gold   = Color(1, 0.85, 0.35, 1)
+  local px, py = self.paddle.x, self.paddle.y - 10
+  local radius = sigt.greater_nova_radius or 120
+  self:do_splash_falloff(px, py, radius, sigt.greater_nova_dmg or 40, gold)
+  TelegraphRing{group = self.effects, x = px, y = py, radius = radius*0.6,
+                color = gold, duration = 0.35}
+  spawn_burst(self.effects, px, py - 8, gold, 12, 120, 240)
+  explosion1:play{volume = 0.4, pitch = 1.1}
+  camera:shake(4, 0.25, 80)
+end
+
+
+-- Aegis HP readout: forged STEEL hearts instead of the flat red squares,
+-- with the half-heart granularity the Greater dome's 0.5x damage creates.
+-- Each heart is two lobes + a convex tip triangle (polygon fills convex
+-- shapes only), drawn as left/right halves so a half heart is literally the
+-- left half lit. Idle: a tiny out-of-phase breathing pulse per heart and a
+-- specular glint that sweeps each heart every few seconds. Same 10px stride
+-- as the plain hearts so the XP bar layout is untouched.
+function BallPit:draw_steel_hearts()
+  local t = love.timer.getTime()
+  for i = 1, self.player_hp_max do
+    local cx   = self.x1 + 8 + (i - 1)*10
+    local cy   = self.y1 - 8
+    local fill = math.clamp(self.player_hp - (i - 1), 0, 1)
+    local s    = 1 + 0.06*math.sin(t*2.2 + i*0.9)
+    local function half_heart(side, color)
+      graphics.circle(cx + side*1.5*s, cy - 1.2*s, 1.7*s, color)
+      graphics.polygon({cx, cy - 0.6*s, cx + side*3.1*s, cy - 0.6*s, cx, cy + 3.4*s}, color)
+    end
+    -- Empty socket underneath, then light the halves the fill covers.
+    half_heart(-1, bg[2]); half_heart(1, bg[2])
+    local steel = Color(0.66, 0.71, 0.80, 1)
+    if fill >= 0.5   then half_heart(-1, steel) end
+    if fill >= 0.999 then half_heart( 1, steel) end
+    if fill >= 0.5 then
+      -- Forged look: top-left catch-light + a shaded tip.
+      graphics.circle(cx - 1.6*s, cy - 1.9*s, 0.6*s, Color(0.95, 0.97, 1, 0.9))
+      -- Sweeping glimmer: a bright fleck crosses the heart every few seconds,
+      -- staggered per heart so the row ripples instead of strobing.
+      local u = (t + i*0.25) % 3.5
+      if u < 0.45 then
+        local p  = u/0.45
+        local gx = cx - 2.2*s + p*4.4*s
+        graphics.line(gx - 0.8, cy + 1.6*s, gx + 0.8, cy - 2.6*s,
+                      Color(1, 1, 1, 0.7*math.sin(p*math.pi)), 1)
+      end
+    end
+  end
+end
+
+
+-- ----- Themed HP hearts (one glyph style per paddle) -----
+--
+-- Every loadout renders its own life glyph in the HUD strip. The Vampire's
+-- blood bar and the Aegis steel halves live elsewhere; everything here is a
+-- binary full/empty glyph on the same 10px stride as the original red
+-- squares, so the XP bar layout is untouched. Each style is
+-- fn(cx, cy, lit, i, t, max) — kept to a handful of primitives each.
+
+-- Shared classic heart silhouette: two lobes + a convex tip triangle.
+local function heart_glyph(cx, cy, s, color)
+  graphics.circle(cx - 1.5*s, cy - 1.2*s, 1.7*s, color)
+  graphics.circle(cx + 1.5*s, cy - 1.2*s, 1.7*s, color)
+  graphics.polygon({cx - 3.1*s, cy - 0.6*s, cx + 3.1*s, cy - 0.6*s, cx, cy + 3.4*s}, color)
+end
+
+-- One side of the classic heart (for the split-in-two death animation).
+local function heart_half(cx, cy, side, s, color)
+  graphics.circle(cx + side*1.5*s, cy - 1.2*s, 1.7*s, color)
+  graphics.polygon({cx, cy - 0.6*s, cx + side*3.1*s, cy - 0.6*s, cx, cy + 3.4*s}, color)
+end
+
+local HEART_STYLES = {
+  -- Standard: the classic red heart, with an honest heartbeat thump.
+  none = function(cx, cy, lit, i, t)
+    if not lit then heart_glyph(cx, cy, 1, bg[2]) return end
+    local s = 1 + 0.10*(math.max(0, math.sin(t*2.4 + i*0.3)))^8
+    heart_glyph(cx, cy, s, red[0])
+    graphics.circle(cx - 1.4*s, cy - 1.7*s, 0.55*s, Color(1, 0.8, 0.8, 0.9))
+  end,
+
+  -- Pinball Lobber: cabinet marquee bulbs with a chase light running the row.
+  flippers = function(cx, cy, lit, i, t, max)
+    graphics.circle(cx, cy, 3.4, Color(0.62, 0.65, 0.72, 1), 1)
+    if not lit then graphics.circle(cx, cy, 2.4, bg[2]) return end
+    local hot = (math.floor(t*6) % math.max(max, 1)) == (i - 1)
+    graphics.circle(cx, cy, 2.4, hot and Color(1, 0.75, 0.30, 1) or Color(0.85, 0.45, 0.12, 1))
+    if hot then graphics.circle(cx, cy, 4.2, Color(1, 0.70, 0.25, 0.25)) end
+    graphics.circle(cx - 0.9, cy - 0.9, 0.7, Color(1, 1, 0.85, hot and 1 or 0.7))
+  end,
+
+  -- Mitosis: a living cell — membrane, drifting nucleus, orbiting organelle.
+  mitosis = function(cx, cy, lit, i, t)
+    if not lit then graphics.circle(cx, cy, 3.0, bg[2], 1) return end
+    local wob = t*1.7 + i*1.1
+    graphics.circle(cx, cy, 3.2 + 0.25*math.sin(wob*1.3), Color(0.45, 0.85, 0.50, 0.30))
+    graphics.circle(cx, cy, 3.2, green[0], 1)
+    graphics.circle(cx + 0.9*math.cos(wob), cy + 0.9*math.sin(wob*0.8), 1.3, green[0])
+    graphics.circle(cx + 2.2*math.cos(-wob*0.6), cy + 2.2*math.sin(-wob*0.6), 0.5,
+                    Color(0.80, 1, 0.80, 0.8))
+  end,
+
+  -- Hive: honeycomb — full cells hold capped amber honey, lost ones run dry.
+  hive = function(cx, cy, lit, i, t)
+    local pts = {}
+    for v = 0, 5 do
+      local a = math.pi/6 + v*math.pi/3
+      pts[#pts + 1] = cx + 3.4*math.cos(a)
+      pts[#pts + 1] = cy + 3.4*math.sin(a)
+    end
+    if not lit then graphics.polygon(pts, bg[2], 1) return end
+    graphics.polygon(pts, Color(0.95, 0.72, 0.20, 1))
+    graphics.polygon(pts, Color(0.55, 0.38, 0.08, 1), 1)
+    local g = 0.5 + 0.5*math.sin(t*2 + i*0.7)
+    graphics.circle(cx - 1.0, cy - 1.1, 0.7, Color(1, 0.95, 0.70, 0.4 + 0.4*g))
+  end,
+
+  -- Boomerang: a carved wooden chevron, rocking gently as if just caught.
+  boomerang = function(cx, cy, lit, i, t)
+    local rock = lit and 0.28*math.sin(t*2.1 + i*0.8) or 0
+    local wood = lit and Color(0.78, 0.56, 0.28, 1) or bg[2]
+    graphics.push(cx, cy, math.pi/4 + rock)
+      graphics.rectangle(cx - 1.4, cy, 3.6, 1.6, 0.8, 0.8, wood)
+      graphics.rectangle(cx, cy - 1.4, 1.6, 3.6, 0.8, 0.8, wood)
+    graphics.pop()
+    if lit then graphics.circle(cx - 0.5, cy - 0.5, 0.5, Color(0.95, 0.85, 0.60, 0.8)) end
+  end,
+
+  -- Twin Cast: a bonded pair of motes orbiting a shared spark.
+  twincast = function(cx, cy, lit, i, t)
+    if not lit then
+      graphics.circle(cx - 1.5, cy, 0.9, bg[2])
+      graphics.circle(cx + 1.5, cy, 0.9, bg[2])
+      return
+    end
+    local a = t*2.6 + i*0.9
+    local ox, oy = 2.0*math.cos(a), 1.1*math.sin(a)
+    graphics.line(cx + ox, cy + oy, cx - ox, cy - oy, Color(0.72, 0.55, 1, 0.35), 1)
+    graphics.circle(cx + ox, cy + oy, 1.4, Color(0.72, 0.55, 1, 1))
+    graphics.circle(cx - ox, cy - oy, 1.4, Color(0.55, 0.75, 1, 1))
+    graphics.circle(cx, cy, 0.6, Color(1, 1, 1, 0.6 + 0.4*math.sin(t*7 + i)))
+  end,
+
+  -- Tesla: a charged capacitor cell — a spark sputters between the terminals.
+  tesla = function(cx, cy, lit, i, t)
+    graphics.rectangle(cx, cy + 0.6, 6.4, 4.6, 1, 1, lit and Color(0.16, 0.22, 0.30, 1) or bg[2])
+    graphics.rectangle(cx - 1.8, cy - 2.0, 1.2, 1.6, nil, nil, Color(0.62, 0.65, 0.72, 1))
+    graphics.rectangle(cx + 1.8, cy - 2.0, 1.2, 1.6, nil, nil, Color(0.62, 0.65, 0.72, 1))
+    if not lit then return end
+    local f = math.sin(t*13 + i*2.7)
+    if f > 0.1 then
+      graphics.polyline(Color(0.55, 0.85, 1, 0.35 + 0.6*f), 1,
+        cx - 1.8, cy - 1.4, cx - 0.5, cy - 2.2 + f, cx + 0.6, cy - 1.0 - f, cx + 1.8, cy - 1.4)
+    end
+    graphics.circle(cx, cy + 0.8, 1.1, Color(0.55, 0.85, 1, 0.5 + 0.3*math.abs(f)))
+  end,
+
+  -- Terrorist: a pocket bomb, fuse spark sputtering while the life is yours.
+  terrorist = function(cx, cy, lit, i, t)
+    if not lit then graphics.circle(cx, cy + 0.6, 2.8, bg[2], 1) return end
+    graphics.circle(cx, cy + 0.6, 2.8, Color(0.24, 0.24, 0.28, 1))
+    graphics.circle(cx - 1.0, cy - 0.3, 0.8, Color(0.50, 0.50, 0.58, 0.8))
+    graphics.line(cx + 1.2, cy - 1.4, cx + 2.2, cy - 2.6, Color(0.75, 0.60, 0.40, 1), 1)
+    local sp = 0.5 + 0.5*math.sin(t*11 + i*1.9)
+    graphics.circle(cx + 2.3, cy - 2.7, 0.7 + 0.5*sp, Color(1, 0.80, 0.30, 0.5 + 0.5*sp))
+    graphics.circle(cx + 2.3, cy - 2.7, 0.35, Color(1, 1, 0.90, 0.9))
+  end,
+
+  -- Cannon: stacked iron shot — a slow glint rolls over what's left.
+  cannon = function(cx, cy, lit, i, t)
+    if not lit then graphics.circle(cx, cy, 2.9, bg[2], 1) return end
+    graphics.circle(cx, cy, 2.9, Color(0.30, 0.32, 0.38, 1))
+    graphics.circle(cx - 1.0, cy - 1.0, 1.0, Color(0.55, 0.58, 0.66, 0.9))
+    local u = (t*0.7 + i*0.31) % 3
+    if u < 0.5 then
+      local p = u/0.5
+      graphics.circle(cx - 1.8 + p*3.6, cy - 0.6, 0.5, Color(1, 1, 1, 0.6*math.sin(p*math.pi)))
+    end
+  end,
+}
+
+-- HUD entry point (draw_hud): dispatch to this paddle's glyph, defaulting to
+-- the classic heart. Aegis routes to its half-heart steel renderer above;
+-- the Vampire never reaches here (hp_mode 'bar' draws the blood bar).
+function BallPit:draw_themed_hearts()
+  local sig = (self.run_mods and self.run_mods.signature) or 'none'
+  if sig == 'aegis' then return self:draw_steel_hearts() end
+  local draw = HEART_STYLES[sig] or HEART_STYLES.none
+  local t = love.timer.getTime()
+  for i = 1, self.player_hp_max do
+    draw(self.x1 + 8 + (i - 1)*10, self.y1 - 8, self.player_hp >= i - 0.5, i, t, self.player_hp_max)
   end
 end
 

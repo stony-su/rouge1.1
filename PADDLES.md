@@ -26,6 +26,13 @@ rewrites a core verb, so stats are balanced by tradeoffs, not flat power.
 | **Start Ball** | The hero type you begin the run with. |
 | **Count** | How many balls you start with. |
 
+Every paddle renders **themed HP glyphs** in the HUD (`HEART_STYLES` /
+`draw_themed_hearts` in paddles.lua): beating red hearts (Standard), marquee
+chase bulbs (Pinball), steel half-hearts (Aegis), living cells (Mitosis),
+honeycomb (Hive), the blood bar (Vampire), rocking boomerangs, bonded twin
+motes (Twin Cast), sparking capacitors (Tesla), fused bombs (Terrorist) and
+iron cannonballs (Cannon).
+
 ---
 
 ## Stat table (× baseline)
@@ -86,14 +93,28 @@ no-ramp bounce and unshielded bullets hurt like on any other paddle — the
 loadout's whole damage budget lives under the arc. When the window closes the
 shield **recharges** (2.5s, hit or not), shown as a thin blue re-arm bar
 refilling over the paddle — raising it is a commitment, not a twitch.
-Tanky at 7 hearts.
+
+**Bulwark meter:** every parry banks pips (bullet = 1, ball = 2, max 5),
+shown as the shield face's meander ticks lighting gold; an idle meter slowly
+bleeds. A **full meter turns the next raise into a GREATER AEGIS**: the arc
+goes **gold**, swells taller, and lasts twice as long; parried balls carry
+**double the charged hits**, bullets reflect at **double damage**, **hero
+balls themselves reflect bullets** they touch, the raise **restores 2
+hearts**, incoming damage is **halved** while the dome is up, and the dome
+collapses in a **nova** blast around the paddle. Gains pause under the dome
+so it can't feed itself.
+
+Tanky at 7 **steel hearts** (forged look, idle shimmer) with **half-heart**
+granularity — the Greater dome's halved damage chips 0.5-heart notches.
 - **Downside:** low passive damage (Dmg 0.7, no ramp); miss your parries and
   the run is a glacial grind under live bullet fire.
 - **Hook:** `Paddle:start_brace` + brace tick (paddle.lua) and the Greek
   aspis skin `Paddle:draw_aegis_paddle` (ready glint / gold flare / re-arm
-  bar); parry branch in `Paddle:on_ball_bounce`; brace-gated
-  `EnemyProjectile:reflect` (enemies.lua); charged hits spent in
-  `BallHero:on_brick_hit` / read in `Brick:on_ball_contact`.
+  bar / bulwark ticks); parry branch in `Paddle:on_ball_bounce`; brace-gated
+  `EnemyProjectile:reflect` + Greater ball-reflect (enemies.lua); charged
+  hits spent in `BallHero:on_brick_hit` / read in `Brick:on_ball_contact`;
+  `bulwark_add` / `aegis_tick` / `aegis_greater_nova` / `draw_steel_hearts`
+  (paddles.lua); half damage in `BallPit:damage_player`.
 
 ### Mitosis — *snowball / swarm*
 Each brick kill spawns a **temporary clone ball (2.5s life)**. If any hero variant

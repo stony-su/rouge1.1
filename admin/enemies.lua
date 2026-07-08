@@ -266,13 +266,17 @@ function EnemyProjectile:update(dt)
       -- stand-in arrow, and the parry refunds a slug of combo points. An
       -- unbraced Aegis paddle eats bullets like any other loadout (below).
       -- Unbreakable boss bullets punch through (the boss stays honest).
-      local sigt = arena.run_mods.sig or {}
-      self:reflect(sigt.reflect_dmg or 60)
+      -- A Greater dome doubles the return damage; each turned bullet banks
+      -- bulwark toward the next Greater raise.
+      local sigt  = arena.run_mods.sig or {}
+      local gmult = (arena.paddle.greater and (sigt.greater_reflect_mult or 2)) or 1
+      self:reflect((sigt.reflect_dmg or 60)*gmult)
       spawn_burst(arena.effects, self.x, self.y, self.color, 8, 90, 170)
       buff1:play{volume = 0.35, pitch = random:float(1.25, 1.4)}
       if arena.add_combo_points then
         arena:add_combo_points(sigt.parry_combo or 25)
       end
+      if arena.bulwark_add then arena:bulwark_add(sigt.bulwark_bullet or 1) end
     else
       -- Hit the paddle directly. Admin godmode swallows the hp loss but still
       -- plays the impact feedback so the operator can see what would have hit.
@@ -285,6 +289,25 @@ function EnemyProjectile:update(dt)
       Flash{group = arena.effects, x = gw/2, y = gh/2, color = red_transparent_weak, duration = 0.08}
       if arena.player_hp <= 0 then arena:trigger_game_over() end
       self.dead = true
+    end
+  end
+
+  -- GREATER AEGIS dome: while it's up, hero balls THEMSELVES turn bullets —
+  -- any breakable shot that touches a ball is reflected at the dome's
+  -- doubled damage. Proximity test (bullets phase through balls at the
+  -- Box2D level by design, so there's no contact callback to hook).
+  local gpad = arena.paddle
+  if gpad and gpad.greater and (gpad.brace_t or 0) > 0
+  and not self.reflected and not self.unbreakable and not self.dead then
+    for _, hball in ipairs(arena.heroes or {}) do
+      if hball and not hball.dead and not hball.stuck
+      and math.distance(self.x, self.y, hball.x, hball.y) < (hball.r_size or 6) + self.r_size + 2 then
+        local sigt = arena.run_mods.sig or {}
+        self:reflect((sigt.reflect_dmg or 60)*(sigt.greater_reflect_mult or 2))
+        spawn_burst(arena.effects, self.x, self.y, self.color, 6, 80, 150)
+        buff1:play{volume = 0.25, pitch = random:float(1.3, 1.45)}
+        break
+      end
     end
   end
 

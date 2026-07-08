@@ -1464,6 +1464,7 @@ function BallPit:update(dt)
     self:tesla_tick(sdt)    -- Tesla: persistent conduction web pulses (no-op otherwise)
     self:glacier_tick(sdt)  -- Glacier: lay slick ice patches on the rink (no-op otherwise)
     self:twincast_tick(sdt) -- Twin Cast: orbit/charge/fuse the bonded pairs (no-op otherwise)
+    self:aegis_tick(sdt)    -- Aegis: bulwark meter idle bleed (no-op otherwise)
 
     -- Wave advance. Three cases:
     --   * Boss wave (10): never advances on time -- only once the boss is dead
@@ -1978,10 +1979,9 @@ function BallPit:draw_hud()
   if hp_bar_mode then
     self:draw_blood_bar()
   else
-    for i = 1, self.player_hp_max do
-      local color = i <= self.player_hp and red[0] or bg[2]
-      graphics.rectangle(self.x1 + 6 + (i-1)*10, self.y1 - 8, 6, 6, 1, 1, color)
-    end
+    -- Each paddle draws its own themed life glyphs — see HEART_STYLES /
+    -- draw_themed_hearts (and the Aegis steel halves) in paddles.lua.
+    self:draw_themed_hearts()
   end
 
   -- XP bar. Starts past however wide the HP readout is (Aegis runs 7 hearts,

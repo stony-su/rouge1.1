@@ -36,6 +36,11 @@ return {
   -- reflect_dmg, refunding parry_combo combo points. When the window closes
   -- the shield recharges for parry_lockout seconds — hit or not — so raising
   -- it is a commitment, not something to mash.
+  -- BULWARK meter: parries bank pips (drawn as the shield's meander ticks).
+  -- At bulwark_max the NEXT raise is a GREATER AEGIS: gold dome, longer
+  -- window, doubled reflect/parry payloads, hero balls themselves turn
+  -- bullets, greater_dr damage taken (this is where HALF-hearts come from),
+  -- +greater_heal hearts on the raise, and an end-of-dome nova.
   signature = {
     reflect_dmg      = 60,    -- damage of each parried return bolt
     parry_window     = 0.6,   -- seconds the raised shield stays up
@@ -44,6 +49,19 @@ return {
     parry_dmg_mult   = 2.5,   -- damage multiplier on those contacts
     parry_speed_mult = 1.6,   -- minimum speed_mult a parried ball leaves with
     parry_combo      = 25,    -- combo points refunded per parried bullet
+
+    bulwark_max         = 5,    -- pips to fill the meter
+    bulwark_bullet      = 1,    -- pips per parried bullet
+    bulwark_ball        = 2,    -- pips per parried ball
+    bulwark_decay       = 0.1,  -- pips bled per second once idle
+    bulwark_grace       = 4,    -- seconds without a parry before the bleed starts
+    greater_window_mult = 2.0,  -- Greater dome duration = parry_window x this
+    greater_reflect_mult= 2.0,  -- reflected-bullet damage multiplier under the dome
+    greater_hits_mult   = 2.0,  -- parried-ball charged-hit multiplier under the dome
+    greater_heal        = 2,    -- hearts restored when the Greater raise starts
+    greater_dr          = 0.5,  -- fraction of damage taken while the dome is up
+    greater_nova_dmg    = 40,   -- end-of-dome nova damage at the center
+    greater_nova_radius = 120,  -- nova falloff radius (px)
   },
 
   -- ======================================================================
