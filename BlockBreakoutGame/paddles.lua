@@ -1209,7 +1209,7 @@ end
 local function draw_menu_button(bx, by, w, h, label, selected)
   graphics.rectangle(bx, by, w, h, 4, 4, selected and bg[1] or bg[-1])
   graphics.rectangle(bx, by, w, h, 4, 4, selected and yellow[0] or fg_transparent_weak, selected and 2 or 1)
-  graphics.print_centered(label, pixul_font, bx, by - 4, 0, 1, 1, 0, 0, selected and yellow[0] or fg[0])
+  graphics.print_centered(label, pixul_font, bx, by - 1, 0, 1, 1, 0, 0, selected and yellow[0] or fg[0])
 end
 
 function BallPit:shop_card_pos(i)
