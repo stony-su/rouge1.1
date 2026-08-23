@@ -479,6 +479,7 @@ function BallPit:reset_run()
   self.blood_droplets = {}
   self.run_kills     = 0
   self.xp            = 0
+  self.xp_accumulator = 0  -- Terrorist: accumulates fractional passive XP before calling gain_xp
   self.level         = 1
   -- Scaling paddles: base cost of level 2 (was 5 — raised to slow the early
   -- level spam), tunable via the paddle's balance master file.
@@ -1065,11 +1066,18 @@ function BallPit:update(dt)
     self.run_time  = self.run_time + sdt
     self.wave_time = self.wave_time + sdt
 
-    -- Terrorist loadout: passive XP gain over time. A small trickle so the
-    -- paddle levels even when all balls are spent waiting for the next auto-arm.
+    -- Terrorist loadout: passive XP gain over time. Gains a percentage of the
+    -- current level's XP requirement per second, scaled to level up every ~6.5 seconds
+    -- of passive gain. Updates every frame for smooth, continuous progress.
     if self.run_mods and self.run_mods.signature == 'terrorist' then
-      local xp_per_sec = self.run_mods.sig.passive_xp_rate or 0.25
-      self:gain_xp(xp_per_sec * sdt)
+      local xp_pct_per_sec = self.run_mods.sig.passive_xp_pct or 0.1538  -- ~15.38% per sec = 6.5 sec per level
+      local xp_gain = self.xp_to_next * xp_pct_per_sec * sdt
+      self.xp_accumulator = (self.xp_accumulator or 0) + xp_gain
+      -- Grant XP in smaller chunks (every 0.1 XP accumulated) for smoother visual feedback
+      while self.xp_accumulator >= 0.1 do
+        self:gain_xp(1)
+        self.xp_accumulator = self.xp_accumulator - 1.0
+      end
     end
 
     -- Vampire loadout: HP is a continuously draining bar — stop killing and
@@ -1386,16 +1394,39 @@ function BallPit:draw_aim_trajectory(max_total)
 end
 
 
--- Terrorist: a pulsing "[E] ⚡ xN" prompt over the paddle whenever at
+-- Terrorist: a pulsing detonator symbol prompt over the paddle whenever at
 -- least one ball is armed (near a block), so the detonate beat reads clearly.
+-- The symbol is a circular button with an "E" inside radiating explosion lines.
 -- Moved down slightly from the paddle so it doesn't overlap with other UI.
 function BallPit:draw_terror_prompt()
   local n = 0
   for _, h in ipairs(self.heroes) do if h and not h.dead and h.terror_armed then n = n + 1 end end
   if n == 0 then return end
   local a = 0.6 + 0.4*math.sin(love.timer.getTime()*8)
-  graphics.print_centered('E ⚡ x' .. n, pixul_font,
-                          self.paddle.x, self.paddle.y + 16, 0, 1, 1, 0, 0, Color(1, 0.4, 0.2, a))
+  local col = Color(1, 0.4, 0.2, a)
+
+  -- Draw the detonator symbol: circle with E and radiating explosion lines
+  local cx, cy = self.paddle.x - 20, self.paddle.y + 16
+  local r = 7
+
+  -- Outer circle (button)
+  graphics.circle(cx, cy, r, col, 1.5)
+
+  -- Letter E in the center
+  graphics.print('E', pixul_font, cx - 3, cy - 4, 0, 0.85, 0.85, 0, 0, col)
+
+  -- Radiating explosion lines (4 diagonal spikes)
+  for i = 0, 3 do
+    local angle = math.pi/4 + i*math.pi/2
+    local x1 = cx + math.cos(angle) * (r + 1)
+    local y1 = cy + math.sin(angle) * (r + 1)
+    local x2 = cx + math.cos(angle) * (r + 4)
+    local y2 = cy + math.sin(angle) * (r + 4)
+    graphics.line(x1, y1, x2, y2, col, 1.5)
+  end
+
+  -- Count display
+  graphics.print_centered('x' .. n, pixul_font, self.paddle.x + 10, self.paddle.y + 16, 0, 1, 1, 0, 0, col)
 end
 
 
