@@ -20,7 +20,7 @@ Terrorist paddle:
 
 Gameplay:
 1. make the slow decay to the combo meter constant (tiers D to SSS) with visual effects to match
-2. revamp the combo meter to be more visually interesting with visual effects (e.g. effect when meter breaks through new tier, hot streak in upper tiers, etc)
+2. revamp the combo meter UI and design(e.g. effect when meter breaks through new tier, hot streak in upper tiers, etc)
 3. make any gain in the combo meter moving from left to right in an constant motion instead of binary blocks of increase
 4. change it so that higher tiers in the combo meter increase ball speed and XP gain instead of DMG
 5. remove the 1.2x, 1.9x, etc next to the combo meter tier

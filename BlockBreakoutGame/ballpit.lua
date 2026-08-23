@@ -1255,7 +1255,8 @@ function BallPit:draw_terror_prompt()
   local col = Color(1, 0.4, 0.2, a)
 
   -- Draw the detonator symbol: circle with E and radiating explosion lines
-  local cx, cy = self.paddle.x - 20, self.paddle.y + 16
+  -- Positioned slightly left of center for better visual balance
+  local cx, cy = self.paddle.x - 10, self.paddle.y + 16
   local r = 7
 
   -- Outer circle (button)
