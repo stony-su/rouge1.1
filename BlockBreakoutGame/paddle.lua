@@ -128,6 +128,23 @@ function Paddle:build_flipper_rig(scale)
     f:setFriction(0.6)
     if not self.fixture then self.fixture = f else table.insert(self.fixtures, f) end
   end
+
+  -- Central gap deflector: a small angled wedge in the drain gap that nudges
+  -- balls outward (toward the flippers) instead of letting them settle dead-center.
+  -- The wedge is narrow (gap*0.7 wide, 6 tall) and tilted forward (toward the player)
+  -- so gravity + the slope guide a stuck ball down onto one of the bats.
+  local wedge_w = gap*0.7
+  local wedge_h = 6
+  local wedge_tilt = math.pi*0.15   -- ~27 degrees forward tilt
+  local wedge_shape = love.physics.newRectangleShape(0, wedge_h/2, wedge_w, wedge_h, wedge_tilt)
+  local wedge_f = love.physics.newFixture(self.body, wedge_shape)
+  wedge_f:setUserData(self.id)
+  wedge_f:setCategory(self.group.collision_tags[tag].category)
+  wedge_f:setMask(unpack(self.group.collision_tags[tag].masks))
+  wedge_f:setRestitution(0.25)   -- slightly bouncier than the bats to kick balls out
+  wedge_f:setFriction(0.3)        -- low friction so balls slide off rather than stick
+  table.insert(self.fixtures, wedge_f)
+
   self.body:setFixedRotation(true)
 end
 

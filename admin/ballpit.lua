@@ -1065,6 +1065,13 @@ function BallPit:update(dt)
     self.run_time  = self.run_time + sdt
     self.wave_time = self.wave_time + sdt
 
+    -- Terrorist loadout: passive XP gain over time. A small trickle so the
+    -- paddle levels even when all balls are spent waiting for the next auto-arm.
+    if self.run_mods and self.run_mods.signature == 'terrorist' then
+      local xp_per_sec = self.run_mods.sig.passive_xp_rate or 0.25
+      self:gain_xp(xp_per_sec * sdt)
+    end
+
     -- Vampire loadout: HP is a continuously draining bar — stop killing and
     -- you die. Sits below the overlay early-returns above, so the drain
     -- auto-pauses in menus / the upgrade picker / game over. Ticked with the
@@ -1379,15 +1386,16 @@ function BallPit:draw_aim_trajectory(max_total)
 end
 
 
--- Terrorist: a pulsing "[E] DETONATE xN" prompt over the paddle whenever at
+-- Terrorist: a pulsing "[E] ⚡ xN" prompt over the paddle whenever at
 -- least one ball is armed (near a block), so the detonate beat reads clearly.
+-- Moved down slightly from the paddle so it doesn't overlap with other UI.
 function BallPit:draw_terror_prompt()
   local n = 0
   for _, h in ipairs(self.heroes) do if h and not h.dead and h.terror_armed then n = n + 1 end end
   if n == 0 then return end
   local a = 0.6 + 0.4*math.sin(love.timer.getTime()*8)
-  graphics.print_centered('[E] DETONATE x' .. n, pixul_font,
-                          self.paddle.x, self.paddle.y + 10, 0, 1, 1, 0, 0, Color(1, 0.4, 0.2, a))
+  graphics.print_centered('E ⚡ x' .. n, pixul_font,
+                          self.paddle.x, self.paddle.y + 16, 0, 1, 1, 0, 0, Color(1, 0.4, 0.2, a))
 end
 
 

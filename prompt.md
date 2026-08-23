@@ -12,6 +12,12 @@ Pinball paddle:
 1. stop balls getting stuck in the middle of the paddle 
 2. apply normal physics on the Jester ball so it can rotate accordingly (not fixed rotation), especially while on the pinball paddle, it stays fixed without turning 
 
+Terrorist paddle:
+1. give a small passive XP gain for this paddle only
+2. change the detonate in "e detonate x#" into "E [detonate symbol] x#] --> also move this a bit down 
+3. remove the yellow spinning line from the bomber ball
+
+
 Gameplay:
 1. make the slow decay to the combo meter constant (tiers D to SSS) with visual effects to match
 2. revamp the combo meter to be more visually interesting with visual effects (e.g. effect when meter breaks through new tier, hot streak in upper tiers, etc)
@@ -26,10 +32,6 @@ Shop:
 4. revamp the shop UI so seem more like a "shop" based on an arcade pinball machine theme
 5. change the stats each paddle into a radar graph with symbols to represent the type of stat. when hovering over the small symbol, show the text for what type of stat it it is no surprise that
 
-Terrorist paddle:
-1. give a small passive XP gain for this paddle only
-2. change the detonate in "e detonate x#" into "E [detonate symbol] x#] --> also move this a bit down 
-3. remove the yellow spinning line from the bomber ball
 
 Restart screen
 1. delate the sentence "the swarm broke on wave #"

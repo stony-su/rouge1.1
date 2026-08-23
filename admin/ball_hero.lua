@@ -828,6 +828,12 @@ function BallHero:init(args)
     -- the drain instead of statically sticking (a fixed-rotation ball sticks
     -- once surface friction exceeds the bat's slope).
     self:set_fixed_rotation(false)
+    -- Jester: give it an initial tumble so it visibly spins from the start,
+    -- like the Pyromancer's fireball. The weave behavior doesn't interfere
+    -- with angular velocity — it only bends the linear velocity vector.
+    if s.skin == 'jester' and self.body then
+      self.body:setAngularVelocity(random:float(-6, 6))
+    end
   end
 
   -- Pyromancer: let the fireball SPIN (real physics) instead of locking rotation at
@@ -3671,18 +3677,7 @@ function BallHero:draw_bomb(s)
   graphics.circle(cx, by, rs*(0.30 + 0.10*pulse)*sc, Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.95))
   graphics.circle(cx, by, rs*0.14*sc, Color(1, 1, 1, 0.95))
 
-  -- Energy arcs crackling off the shell (time-driven, no RNG; livelier as it charges).
-  for i = 1, 2 do
-    local seed = t*(7.3 + i*2.1) + i*2.0
-    if math.sin(seed*3.1) > (0.35 - fuse_k*0.5) then
-      local a  = seed
-      local r1 = rs*0.6*sc
-      local r2 = rs*(1.1 + 0.4*(0.5 + 0.5*math.sin(seed*5)))*sc
-      graphics.line(cx + math.cos(a)*r1, by + math.sin(a)*r1,
-                    cx + math.cos(a)*r2, by + math.sin(a)*r2,
-                    Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.75), 1.5)
-    end
-  end
+  -- Energy arcs removed (was the yellow spinning line that's now hidden).
 end
 
 

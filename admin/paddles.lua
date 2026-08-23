@@ -172,10 +172,12 @@ PADDLES.defs = {
     -- (the build's whole damage). Both the radius and the damage SCALE with the
     -- run level (blast_*_per_level) so the blast keeps pace late-game; radius is
     -- capped at blast_radius_max. other_dmg_mult: every NON-blast damage source
-    -- is gutted to this.
+    -- is gutted to this. passive_xp_rate: small XP trickle per second so the
+    -- paddle levels even when all balls are spent.
     signature = 'terrorist',
     sig = {blast_radius = 78, blast_radius_per_level = 0.05, blast_radius_max = 150,
-           blast_mult = 5.0, blast_dmg_per_level = 0.18, other_dmg_mult = 0.2},
+           blast_mult = 5.0, blast_dmg_per_level = 0.18, other_dmg_mult = 0.2,
+           passive_xp_rate = 0.25},
     blurb = 'Press E to detonate balls near blocks — the blast is your real damage.',
     sig_blurb = 'spent balls are gone; level-ups auto-arm a new random ball',
   },
