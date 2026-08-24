@@ -77,18 +77,19 @@ return {
   combo = {
     -- Rank ladder, low -> high. threshold = points needed to sit at that rank.
     -- The rank does NOT buff damage any more: it buys TEMPO and PROGRESSION.
-    --   speed_mult = every ball's speed while at that rank
+    --   speed_mult = every ball's speed while at that rank (1.00 -> 1.75,
+    --                even steps of 0.75/7 -- see COMBO_RANKS in ballpit.lua)
     --   xp_mult    = every XP pickup's value while at that rank
     -- Labels/colors stay in ballpit.lua.
     ranks = {
       {threshold =    0, speed_mult = 1.0,  xp_mult = 1.0 },   -- D
-      {threshold =   50, speed_mult = 1.05, xp_mult = 1.1 },   -- C
-      {threshold =  150, speed_mult = 1.10, xp_mult = 1.25},   -- B
-      {threshold =  300, speed_mult = 1.15, xp_mult = 1.4 },   -- A
-      {threshold =  500, speed_mult = 1.20, xp_mult = 1.6 },   -- S
-      {threshold =  750, speed_mult = 1.25, xp_mult = 1.8 },   -- SS
-      {threshold = 1100, speed_mult = 1.30, xp_mult = 2.0 },   -- SSS
-      {threshold = 1500, speed_mult = 1.35, xp_mult = 2.25},   -- FRENZY
+      {threshold =   50, speed_mult = 1.11, xp_mult = 1.1 },   -- C
+      {threshold =  150, speed_mult = 1.21, xp_mult = 1.25},   -- B
+      {threshold =  300, speed_mult = 1.32, xp_mult = 1.4 },   -- A
+      {threshold =  500, speed_mult = 1.43, xp_mult = 1.6 },   -- S
+      {threshold =  750, speed_mult = 1.54, xp_mult = 1.8 },   -- SS
+      {threshold = 1100, speed_mult = 1.64, xp_mult = 2.0 },   -- SSS
+      {threshold = 1500, speed_mult = 1.75, xp_mult = 2.25},   -- FRENZY
     },
 
     -- Per-ball bounce chain: +bounce_dmg_step damage per consecutive bounce
@@ -103,7 +104,8 @@ return {
     miss_frac         = 0.25,  -- fraction of current points lost per pit drop
     miss_min          = 100,   -- ...but never less than that many points
     idle_grace        = 2,     -- seconds without a bounce before decay
-    idle_decay_rate   = 15,    -- CONSTANT points bled per idle second, every tier
+    idle_decay_frac   = 0.04,  -- fraction of the CURRENT total bled per idle second...
+    idle_decay_min    = 10,    -- ...but never slower than this, so the tail reaches 0
 
     -- Meter animation (presentation only -- see BallPit:tick_combo). The drawn
     -- bar chases the real total so gains slide left-to-right instead of

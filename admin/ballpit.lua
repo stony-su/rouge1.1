@@ -142,30 +142,43 @@ end
 -- the top so the highest threshold the current points crosses wins.
 local COMBO_RANKS = {
   {label = 'D',      threshold =    0, speed_mult = 1.0,  xp_mult = 1.0,  color_key = 'fg_alt'},
-  {label = 'C',      threshold =   50, speed_mult = 1.05, xp_mult = 1.1,  color_key = 'fg'    },
-  {label = 'B',      threshold =  150, speed_mult = 1.10, xp_mult = 1.25, color_key = 'yellow'},
-  {label = 'A',      threshold =  300, speed_mult = 1.15, xp_mult = 1.4,  color_key = 'orange'},
-  {label = 'S',      threshold =  500, speed_mult = 1.20, xp_mult = 1.6,  color_key = 'red'   },
-  {label = 'SS',     threshold =  750, speed_mult = 1.25, xp_mult = 1.8,  color_key = 'red'   },
-  {label = 'SSS',    threshold = 1100, speed_mult = 1.30, xp_mult = 2.0,  color_key = 'red'   },
-  {label = 'FRENZY', threshold = 1500, speed_mult = 1.35, xp_mult = 2.25, color_key = 'purple'},
+  {label = 'C',      threshold =   50, speed_mult = 1.11, xp_mult = 1.1,  color_key = 'fg'    },
+  {label = 'B',      threshold =  150, speed_mult = 1.21, xp_mult = 1.25, color_key = 'yellow'},
+  {label = 'A',      threshold =  300, speed_mult = 1.32, xp_mult = 1.4,  color_key = 'orange'},
+  {label = 'S',      threshold =  500, speed_mult = 1.43, xp_mult = 1.6,  color_key = 'red'   },
+  {label = 'SS',     threshold =  750, speed_mult = 1.54, xp_mult = 1.8,  color_key = 'red'   },
+  {label = 'SSS',    threshold = 1100, speed_mult = 1.64, xp_mult = 2.0,  color_key = 'red'   },
+  {label = 'FRENZY', threshold = 1500, speed_mult = 1.75, xp_mult = 2.25, color_key = 'purple'},
 }
 
 -- Ranks at/above this index are the "hot streak" tiers — the meter grows a
 -- crest, embers and a glow that scale from 0 at HOT_RANK to 1 at the top.
 local COMBO_HOT_RANK = 5   -- S
 
--- Tunables. Gains are absolute; the idle bleed is now a FLAT rate that is the
--- same at every tier (it used to be proportional, so FRENZY hemorrhaged and D
--- barely moved). One constant means "you have N seconds of silence before the
--- bar starts costing you", identically from D through FRENZY.
+-- Tunables. Gains are absolute; the idle bleed is PROPORTIONAL -- a fraction of
+-- whatever you are currently holding, bled per idle second, exactly the shape
+-- the pit-drop penalty already uses (miss_frac/miss_min). A hot bar therefore
+-- costs more attention than a cold one: what you own is what you can lose.
+--
+-- The floor is not decoration. A pure percentage is exponential, so the tail
+-- would asymptote at a point or two and never reach zero -- the meter would sit
+-- at D forever with a sliver of fill and `streak`/`last_variant` would never
+-- reset. DECAY_MIN is the rate below which the bleed stops scaling and goes
+-- flat, which lands the tail on zero and keeps the low tiers moving.
+--
+-- Because the rank BANDS get wider as they climb (50/100/150/200/250/350/400)
+-- while a flat rate does not, the old constant made the top of the ladder the
+-- STICKIEST part of it -- 27 idle seconds to fall out of FRENZY against 3 to
+-- fall out of C. Scaling the rate with the total inverts that: see the table
+-- over tick_combo for what each tier now costs.
 local COMBO_MISS_FRAC        = 0.25  -- fraction of current points lost per pit drop...
 local COMBO_MISS_MIN         = 100   -- ...but never less than this
 local COMBO_BASE_POINTS      = 10    -- baseline per brick bounce
 local COMBO_VARIETY_BONUS    = 5     -- + this if hitting a different variant than last
 local COMBO_STREAK_BONUS_CAP = 10    -- + min(streak, cap) per bounce
 local COMBO_IDLE_GRACE       = 2     -- seconds with no bounces before decay starts
-local COMBO_IDLE_DECAY_RATE  = 15    -- CONSTANT points bled per idle second, all tiers
+local COMBO_IDLE_DECAY_FRAC  = 0.04  -- fraction of the CURRENT total bled per idle second...
+local COMBO_IDLE_DECAY_MIN   = 10    -- ...but never slower than this (points/sec)
 local COMBO_BOUNCE_DMG_STEP  = 0.08  -- +8% damage per bounce on the same ball
 local COMBO_BOUNCE_CAP       = 15    -- max bounces counted for damage scaling
 
@@ -2069,16 +2082,25 @@ function BallPit:tick_combo(dt)
   local c = self.combo
   if not c then return end
 
-  -- ---- points: CONSTANT bleed ----
-  -- ONE flat rate for every tier. A FRENZY bar and a C bar both lose the same
-  -- points per idle second, so "keep the balls working" costs exactly the same
-  -- attention all the way up the ladder. (It used to be proportional, which
-  -- made the top ranks evaporate and the bottom ones sticky.)
+  -- ---- points: PROPORTIONAL bleed ----
+  -- The idle rate is a fraction of what you are currently holding, floored so
+  -- the tail still lands on zero. A FRENZY bar bleeds 60/sec, a C bar 10/sec,
+  -- so the meter costs attention in proportion to what it is paying out.
+  --
+  -- Seconds of silence (past the grace) to fall one whole tier:
+  --      FRENZY  7.8   SSS  9.6   SS 10.1   S 12.8
+  --      A      14.6   B   10.0   C   5.0
+  -- ...against 26.7 / 23.3 / 16.7 / 13.3 / 10.0 / 6.7 / 3.3 under the old flat
+  -- rate. Same ladder, but holding the top of it is now the expensive part.
   c.idle_t = c.idle_t + dt
   local bleeding = false
   if c.idle_t > BAL('combo.idle_grace', COMBO_IDLE_GRACE) and c.points > 0 then
     local cm = (self.run_mods and self.run_mods.combo) or 1
-    c.points = math.max(0, c.points - BAL('combo.idle_decay_rate', COMBO_IDLE_DECAY_RATE)*cm*dt)
+    -- cm (the paddle's combo stat) scales the bleed as well as the gain, so a
+    -- combo-heavy loadout runs the whole economy hot in both directions.
+    local rate = math.max(BAL('combo.idle_decay_min',  COMBO_IDLE_DECAY_MIN),
+                          BAL('combo.idle_decay_frac', COMBO_IDLE_DECAY_FRAC)*c.points)
+    c.points = math.max(0, c.points - rate*cm*dt)
     bleeding = true
     if c.points <= 0 then
       c.streak       = 0
