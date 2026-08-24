@@ -87,20 +87,23 @@ return {
   },
 
   -- ======================================================================
-  -- COMBO METER (rank multiplier applies to ALL ball-contact damage)
+  -- COMBO METER (rank buys ball SPEED + XP; it no longer buffs damage)
   -- ======================================================================
   combo = {
-    -- Rank ladder, low -> high. threshold = points needed, mult = the damage
-    -- multiplier while at that rank. Labels/colors stay in ballpit.lua.
+    -- Rank ladder, low -> high. threshold = points needed to sit at that rank.
+    -- The rank does NOT buff damage any more: it buys TEMPO and PROGRESSION.
+    --   speed_mult = every ball's speed while at that rank
+    --   xp_mult    = every XP pickup's value while at that rank
+    -- Labels/colors stay in ballpit.lua.
     ranks = {
-      {threshold =    0, mult = 1.0},   -- D
-      {threshold =   50, mult = 1.2},   -- C
-      {threshold =  150, mult = 1.5},   -- B
-      {threshold =  300, mult = 1.9},   -- A
-      {threshold =  500, mult = 2.4},   -- S
-      {threshold =  750, mult = 3.0},   -- SS
-      {threshold = 1100, mult = 3.5},   -- SSS
-      {threshold = 1500, mult = 4.0},   -- FRENZY
+      {threshold =    0, speed_mult = 1.0,  xp_mult = 1.0 },   -- D
+      {threshold =   50, speed_mult = 1.05, xp_mult = 1.1 },   -- C
+      {threshold =  150, speed_mult = 1.10, xp_mult = 1.25},   -- B
+      {threshold =  300, speed_mult = 1.15, xp_mult = 1.4 },   -- A
+      {threshold =  500, speed_mult = 1.20, xp_mult = 1.6 },   -- S
+      {threshold =  750, speed_mult = 1.25, xp_mult = 1.8 },   -- SS
+      {threshold = 1100, speed_mult = 1.30, xp_mult = 2.0 },   -- SSS
+      {threshold = 1500, speed_mult = 1.35, xp_mult = 2.25},   -- FRENZY
     },
 
     -- Per-ball bounce chain: +bounce_dmg_step damage per consecutive bounce
@@ -115,8 +118,14 @@ return {
     miss_frac         = 0.25,  -- fraction of current points lost per pit drop
     miss_min          = 100,   -- ...but never less than that many points
     idle_grace        = 2,     -- seconds without a bounce before decay
-    idle_decay_frac   = 0.08,  -- fraction of current points bled per idle second
-    idle_decay_min    = 6,     -- ...with this floor so low bars still reach zero
+    idle_decay_rate   = 15,    -- CONSTANT points bled per idle second, every tier
+
+    -- Meter animation (presentation only -- see BallPit:tick_combo). The drawn
+    -- bar chases the real total so gains slide left-to-right instead of
+    -- snapping; ghost_rate is how fast the red "just lost this" tail recedes.
+    bar_chase         = 7,     -- fraction of the remaining gap closed per second
+    bar_min_rate      = 55,    -- ...but never slower than this (points/sec)
+    ghost_lag         = 0.35,  -- fraction of the ghost's gap still left after 1s
   },
 
   -- ======================================================================

@@ -4155,7 +4155,14 @@ end
 
 
 function BallHero:normalize_speed()
-  local target = self.base_speed * (self.speed_mult or 1)
+  -- Combo rank is a global TEMPO buff: every ball on the field runs faster the
+  -- hotter the meter is (BallPit:combo_speed_mult, cached once per frame). It
+  -- deliberately multiplies the TARGET speed only and never speed_mult, so the
+  -- per-ball bounce-streak visuals (trails / neon overdrive) still key off the
+  -- ball's own chain and not off the arena's rank.
+  local arena  = main.current
+  local combo  = (arena and arena.combo_speed_mult) and arena:combo_speed_mult() or 1
+  local target = self.base_speed * (self.speed_mult or 1) * combo
   local vx, vy = self:get_velocity()
   local s = math.sqrt(vx*vx + vy*vy)
   if s < 1 then

@@ -54,3 +54,4 @@ Enemies:
 2. keep the grid background, but set it to almost completely dark
 3. add a couple small visual effects to the enemy projectiles so they are not mistaken for balls or xp orbs, like a slight bloom colouring
 4. decrease the size and color of the xp orbs, as well as make them slightly transparent
+

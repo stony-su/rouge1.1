@@ -863,16 +863,17 @@ end
 function Brick:on_ball_contact(ball)
   if self.hp <= 0 then return end
   -- Apply the ball's active charge bonus (1.0 .. 1.5) to contact damage,
-  -- then layer on the per-ball bounce multiplier and the arena-wide combo
-  -- multiplier. With both at max this gives ~8.8x — big payoff for keeping
-  -- a single ball alive through a chain at high rank. terror_other_mult guts
-  -- contact damage on the Terrorist paddle (its blast is the real damage);
-  -- parry_dmg_mult is the Aegis perfect-parry payload (spent per contact in
-  -- BallHero:on_brick_hit); both are nil = 1 for every other ball.
+  -- then layer on the per-ball bounce multiplier (up to ~2.2x for a ball kept
+  -- alive through a long chain). The COMBO METER RANK deliberately no longer
+  -- multiplies damage here -- it pays out in ball speed and XP instead (see
+  -- COMBO_RANKS in ballpit.lua), so the meter buys tempo, not raw numbers.
+  -- terror_other_mult guts contact damage on the Terrorist paddle (its blast
+  -- is the real damage); parry_dmg_mult is the Aegis perfect-parry payload
+  -- (spent per contact in BallHero:on_brick_hit); both are nil = 1 otherwise.
   local dmg = ball.dmg*(ball.charge_dmg_mult or 1)*(ball.terror_other_mult or 1)*(ball.parry_dmg_mult or 1)
   local arena = main.current
   if arena and arena.combo then
-    dmg = dmg * arena:bounce_dmg_mult(ball.bounces or 0) * arena:combo_mult()
+    dmg = dmg * arena:bounce_dmg_mult(ball.bounces or 0)
   end
   self:take_damage(dmg, ball.color, nil, ball.source or ball.character)
   if self.swarm and not self.dead then

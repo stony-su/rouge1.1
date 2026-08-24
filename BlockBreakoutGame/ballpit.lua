@@ -129,47 +129,77 @@ end
 
 
 -- ULTRAKILL-style combo system. Points come from chaining brick bounces;
--- balls falling into the pit take a heavy penalty. Damage paid out by every
--- brick hit is multiplied by the current rank's multiplier plus a per-ball
--- bounce-count bonus, so the longer you keep a ball alive without dropping
--- it, the harder it hits.
+-- balls falling into the pit take a heavy penalty.
+--
+-- What the rank PAYS OUT: climbing the ladder no longer buffs contact damage.
+-- Instead a higher rank makes every ball FASTER (speed_mult, folded into
+-- BallHero:normalize_speed) and every XP pickup WORTH MORE (xp_mult, folded
+-- into BallPit:gain_xp) — so a hot meter converts into tempo and levels
+-- rather than raw numbers. The per-ball bounce chain (bounce_dmg_mult) is a
+-- separate channel and still scales damage.
 --
 -- Rank entries are ordered low → high. `combo_rank_index` walks them from
 -- the top so the highest threshold the current points crosses wins.
 local COMBO_RANKS = {
-  {label = 'D',         threshold =    0, mult = 1.0, color_key = 'fg_alt'},
-  {label = 'C',         threshold =   50, mult = 1.2, color_key = 'fg'    },
-  {label = 'B',         threshold =  150, mult = 1.5, color_key = 'yellow'},
-  {label = 'A',         threshold =  300, mult = 1.9, color_key = 'orange'},
-  {label = 'S',         threshold =  500, mult = 2.4, color_key = 'red'   },
-  {label = 'SS',        threshold =  750, mult = 3.0, color_key = 'red'   },
-  {label = 'SSS',       threshold = 1100, mult = 3.5, color_key = 'red'   },
-  {label = 'FRENZY', threshold = 1500, mult = 4.0, color_key = 'purple'},
+  {label = 'D',      threshold =    0, speed_mult = 1.0,  xp_mult = 1.0,  color_key = 'fg_alt'},
+  {label = 'C',      threshold =   50, speed_mult = 1.05, xp_mult = 1.1,  color_key = 'fg'    },
+  {label = 'B',      threshold =  150, speed_mult = 1.10, xp_mult = 1.25, color_key = 'yellow'},
+  {label = 'A',      threshold =  300, speed_mult = 1.15, xp_mult = 1.4,  color_key = 'orange'},
+  {label = 'S',      threshold =  500, speed_mult = 1.20, xp_mult = 1.6,  color_key = 'red'   },
+  {label = 'SS',     threshold =  750, speed_mult = 1.25, xp_mult = 1.8,  color_key = 'red'   },
+  {label = 'SSS',    threshold = 1100, speed_mult = 1.30, xp_mult = 2.0,  color_key = 'red'   },
+  {label = 'FRENZY', threshold = 1500, speed_mult = 1.35, xp_mult = 2.25, color_key = 'purple'},
 }
 
--- Tunables. Gains are absolute; LOSSES are proportional to the current bar —
--- a flat miss penalty wiped a whole B-rank bar but cost FRENZY only 10%,
--- which punished weak play and forgave strong play (backwards for an
--- ULTRAKILL-style meter). Now a drop always stings the same fraction.
+-- Ranks at/above this index are the "hot streak" tiers — the meter grows a
+-- crest, embers and a glow that scale from 0 at HOT_RANK to 1 at the top.
+local COMBO_HOT_RANK = 5   -- S
+
+-- Tunables. Gains are absolute; the idle bleed is now a FLAT rate that is the
+-- same at every tier (it used to be proportional, so FRENZY hemorrhaged and D
+-- barely moved). One constant means "you have N seconds of silence before the
+-- bar starts costing you", identically from D through FRENZY.
 local COMBO_MISS_FRAC        = 0.25  -- fraction of current points lost per pit drop...
 local COMBO_MISS_MIN         = 100   -- ...but never less than this
 local COMBO_BASE_POINTS      = 10    -- baseline per brick bounce
 local COMBO_VARIETY_BONUS    = 5     -- + this if hitting a different variant than last
 local COMBO_STREAK_BONUS_CAP = 10    -- + min(streak, cap) per bounce
 local COMBO_IDLE_GRACE       = 2     -- seconds with no bounces before decay starts
-local COMBO_IDLE_DECAY_FRAC  = 0.08  -- fraction of current points bled per idle second...
-local COMBO_IDLE_DECAY_MIN   = 6     -- ...with this floor so low bars still reach zero
+local COMBO_IDLE_DECAY_RATE  = 15    -- CONSTANT points bled per idle second, all tiers
 local COMBO_BOUNCE_DMG_STEP  = 0.08  -- +8% damage per bounce on the same ball
 local COMBO_BOUNCE_CAP       = 15    -- max bounces counted for damage scaling
 
+-- Meter animation. The drawn bar never snaps: it chases the real point total
+-- so every award slides left→right instead of popping in as a block. Rate is
+-- proportional to the gap with a floor, so tiny bounces still visibly travel
+-- and a big swing still catches up quickly.
+local COMBO_BAR_CHASE    = 7     -- gap fraction closed per second
+local COMBO_BAR_MIN_RATE = 55    -- ...but never slower than this (points/sec)
+-- The "lost bar" ghost trails the fill front instead of receding at a fixed
+-- speed: a fixed speed is either faster than the bar ever falls (so the tail
+-- never shows) or slower (so it sticks). As a LAG it self-scales -- a pit drop
+-- leaves a wide red tail, the slow idle bleed leaves a thin one. Value = the
+-- fraction of the gap still remaining after one second.
+local COMBO_GHOST_LAG    = 0.35
+local COMBO_FX_MAX       = 48    -- hard cap on live meter particles
+
+-- Meter layout. The rank label is auto-fitted into LABEL_BOX px (so 'D' and
+-- 'FRENZY' occupy the same slot), and draw_hud ends the XP bar STRIP_W px
+-- short of the right edge to reserve the whole meter block.
+local COMBO_LABEL_BOX = 30
+local COMBO_STRIP_W   = 102
+
 -- Effective rank values: the equipped paddle's damage master file
 -- (balance/<paddle>.lua, `combo.ranks`) can override every rank's threshold
--- and multiplier; the table above is the fallback and keeps labels/colors.
+-- and multipliers; the table above is the fallback and keeps labels/colors.
 local function combo_rank_threshold(i)
   return BAL('combo.ranks.' .. i .. '.threshold', COMBO_RANKS[i].threshold)
 end
-local function combo_rank_mult(i)
-  return BAL('combo.ranks.' .. i .. '.mult', COMBO_RANKS[i].mult)
+local function combo_rank_speed_mult(i)
+  return BAL('combo.ranks.' .. i .. '.speed_mult', COMBO_RANKS[i].speed_mult)
+end
+local function combo_rank_xp_mult(i)
+  return BAL('combo.ranks.' .. i .. '.xp_mult', COMBO_RANKS[i].xp_mult)
 end
 
 
@@ -484,12 +514,37 @@ function BallPit:reset_run()
   -- the pit (or extended idle time) reduces points. `streak` counts
   -- consecutive brick bounces across all balls; `last_variant` drives the
   -- variety bonus.
+  --
+  -- Everything from `display` down is PRESENTATION ONLY (see tick_combo /
+  -- draw_combo_meter). `display` is the smoothed point total the bar actually
+  -- draws, so a gain slides left→right instead of snapping; every rank-up
+  -- effect fires off the DISPLAY crossing, keeping the juice in sync with
+  -- what the player sees rather than with the instant the points landed.
   self.combo = {
     points        = 0,
     streak        = 0,
     idle_t        = 0,
     last_variant  = nil,
     bounces_total = 0,
+    -- Cached payouts for the current rank, refreshed once per frame in
+    -- tick_combo: ball speed (BallHero:normalize_speed) and XP (gain_xp).
+    speed_m       = 1,
+    xp_m          = 1,
+    -- Presentation.
+    display       = 0,    -- smoothed points the bar draws
+    display_idx   = 1,    -- rank the drawn bar currently sits in
+    pct           = 0,    -- 0..1 fill within display_idx
+    ghost_pct     = 0,    -- lagging "just lost this" ghost segment
+    gain_v        = 0,    -- 0..1 how hard the bar is currently filling
+    drain         = 0,    -- 0..1 how hard the bar is currently bleeding
+    heat          = 0,    -- 0..1 hot-streak intensity (S and above)
+    flash         = 0,    -- tier break-through bar flash
+    punch         = 0,    -- rank letter spring
+    shock         = 0,    -- expanding break-through ring
+    demote        = 0,    -- tier-loss pulse
+    chip_pop      = 0,    -- newly-lit ladder chip pop
+    ember_t       = 0,    -- ember spawn accumulator
+    fx            = {},   -- live meter particles {x,y,vx,vy,t,life,r,c}
   }
   self.run_time      = 0
   self.paused        = false
@@ -1426,11 +1481,11 @@ function BallPit:draw_hud()
   end
 
   -- XP bar. Starts past however wide the HP readout is (Aegis runs 7 hearts,
-  -- the Vampire blood bar is longer still) and leaves a ~70px strip on the
-  -- right for the combo meter.
+  -- the Vampire blood bar is longer still) and stops COMBO_STRIP_W short of
+  -- the right edge to reserve the combo meter block (label + bar + chips).
   local hb_x, _, hb_w = self:blood_bar_rect()
   local bx = hp_bar_mode and (hb_x + hb_w + 14) or (self.x1 + 20 + self.player_hp_max*10)
-  local bw = (self.x2 - 80) - bx
+  local bw = (self.x2 - COMBO_STRIP_W) - bx
   graphics.rectangle(bx + bw/2, self.y1 - 8, bw, 4, nil, nil, bg[-2])
   local pct = math.clamp(self.xp/self.xp_to_next, 0, 1)
   if pct > 0 then
@@ -1480,10 +1535,13 @@ end
 
 -- ----- Combo meter -----
 
-function BallPit:combo_rank_index()
+-- Rank for an arbitrary point total. Walks the ladder from the top so the
+-- highest threshold crossed wins. Used for BOTH the live rank (real points,
+-- drives the payouts) and the DRAWN rank (smoothed points, drives the juice).
+local function combo_index_for(points)
   local idx = 1
   for i = #COMBO_RANKS, 1, -1 do
-    if self.combo.points >= combo_rank_threshold(i) then
+    if points >= combo_rank_threshold(i) then
       idx = i
       break
     end
@@ -1492,14 +1550,30 @@ function BallPit:combo_rank_index()
 end
 
 
-function BallPit:combo_mult()
-  return combo_rank_mult(self:combo_rank_index())
+function BallPit:combo_rank_index()
+  return combo_index_for((self.combo and self.combo.points) or 0)
+end
+
+
+-- What a rank pays out. Damage is deliberately NOT on this list any more: the
+-- meter buys TEMPO (every ball moves faster) and PROGRESSION (every XP pickup
+-- is worth more), so a hot run feels quicker and levels harder instead of just
+-- printing bigger numbers. Both are cached once per frame by tick_combo --
+-- BallHero:normalize_speed reads the speed one every frame for every ball, so
+-- these have to stay O(1).
+function BallPit:combo_speed_mult()
+  return (self.combo and self.combo.speed_m) or 1
+end
+
+
+function BallPit:combo_xp_mult()
+  return (self.combo and self.combo.xp_m) or 1
 end
 
 
 -- Per-ball bounce damage scaling. Capped so a single perfectly-chained ball
--- can't trivialise a wave on its own. Combines multiplicatively with the
--- combo multiplier in Brick:on_ball_contact.
+-- can't trivialise a wave on its own. This is the ONLY damage channel the
+-- combo system still owns -- it is per-ball chain length, not meter rank.
 function BallPit:bounce_dmg_mult(bounces)
   local n = math.min(bounces or 0, BAL('combo.bounce_cap', COMBO_BOUNCE_CAP))
   return 1 + n*BAL('combo.bounce_dmg_step', COMBO_BOUNCE_DMG_STEP)
@@ -1507,14 +1581,16 @@ end
 
 
 -- Called from Brick:on_ball_contact after damage is applied. Awards points
--- with a small variety + streak bonus and triggers the rank-up SFX/shake if
--- a threshold was crossed. Points are read off the combo meter HUD -- there's
--- deliberately no per-bounce floating "+N" anymore.
+-- with a small variety + streak bonus. Points are read off the combo meter
+-- HUD -- there's deliberately no per-bounce floating "+N".
+--
+-- Note it does NOT fire the rank-up feedback: tick_combo does that when the
+-- DRAWN bar reaches the threshold, so the break-through lands on the frame the
+-- player actually sees the meter fill rather than a beat ahead of it.
 function BallPit:on_brick_bounce(ball, brick)
   local c = self.combo
   if not c then return end
   c.idle_t = 0
-  local prev_idx = self:combo_rank_index()
 
   c.streak = (c.streak or 0) + 1
   local streak_bonus  = math.min(c.streak, BAL('combo.streak_bonus_cap', COMBO_STREAK_BONUS_CAP))
@@ -1527,128 +1603,394 @@ function BallPit:on_brick_bounce(ball, brick)
   -- The loadout's Combo stat scales gain AND bleed (see on_ball_missed /
   -- tick_combo) — high-combo paddles run a hotter, riskier meter.
   local cm = (self.run_mods and self.run_mods.combo) or 1
-  local gained = (BAL('combo.base_points', COMBO_BASE_POINTS) + streak_bonus + variety_bonus)*cm
-  c.points = c.points + gained
-
-  local new_idx = self:combo_rank_index()
-  if new_idx > prev_idx then self:on_combo_rank_up(new_idx) end
+  c.points = c.points + (BAL('combo.base_points', COMBO_BASE_POINTS) + streak_bonus + variety_bonus)*cm
 end
 
 
 -- Flat combo award from non-bounce sources (the Aegis bullet-parry refund).
--- Runs the same rank-up feedback as a brick bounce but skips the
--- streak/variety bookkeeping; the loadout Combo stat still scales it.
+-- Skips the streak/variety bookkeeping; the loadout Combo stat still scales it.
 function BallPit:add_combo_points(pts)
   local c = self.combo
   if not c or not pts or pts <= 0 then return end
   c.idle_t = 0
-  local prev_idx = self:combo_rank_index()
   local cm = (self.run_mods and self.run_mods.combo) or 1
   c.points = c.points + pts*cm
-  local new_idx = self:combo_rank_index()
-  if new_idx > prev_idx then self:on_combo_rank_up(new_idx) end
 end
 
 
--- Rank advancement feedback: a level-up SFX (pitched up per rank) plus a
--- small camera shake at higher ranks for that ULTRAKILL "you're cooking"
--- feeling. The centre-screen flash and big floating rank letter were removed
--- as too bright/noisy -- the combo meter HUD (draw_combo_meter) is the only
--- persistent rank readout now.
-function BallPit:on_combo_rank_up(new_idx)
-  if level_up1 then
-    level_up1:play{volume = 0.35, pitch = 0.85 + new_idx*0.06}
-  end
-  if new_idx >= 5 then camera:shake(2 + new_idx*0.4, 0.2, 80) end
-end
-
-
--- Called from BallHero:start_return — a ball just fell into the pit. Wipes
--- the streak and subtracts a flat penalty. If the penalty drops the rank,
--- adds a small shake so the demotion isn't silent.
+-- Called from BallHero:start_return — a ball just fell into the pit. Wipes the
+-- streak and subtracts a proportional penalty (a drop costs the same FRACTION
+-- of the bar at every rank, floored so early drops still register). The
+-- demotion pulse comes from tick_combo when the drawn bar falls back through.
 function BallPit:on_ball_missed(ball)
   local c = self.combo
   if not c or c.points <= 0 then return end
-  local prev_idx = self:combo_rank_index()
   local cm = (self.run_mods and self.run_mods.combo) or 1
-  -- Proportional miss: a drop costs the same FRACTION of the bar at every
-  -- rank (floored so early drops still register). The loadout Combo stat
-  -- scales the fraction — hot paddles run a riskier meter.
   local penalty  = math.max(BAL('combo.miss_min', COMBO_MISS_MIN),
                             BAL('combo.miss_frac', COMBO_MISS_FRAC)*c.points*cm)
   c.points       = math.max(0, c.points - penalty)
   c.streak       = 0
   c.last_variant = nil
+end
 
-  if self:combo_rank_index() < prev_idx then
-    camera:shake(2, 0.15, 80)
+
+-- Rank advancement feedback. Fired by tick_combo off the DRAWN bar, so it is
+-- exactly in step with the fill reaching the end of its track: the bar flashes
+-- white, the letter springs, a hoop expands off it and sparks shear along the
+-- meter, over a level-up SFX pitched up per rank. Still deliberately
+-- HUD-local -- no screen flash, no giant floating rank letter.
+function BallPit:on_combo_rank_up(new_idx)
+  local c = self.combo
+  if c then
+    c.flash    = 1
+    c.punch    = 1
+    c.shock    = 1
+    c.chip_pop = 1
+    self:combo_burst(new_idx)
+  end
+  if level_up1 then
+    level_up1:play{volume = 0.35, pitch = 0.85 + new_idx*0.06}
+  end
+  if new_idx >= COMBO_HOT_RANK then camera:shake(2 + new_idx*0.4, 0.2, 80) end
+end
+
+
+-- The drawn bar fell back through a threshold. Deliberately quieter than the
+-- promotion: a red pulse across the meter and a small shake, no sound.
+function BallPit:on_combo_rank_down(new_idx)
+  local c = self.combo
+  if c then
+    c.demote = 1
+    c.punch  = 0.55
+  end
+  camera:shake(2, 0.15, 80)
+end
+
+
+-- Meter geometry, shared by tick_combo_fx and draw_combo_meter so particles
+-- spawn exactly on the bar. draw_hud reserves this strip by ending the XP bar
+-- at x2 - COMBO_STRIP_W.
+-- Returns: rank-label centre x, shared centre y, bar left x, bar width, bar height.
+function BallPit:combo_meter_rect()
+  local bx1 = self.x2 - 3
+  local bw  = 60
+  local bx0 = bx1 - bw
+  local cy  = self.y1 + 2
+  return bx0 - 6 - COMBO_LABEL_BOX/2, cy, bx0, bw, 6
+end
+
+
+-- HUD-local particle push. These are a plain list on self.combo drawn inside
+-- draw_combo_meter, NOT effects-group entities: the meter lives in canvas
+-- space and must not inherit the arena camera's shake/offset.
+function BallPit:combo_add_fx(x, y, vx, vy, life, r, col)
+  local fx = self.combo and self.combo.fx
+  if not fx or #fx >= COMBO_FX_MAX then return end
+  fx[#fx + 1] = {x = x, y = y, vx = vx, vy = vy, t = 0, life = life, r = r, c = col}
+end
+
+
+-- Sparks thrown along the whole bar when a tier breaks.
+function BallPit:combo_burst(idx)
+  local c = self.combo
+  if not c then return end
+  local _, cy, bx0, bw = self:combo_meter_rect()
+  local col = _G[COMBO_RANKS[idx].color_key][0]
+  for i = 1, 14 do
+    local a  = random:float(-math.pi, 0)          -- upward fan
+    local sp = random:float(20, 70)
+    self:combo_add_fx(bx0 + random:float(0, bw), cy + random:float(-2, 2),
+                      math.cos(a)*sp, math.sin(a)*sp,
+                      random:float(0.25, 0.5), random:float(0.5, 1.2),
+                      (i % 3 == 0) and Color(1, 1, 1, 1) or col)
   end
 end
 
 
-function BallPit:tick_combo(dt)
-  local c = self.combo
-  if not c then return end
-  c.idle_t = c.idle_t + dt
-  if c.idle_t > BAL('combo.idle_grace', COMBO_IDLE_GRACE) and c.points > 0 then
-    local cm = (self.run_mods and self.run_mods.combo) or 1
-    -- Proportional idle bleed: high ranks drain fast (FRENZY halves in ~9s
-    -- instead of coasting for over a minute), low bars drain gently, and the
-    -- floor keeps the tail from lingering forever.
-    local rate = math.max(BAL('combo.idle_decay_min', COMBO_IDLE_DECAY_MIN),
-                          BAL('combo.idle_decay_frac', COMBO_IDLE_DECAY_FRAC)*c.points)
-    c.points = math.max(0, c.points - rate*cm*dt)
-    if c.points <= 0 then
-      c.streak       = 0
-      c.last_variant = nil
+-- Advance + retire meter particles, and emit the two ambient streams: embers
+-- lifting off a hot (S+) bar, and cinders shearing off the leading edge while
+-- the bar bleeds down. Both are what makes the constant decay legible without
+-- having to read the number.
+function BallPit:tick_combo_fx(dt)
+  local c  = self.combo
+  local fx = c.fx
+  for i = #fx, 1, -1 do
+    local p = fx[i]
+    p.t  = p.t + dt
+    p.x  = p.x + p.vx*dt
+    p.y  = p.y + p.vy*dt
+    p.vy = p.vy + 40*dt
+    if p.t >= p.life then table.remove(fx, i) end
+  end
+
+  local _, cy, bx0, bw = self:combo_meter_rect()
+  local front = bx0 + bw*c.pct
+  local col   = _G[COMBO_RANKS[c.display_idx].color_key][0]
+
+  -- Hot streak: the higher the tier, the more embers lift off the fill.
+  if c.heat > 0.01 then
+    c.ember_t = c.ember_t + dt*(4 + 26*c.heat)
+    while c.ember_t >= 1 do
+      c.ember_t = c.ember_t - 1
+      self:combo_add_fx(bx0 + random:float(0, math.max(2, bw*c.pct)), cy + random:float(-2, 2),
+                        random:float(-6, 6), random:float(-26, -12),
+                        random:float(0.3, 0.6), random:float(0.4, 0.9), col)
+    end
+  end
+
+  -- Bleeding: cinders shear backwards off the receding front and fall away.
+  if c.drain > 0.4 and c.pct > 0.01 then
+    c.ember_t = c.ember_t + dt*14*c.drain
+    while c.ember_t >= 1 do
+      c.ember_t = c.ember_t - 1
+      self:combo_add_fx(front, cy + random:float(-2, 2),
+                        random:float(-14, -4), random:float(4, 16),
+                        random:float(0.2, 0.4), random:float(0.4, 0.8),
+                        Color(col.r, col.g, col.b, 1))
     end
   end
 end
 
 
--- Compact HUD at the top-right of the canvas, sharing the strip with the
--- HP hearts (left) and XP bar (middle). Rendered by draw_hud.
-function BallPit:draw_combo_meter()
-  local c    = self.combo
+-- Per-frame combo bookkeeping: the constant idle bleed, the cached rank
+-- payouts, the smoothed bar, and every scrap of meter animation state. Called
+-- from BallPit:update below the overlay early-returns, so the meter freezes
+-- with the game in menus / the upgrade picker.
+function BallPit:tick_combo(dt)
+  local c = self.combo
   if not c then return end
-  local idx  = self:combo_rank_index()
-  local rank = COMBO_RANKS[idx]
-  local col  = _G[rank.color_key][0]
 
-  -- Anchor the meter just inside the right edge of the canvas. Width is
-  -- reserved by shrinking the XP bar in draw_hud. print_centered centers
-  -- VERTICALLY too, so cy must leave at least half the fat_font glyph height
-  -- (plus the S+ pulse) above it or the rank letter's top clips off the
-  -- canvas -- it sat at y1 - 10 originally and shaved the letter. Nudged
-  -- down + left of the strict hearts/XP row so the tall rank letter clears
-  -- both the canvas top and the right edge with margin.
-  local cx = self.x2 - 50
-  local cy = self.y1 - 0
-
-  -- Rank letter pulses subtly on S+ to give the meter some "life" at the
-  -- top of the ladder.
-  local scale = (idx >= 5) and (1 + 0.08*math.sin(love.timer.getTime()*8)) or 1
-  graphics.print_centered(rank.label, fat_font, cx, cy, 0, scale, scale, 0, 0, col)
-
-  -- Multiplier label sits to the right of the rank letter.
-  graphics.print_centered(string.format('x%.1f', combo_rank_mult(idx)), pixul_font,
-                          cx + 22, cy, 0, 1, 1, 0, 0, col)
-
-  -- Progress bar to the next rank (full at ULTRAKILL).
-  local bar_w = 56
-  local bar_y = cy + 6
-  graphics.rectangle(cx + 4, bar_y, bar_w, 2, nil, nil, bg[-2])
-  local pct
-  if idx == #COMBO_RANKS then
-    pct = 1
-  else
-    local next_t = combo_rank_threshold(idx + 1)
-    local prev_t = combo_rank_threshold(idx)
-    pct = math.clamp((c.points - prev_t) / (next_t - prev_t), 0, 1)
+  -- ---- points: CONSTANT bleed ----
+  -- ONE flat rate for every tier. A FRENZY bar and a C bar both lose the same
+  -- points per idle second, so "keep the balls working" costs exactly the same
+  -- attention all the way up the ladder. (It used to be proportional, which
+  -- made the top ranks evaporate and the bottom ones sticky.)
+  c.idle_t = c.idle_t + dt
+  local bleeding = false
+  if c.idle_t > BAL('combo.idle_grace', COMBO_IDLE_GRACE) and c.points > 0 then
+    local cm = (self.run_mods and self.run_mods.combo) or 1
+    c.points = math.max(0, c.points - BAL('combo.idle_decay_rate', COMBO_IDLE_DECAY_RATE)*cm*dt)
+    bleeding = true
+    if c.points <= 0 then
+      c.streak       = 0
+      c.last_variant = nil
+    end
   end
-  if pct > 0 then
-    graphics.rectangle(cx + 4 - bar_w/2 + bar_w*pct/2, bar_y,
-                       bar_w*pct, 2, nil, nil, col)
+
+  -- ---- cached payouts, read off the LIVE rank ----
+  local idx = combo_index_for(c.points)
+  c.speed_m = combo_rank_speed_mult(idx)
+  c.xp_m    = combo_rank_xp_mult(idx)
+
+  -- ---- the drawn bar chases the real total ----
+  -- Rate = a fraction of the remaining gap with a floor under it, so a
+  -- 15-point bounce still takes a visible beat to travel and a 400-point drop
+  -- still sweeps back down smoothly. This is what turns every award into
+  -- continuous left-to-right motion instead of the bar teleporting a block wider.
+  local prev_disp = c.display
+  local diff = c.points - c.display
+  if diff ~= 0 then
+    local step = math.max(BAL('combo.bar_min_rate', COMBO_BAR_MIN_RATE),
+                          math.abs(diff)*BAL('combo.bar_chase', COMBO_BAR_CHASE))*dt
+    if math.abs(diff) <= step then c.display = c.points
+    else c.display = c.display + (diff > 0 and step or -step) end
+  end
+  local rate_now = (c.display - prev_disp)/math.max(dt, 1e-5)
+
+  -- ---- rank crossings, off the DRAWN bar ----
+  local prev_idx = c.display_idx or 1
+  local disp_idx = combo_index_for(c.display)
+  if     disp_idx > prev_idx then self:on_combo_rank_up(disp_idx)
+  elseif disp_idx < prev_idx then self:on_combo_rank_down(disp_idx) end
+  c.display_idx = disp_idx
+
+  -- ---- fill fraction within the drawn tier, plus the lagging ghost tail ----
+  local lo = combo_rank_threshold(disp_idx)
+  if disp_idx < #COMBO_RANKS then
+    local hi = combo_rank_threshold(disp_idx + 1)
+    c.pct = math.clamp((c.display - lo)/math.max(1, hi - lo), 0, 1)
+  else
+    c.pct = 1
+  end
+  if disp_idx ~= prev_idx then
+    c.ghost_pct = c.pct                    -- tier changed: don't streak across it
+  elseif c.pct >= c.ghost_pct then
+    c.ghost_pct = c.pct                    -- gaining: the ghost rides the front
+  else
+    c.ghost_pct = math.max(c.pct, math.lerp_dt(BAL('combo.ghost_lag', COMBO_GHOST_LAG),
+                                               dt, c.ghost_pct, c.pct))
+  end
+
+  -- ---- animation channels ----
+  -- gain_v / drain are the meter's two "live" looks: a hot comet front while
+  -- filling, an eroding front + red ghost tail while bleeding.
+  local gain_target  = (rate_now > 2) and math.clamp(rate_now/260, 0.25, 1) or 0
+  local drain_target = (bleeding or rate_now < -2) and 1 or 0
+  c.gain_v = math.lerp_dt(0.0008, dt, c.gain_v, gain_target)
+  c.drain  = math.lerp_dt(0.05,   dt, c.drain,  drain_target)
+  -- Hot streak ramps 0 below COMBO_HOT_RANK up to 1 at the top of the ladder.
+  local hot = math.clamp((idx - COMBO_HOT_RANK + 1)/(#COMBO_RANKS - COMBO_HOT_RANK + 1), 0, 1)
+  c.heat = math.lerp_dt(0.2, dt, c.heat, hot)
+
+  c.flash    = math.max(0, c.flash    - dt*4.0)
+  c.punch    = math.max(0, c.punch    - dt*3.2)
+  c.shock    = math.max(0, c.shock    - dt*2.2)
+  c.demote   = math.max(0, c.demote   - dt*3.0)
+  c.chip_pop = math.max(0, c.chip_pop - dt*3.0)
+
+  self:tick_combo_fx(dt)
+end
+
+
+-- Compact HUD at the top-right of the canvas, sharing the strip with the HP
+-- hearts (left) and XP bar (middle). Rendered by draw_hud.
+--
+-- Reads ONLY state pre-computed by tick_combo (pct / ghost_pct / heat / gain_v
+-- / drain / flash / punch / shock / demote / fx), so it stays a pure painter
+-- and the meter animates identically no matter how often draw runs.
+--
+-- Layout, left to right:  [rank label]  [====== fill bar ======]
+--                                       [.. tier ladder chips ..]
+function BallPit:draw_combo_meter()
+  local c = self.combo
+  if not c then return end
+  local idx  = c.display_idx or 1
+  local rank = COMBO_RANKS[idx]
+  local base = _G[rank.color_key][0]
+  local t    = love.timer.getTime()
+
+  local lx, cy, bx0, bw, bh = self:combo_meter_rect()
+  local bx1 = bx0 + bw
+  local cx  = bx0 + bw/2
+
+  -- Bleeding dims the whole meter, so "I'm losing it" reads before you've
+  -- parsed the bar length.
+  local dim = 1 - 0.28*c.drain
+  local col = Color(base.r*dim, base.g*dim, base.b*dim, 1)
+
+  -- ---- hot-streak underglow (S and up) ----
+  if c.heat > 0.01 then
+    -- Spans the whole reserved strip (label box through the bar's right edge)
+    -- so it sits centred behind the block and stops exactly on the frame.
+    local gx0, gx1 = lx - COMBO_LABEL_BOX/2 - 3, bx1 + 3
+    local pulse = 0.5 + 0.5*math.sin(t*7)
+    graphics.rectangle((gx0 + gx1)/2, cy, gx1 - gx0, bh + 10, 5, 5,
+                       Color(col.r, col.g, col.b, 0.09 + 0.15*c.heat*pulse))
+  end
+
+  -- ---- rank label ----
+  -- Auto-fit: 'D' and 'FRENZY' have to live in the same COMBO_LABEL_BOX, so the
+  -- scale comes off the measured glyph width instead of a hardcoded number.
+  local lw  = math.max(1, fat_font:get_text_width(rank.label))
+  local lsc = math.min(1.15, COMBO_LABEL_BOX/lw)
+  local pop = 1 + 0.55*c.punch*c.punch                          -- promotion spring
+  local wob = (c.heat > 0.01) and (1 + 0.05*c.heat*math.sin(t*9)) or 1
+  -- Hard ceiling so even a springing 'FRENZY' can't grow out of its slot and
+  -- collide with the XP bar on the left or the meter bar on the right.
+  local ls  = math.min(lsc*pop*wob, (COMBO_LABEL_BOX + 6)/lw)
+
+  if c.heat > 0.01 then                                          -- heat halo
+    for i = 1, 2 do
+      local hs = ls*(1 + 0.10*i)
+      graphics.print_centered(rank.label, fat_font, lx, cy, 0, hs, hs, 0, 0,
+                              Color(col.r, col.g, col.b, 0.16*c.heat/i))
+    end
+  end
+  local lcol = col
+  if c.demote > 0.01 then
+    lcol = Color(math.lerp(c.demote, col.r, red[0].r),
+                 math.lerp(c.demote, col.g, red[0].g),
+                 math.lerp(c.demote, col.b, red[0].b), 1)
+  end
+  graphics.print_centered(rank.label, fat_font, lx, cy, 0, ls, ls, 0, 0, lcol)
+  if c.flash > 0.01 then
+    graphics.print_centered(rank.label, fat_font, lx, cy, 0, ls, ls, 0, 0, Color(1, 1, 1, c.flash))
+  end
+  if c.shock > 0.01 then                                         -- break-through hoop
+    graphics.circle(lx, cy, 5 + 20*(1 - c.shock), Color(col.r, col.g, col.b, c.shock*0.7), 1)
+  end
+
+  -- ---- track ----
+  graphics.rectangle(cx, cy, bw, bh, bh/2, bh/2, bg[-2])
+  graphics.rectangle(cx, cy, bw, bh, bh/2, bh/2,
+                     Color(col.r, col.g, col.b, 0.22 + 0.2*c.heat), 1)
+
+  local fw = bw*c.pct
+
+  -- Ghost tail: the slice the bar just lost, held a beat behind the live front
+  -- so a drop / the idle bleed reads as "that much was taken off you" instead
+  -- of the bar quietly being shorter than it was.
+  if c.ghost_pct > c.pct + 0.005 then
+    local gwx = bw*(c.ghost_pct - c.pct)
+    graphics.rectangle(bx0 + fw + gwx/2, cy, gwx, bh - 2, 1, 1,
+                       Color(red[0].r, red[0].g, red[0].b, 0.45))
+  end
+
+  if fw > 0.5 then
+    graphics.rectangle(bx0 + fw/2, cy, fw, bh, bh/2, bh/2, col)
+    graphics.rectangle(bx0 + fw/2, cy - bh*0.22, fw, bh*0.34, 1, 1,   -- glassy upper band
+                       Color(math.min(1, col.r + 0.35), math.min(1, col.g + 0.35),
+                             math.min(1, col.b + 0.35), 0.5))
+
+    -- Scrolling energy stripes: the fill always LOOKS like it is flowing
+    -- left to right, and it flows faster the hotter the streak / the harder the
+    -- bar is filling. Clipped by only drawing stripes fully inside the fill.
+    local period = 11
+    local sa     = 0.10 + 0.22*c.heat + 0.18*c.gain_v
+    local sx     = bx0 - period + ((t*(26 + 90*c.heat + 60*c.gain_v)) % period)
+    while sx < bx0 + fw do
+      if sx - 2 > bx0 and sx + 4 < bx0 + fw then
+        graphics.polygon({sx - 2, cy + bh/2, sx + 2, cy - bh/2,
+                          sx + 4, cy - bh/2, sx,     cy + bh/2}, Color(1, 1, 1, sa))
+      end
+      sx = sx + period
+    end
+
+    -- Leading edge: a bright cap plus, while the bar is actually travelling, a
+    -- comet smear behind it -- the motion cue that says gains are sliding in.
+    local fxx = bx0 + fw
+    graphics.rectangle(fxx - 1, cy, 2, bh, 1, 1, Color(1, 1, 1, 0.45 + 0.55*c.gain_v))
+    graphics.circle(fxx, cy, 1.6 + 2.4*c.gain_v,
+                    Color(col.r, col.g, col.b, 0.35 + 0.4*c.gain_v))
+    if c.gain_v > 0.05 then
+      graphics.rectangle(fxx - 5, cy, 10, bh - 3, 1, 1, Color(1, 1, 1, 0.20*c.gain_v))
+    end
+  end
+
+  -- ---- one-shot overlays ----
+  if c.flash > 0.01 then
+    graphics.rectangle(cx, cy, bw + 2, bh + 2, bh/2, bh/2, Color(1, 1, 1, 0.5*c.flash))
+  end
+  if c.demote > 0.01 then
+    graphics.rectangle(cx, cy, bw + 2, bh + 2, bh/2, bh/2,
+                       Color(red[0].r, red[0].g, red[0].b, 0.4*c.demote), 1)
+  end
+  if c.drain > 0.4 then                                          -- bleeding rim pulse
+    graphics.rectangle(cx, cy, bw + 2, bh + 2, bh/2, bh/2,
+                       Color(red[0].r, red[0].g, red[0].b,
+                             0.25*c.drain*(0.5 + 0.5*math.sin(t*7))), 1)
+  end
+
+  -- ---- tier ladder chips ----
+  -- Where you sit on the whole ladder, which the single-tier fill bar can't
+  -- say on its own. The chip for the current tier pops on a break-through.
+  local n   = #COMBO_RANKS
+  local cw  = 4
+  local gp  = (bw - n*cw)/(n - 1)
+  local cyy = cy + bh/2 + 3
+  for i = 1, n do
+    local ccol = _G[COMBO_RANKS[i].color_key][0]
+    local a    = (i <= idx) and 0.95 or 0.18
+    local h    = 2
+    if i == idx then h = 2 + 2*c.chip_pop; a = 1 end
+    graphics.rectangle(bx0 + cw/2 + (i - 1)*(cw + gp), cyy, cw, h, 0.5, 0.5,
+                       Color(ccol.r, ccol.g, ccol.b, a))
+  end
+
+  -- ---- particles ----
+  for _, p in ipairs(c.fx) do
+    local k = 1 - p.t/p.life
+    graphics.circle(p.x, p.y, p.r*k, Color(p.c.r, p.c.g, p.c.b, k))
   end
 end
 
@@ -1701,8 +2043,11 @@ end
 
 
 function BallPit:gain_xp(amount)
-  -- The loadout's XP stat scales every gain (rounded, never below 1).
-  amount = math.max(1, math.floor(amount*((self.run_mods and self.run_mods.xp) or 1) + 0.5))
+  -- The loadout's XP stat scales every gain, and so does the combo rank --
+  -- climbing the meter now pays out in PROGRESSION rather than damage (see
+  -- COMBO_RANKS.xp_mult). Rounded, never below 1.
+  amount = math.max(1, math.floor(amount*((self.run_mods and self.run_mods.xp) or 1)
+                                        *self:combo_xp_mult() + 0.5))
   self.xp = self.xp + amount
   FloatingText{group = self.effects, x = self.paddle.x, y = self.paddle.y - 16, text = '+' .. amount, color = blue[0]}
   while self.xp >= self.xp_to_next do
