@@ -59,10 +59,29 @@ end
 
 
 -- Prints text to the screen, alternative to using a Text object.
+-- Letter-spaced draw. LOVE has no tracking knob, so a font that asks for one
+-- (Font.tracking, see font.lua) is walked a glyph at a time and the extra
+-- advance applied by hand. Only unrotated runs take this path -- nothing draws
+-- a tracked font at an angle, and skipping r keeps the arithmetic honest.
+local function print_tracked(text, font, x, y, sx, sy, ox, oy)
+  local px = x - (ox or 0)*sx
+  local py = y - (oy or 0)*sy
+  for i = 1, #text do
+    local c = text:sub(i, i)
+    love.graphics.print(c, font.font, px, py, 0, sx, sy)
+    px = px + (font.font:getWidth(c) + font.tracking)*sx
+  end
+end
+
+
 function graphics.print(text, font, x, y, r, sx, sy, ox, oy, color)
   local _r, g, b, a = love.graphics.getColor()
   if color then love.graphics.setColor(color.r, color.g, color.b, color.a) end
-  love.graphics.print(text, font.font, x, y, r or 0, sx or 1, sy or 1, ox or 0, oy or 0)
+  if (font.tracking or 0) ~= 0 and (r or 0) == 0 then
+    print_tracked(text, font, x, y, sx or 1, sy or 1, ox, oy)
+  else
+    love.graphics.print(text, font.font, x, y, r or 0, sx or 1, sy or 1, ox or 0, oy or 0)
+  end
   if color then love.graphics.setColor(_r, g, b, a) end
 end
 
@@ -71,7 +90,13 @@ end
 function graphics.print_centered(text, font, x, y, r, sx, sy, ox, oy, color)
   local _r, g, b, a = love.graphics.getColor()
   if color then love.graphics.setColor(color.r, color.g, color.b, color.a) end
-  love.graphics.print(text, font.font, x, y, r or 0, sx or 1, sy or 1, (ox or 0) + font:get_text_width(text)/2, (oy or 0) + font.h/2)
+  local cox = (ox or 0) + font:get_text_width(text)/2
+  local coy = (oy or 0) + font.h/2
+  if (font.tracking or 0) ~= 0 and (r or 0) == 0 then
+    print_tracked(text, font, x, y, sx or 1, sy or 1, cox, coy)
+  else
+    love.graphics.print(text, font.font, x, y, r or 0, sx or 1, sy or 1, cox, coy)
+  end
   if color then love.graphics.setColor(_r, g, b, a) end
 end
 

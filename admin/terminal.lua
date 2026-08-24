@@ -180,6 +180,7 @@ function Terminal:register_commands()
     t:log("  heal                    refill hp to max")
     t:log("  god                     toggle invulnerability")
     t:log("  xp <n>                  gain n xp")
+    t:log("  combo <tier|n|off>      set the combo meter to a tier")
     t:log("  level                   open level-up picker")
     t:log("  phase [2|3]             drop boss hp to next phase")
     t:log("  trace                   toggle boss path trace + readout")
@@ -291,6 +292,32 @@ function Terminal:register_commands()
   C.god = function(t, args)
     t.arena.god = not t.arena.god
     t:log("godmode = " .. tostring(t.arena.god))
+  end
+
+  -- Jam the combo meter to a tier: by label (`combo sss`, case-insensitive)
+  -- or by index (`combo 8`). `off` empties it. Sets the point total to that
+  -- tier's threshold and lets tick_combo derive the rank, so the multipliers
+  -- and the drawn bar stay consistent with each other.
+  C.combo = function(t, args)
+    local a = args[1]
+    if not a then
+      local row = ''
+      for i, name in ipairs{'D', 'C', 'B', 'A', 'S', 'SS', 'SSS', 'FRENZY'} do
+        row = row .. i .. '=' .. name .. (i < 8 and '  ' or '')
+      end
+      t:log("usage: combo <tier|1-8|off>")
+      t:log("  " .. row)
+      return
+    end
+    if a == 'off' or a == 'reset' or a == '0' then
+      t.arena.combo.points = 0
+      t:log("combo cleared")
+      return
+    end
+    local idx, label = t.arena:set_combo_rank(a)
+    if not idx then t:log("unknown tier: " .. a); return end
+    t:log("combo = " .. label .. " (tier " .. idx .. ", "
+          .. math.floor(t.arena.combo.points) .. " pts)")
   end
 
   C.xp = function(t, args)

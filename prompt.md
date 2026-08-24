@@ -77,3 +77,26 @@ Enemies:
 
 
 
+bug: 
+Error
+
+paddles.lua:543: attempt to call global 'heart_half' (a nil value)
+
+
+Traceback
+
+[love "callbacks.lua"]:228: in function 'handler'
+paddles.lua:543: in function 'life_glyph'
+paddles.lua:2494: in function 'draw_shop_screen'
+paddles.lua:2197: in function 'draw_game_over'
+ballpit.lua:1277: in function 'draw'
+engine/game/state.lua:79: in function 'draw'
+main.lua:129: in function 'draw_action'
+shared.lua:117: in function 'action'
+engine/graphics/canvas.lua:45: in function 'draw_to'
+shared.lua:116: in function 'shared_draw'
+main.lua:128: in function 'draw'
+engine/init.lua:170: in function <engine/init.lua:118>
+[C]: in function 'xpcall'
+
+when i pressed equip on a paddle or when i press the left arrow to switch to the aegis in the shop

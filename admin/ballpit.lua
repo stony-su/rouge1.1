@@ -192,7 +192,11 @@ local COMBO_FX_MAX       = 48    -- hard cap on live meter particles
 -- itself, since the label no longer shares that row.
 local COMBO_LABEL_BOX = 54
 local COMBO_LABEL_TOP = 10
-local COMBO_STRIP_W   = 69
+local COMBO_STRIP_W   = 74
+-- Both the bar and the rank badge sit this far in from the right arena wall.
+-- One constant so they can never drift apart -- combo_meter_rect is the only
+-- geometry source the bar, the badge and the particle emitters all read.
+local COMBO_RIGHT_PAD = 5
 
 -- Effective rank values: the equipped paddle's damage master file
 -- (balance/<paddle>.lua, `combo.ranks`) can override every rank's threshold
@@ -1955,11 +1959,33 @@ end
 -- height, rank-label ink TOP y. The label is right-aligned on the wall and
 -- hangs under the bar, so it anchors by its right edge, not by its centre.
 function BallPit:combo_meter_rect()
-  local bx1 = self.x2 - 3
+  local bx1 = self.x2 - 3 - COMBO_RIGHT_PAD
   local bw  = 60
   local bx0 = bx1 - bw
   local cy  = self.y1 + 2
-  return self.x2, cy, bx0, bw, 6, cy + COMBO_LABEL_TOP
+  return self.x2 - COMBO_RIGHT_PAD, cy, bx0, bw, 6, cy + COMBO_LABEL_TOP
+end
+
+
+-- Debug hook (admin terminal `combo <tier>`): jam the meter to a named or
+-- numbered rank. Only the point total is set -- tick_combo derives the rank,
+-- the payouts and every bit of presentation from it on the next frame, so
+-- this cannot desync the meter from the multipliers it is advertising.
+-- Returns the index and label it landed on, or nil for an unknown tier.
+function BallPit:set_combo_rank(which)
+  local idx = tonumber(which)
+  if not idx then
+    local want = string.upper(tostring(which))
+    for i, r in ipairs(COMBO_RANKS) do
+      if r.label == want then idx = i break end
+    end
+  end
+  idx = idx and math.floor(idx)
+  if not idx or not COMBO_RANKS[idx] then return nil end
+  if not self.combo then return nil end
+  self.combo.points = combo_rank_threshold(idx)
+  self.combo.idle_t = 0
+  return idx, COMBO_RANKS[idx].label
 end
 
 
@@ -2822,32 +2848,38 @@ end
 -- Everything here is laid out from MEASURED text: the copy is wrapped to the
 -- panel's inner width and the panel's height is then computed from how many
 -- lines that produced, so no line can spill past the frame or collide with the
--- row under it however long the ability text is. The prose uses the monospaced
--- brush font -- one cell per glyph reads much cleaner at this size than the
--- proportional cut, which crowds letters together.
+-- row under it however long the ability text is.
 --
--- Vertical arithmetic note: pixul ink runs y .. y+9 below a `print` origin and
--- print_centered lifts by font.h/2 (6.5), so a centred line's ink sits
--- y-6.5 .. y+2.5 (y+4.5 with descenders).
+-- EVERY line draws at scale 1.0. The brush fonts are 2x pixel faces (two-pixel
+-- strokes at size 8); the old 0.7/0.55 draws put those strokes on 1.4 and 1.1
+-- pixels and the filter turned them to grey. Native scale costs width, which
+-- is why the panel is 380 wide now and the mono font carries -1 tracking
+-- (shared.lua) -- together those land the copy at roughly the line count the
+-- shrunken version had, but legible.
+--
+-- Vertical arithmetic: pixul ink runs y .. y+9 below a `print` origin, and
+-- print_centered lifts by font.h/2 = 6.5 at scale 1.0. So an INK TOP of `k`
+-- means drawing at k + 6.5, and every offset below is written that way.
 function BallPit:draw_hero_tooltip(hero, total_heroes)
   local rows = math.ceil(total_heroes/8)
   local data = self:get_hero_ability_data(hero.character)
   local lvl  = hero.level or 1
 
-  local pw   = 300                                   -- was 220: the copy needs it
+  local pw   = 380                                   -- 300 before the copy grew
   local px0  = gw/2 - pw/2
   local py   = hero_grid_top() + rows*HERO_CELL_H + 10
   local tw   = pw/3                                  -- one tier column
+  local LP   = 11                                    -- line pitch (9px ink + 2)
 
   -- Wrap first, size the panel second.
-  local desc = wrap_to_width(data.desc, pixul_mono_font, 0.7, pw - 24)
+  local desc = wrap_to_width(data.desc, pixul_mono_font, 1, pw - 24)
   local spec, spec_rows = {}, 0
   for tier = 1, 3 do
-    spec[tier] = wrap_to_width(data.tiers[tier].special, pixul_mono_font, 0.55, tw - 10)
+    spec[tier] = wrap_to_width(data.tiers[tier].special, pixul_mono_font, 1, tw - 10)
     spec_rows  = math.max(spec_rows, #spec[tier])
   end
-  local ty = py + 24 + #desc*9 + 6                    -- top of the tier columns
-  local ph = (ty - py) + 27 + math.max(1, spec_rows)*8 + 6
+  local ty = py + 24 + #desc*LP + 6                   -- top of the tier columns
+  local ph = (ty - py) + 31 + math.max(1, spec_rows)*LP + 6
 
   graphics.rectangle(gw/2, py + ph/2, pw, ph, 4, 4, bg[-2])
   graphics.rectangle(gw/2, py + ph/2, pw, ph, 4, 4,
@@ -2859,8 +2891,9 @@ function BallPit:draw_hero_tooltip(hero, total_heroes)
   graphics.line(px0 + 10, py + 20, px0 + pw - 10, py + 20, Color(1, 1, 1, 0.12), 1)
 
   for i, line in ipairs(desc) do
-    graphics.print_centered(line, pixul_mono_font, gw/2, py + 28.55 + (i - 1)*9,
-                            0, 0.7, 0.7, 0, 0, fg_alt[0])
+    -- ink top py + 24, then one pitch per line
+    graphics.print_centered(line, pixul_mono_font, gw/2, py + 30.5 + (i - 1)*LP,
+                            0, 1, 1, 0, 0, fg_alt[0])
   end
 
   -- Tier columns. Hairline separators so three stacks of copy don't read as
@@ -2875,22 +2908,26 @@ function BallPit:draw_hero_tooltip(hero, total_heroes)
     local is_open    = (tier <= lvl)
     local tcol = is_current and yellow[0] or (is_open and fg[0] or fg[-2])
 
+    -- ink top ty + 0
     graphics.print_centered((tier == 1 and 'I') or (tier == 2 and 'II') or 'III',
-                            pixul_font, tx, ty + 5.85, 0, 0.9, 0.9, 0, 0, tcol)
+                            pixul_font, tx, ty + 6.5, 0, 1, 1, 0, 0, tcol)
 
-    if is_current then      graphics.circle(tx, ty + 13, 2.5, yellow[0])
-    elseif is_open then     graphics.circle(tx, ty + 13, 2,   fg[-1])
-    else                    graphics.circle(tx, ty + 13, 1.5, fg[-3], 1) end
+    -- clear of the numeral's ink (ends ty + 9)
+    if is_current then      graphics.circle(tx, ty + 14, 2.5, yellow[0])
+    elseif is_open then     graphics.circle(tx, ty + 14, 2,   fg[-1])
+    else                    graphics.circle(tx, ty + 14, 1.5, fg[-3], 1) end
 
+    -- ink top ty + 18
     local pct = math.floor((data.tiers[tier].dmg_mult - 1.0)*100)
     graphics.print_centered(pct > 0 and ('+' .. pct .. '%') or 'BASE',
-                            pixul_font, tx, ty + 22.875, 0, 0.75, 0.75, 0, 0,
+                            pixul_font, tx, ty + 24.5, 0, 1, 1, 0, 0,
                             is_open and (is_current and yellow[0] or green[0]) or fg[-3])
 
+    -- ink top ty + 31
     local scol = is_open and fg_alt[0] or fg[-3]
     for i, line in ipairs(spec[tier]) do
-      graphics.print_centered(line, pixul_mono_font, tx, ty + 30.575 + (i - 1)*8,
-                              0, 0.55, 0.55, 0, 0, scol)
+      graphics.print_centered(line, pixul_mono_font, tx, ty + 37.5 + (i - 1)*LP,
+                              0, 1, 1, 0, 0, scol)
     end
   end
 end

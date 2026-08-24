@@ -45,12 +45,28 @@ function shared_init()
 
   fat_font   = Font('FatPixelFont', 8)
   pixul_font = Font('PixulBrush', 8)
-  -- Monospaced cut of the same brush face. Every glyph gets its own cell, so
-  -- running prose (the hero ability tooltip, the shop's loadout copy) reads
-  -- far cleaner than the tightly-kerned proportional version. It is ~1.68x
-  -- wider per character, so everything drawn in it is laid out against a
-  -- MEASURED width rather than an assumed one.
-  pixul_mono_font = Font('PixulBrush-Mono', 8)
+  -- Monospaced cut of the same brush face, used for running prose (the hero
+  -- ability tooltip, the shop's loadout copy).
+  --
+  -- Two things make this face legible or not, and both are settled here rather
+  -- than at the call sites:
+  --
+  --  * SCALE. The brush is a 2x pixel font -- every stroke is exactly two
+  --    pixels thick at size 8. Drawn at 0.7 those strokes land on 1.4 pixels
+  --    and LOVE's linear filter smears them into grey mush, which is why the
+  --    copy read as fuzzy. Everything drawn in this font therefore draws at
+  --    scale 1.0, on the pixel grid the glyphs were cut for.
+  --
+  --  * TRACKING. The mono cut pads every glyph out to a 10px cell even though
+  --    the widest ink is 8px, so at native scale the letters float apart. -1
+  --    closes that to a single-pixel gutter -- the same rhythm the
+  --    proportional cut ships with -- while keeping the even grid that makes
+  --    a block of small copy scannable. Font:get_text_width folds tracking in,
+  --    so measured layout (wrapping, centring, right-alignment) is unaffected.
+  --
+  -- Net: ~9px per character at scale 1.0, against ~7px for the old 0.7 draw --
+  -- a third wider, and every stroke a real pixel.
+  pixul_mono_font = Font('PixulBrush-Mono', 8, -1)
 
   background_canvas = Canvas(gw, gh)
   main_canvas       = Canvas(gw, gh, {stencil = true})
