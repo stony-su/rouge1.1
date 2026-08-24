@@ -1456,9 +1456,9 @@ end
 
 
 function BallPit:draw_hud()
-  -- Frame around playfield.
-  graphics.rectangle((self.x1 + self.x2)/2, (self.y1 + self.y2)/2,
-    self.x2 - self.x1, self.y2 - self.y1, 2, 2, fg_transparent_weak, 1)
+  -- (No frame around the playfield: the arena walls read on their own, and the
+  -- grey outline boxed the whole screen in. The solid left/right/top walls are
+  -- still there physically -- see reset_run -- just not outlined.)
 
   -- Red dotted "defense line" at the top of the paddle's dodge band. Any enemy
   -- that crosses it costs the player HP (see breach_line_y consumers), so it
