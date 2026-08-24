@@ -64,5 +64,7 @@ Tiny Fixes:
 4. move the "HEROS" section in the esc menu higher up a slim gap below the bottom-most window size
 5. use the easier to read font for the shop too
 6. make sure any text in the shop is inside the box and does not overlap with it
+7. flip the arrows on the right and left side in the shop carousel (so that the left one faces left and the right one faces right)
+8. move the credits a bit closer to the number of credits
 
 

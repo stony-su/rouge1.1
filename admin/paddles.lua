@@ -1899,8 +1899,7 @@ function BallPit:draw_shop_screen()
   end
   graphics.print_centered('PADDLE EXCHANGE', fat_font, gw/2, SHOP_MARQUEE_CY - 6,
                           0, 1.45, 1.45, 0, 0, yellow[0])
-  graphics.print_centered('select your loadout', pixul_font, gw/2, SHOP_MARQUEE_CY + 16,
-                          0, 0.9, 0.9, 0, 0, fg_alt[0])
+
 
   -- ---- 3. credit reel + EXIT ----
   local ex, ey, ew, eh = shop_back_rect()
@@ -2020,7 +2019,7 @@ function BallPit:draw_shop_screen()
   if equipped then
     label, acol, dim = 'EQUIPPED', green[0], true
   elseif owned then
-    label, acol = 'PRESS START TO EQUIP', yellow[0]
+    label, acol = 'EQUIP', yellow[0]
   else
     label, acol = 'INSERT ' .. price .. ' BLOCKS', afford and yellow[0] or red[0]
   end
