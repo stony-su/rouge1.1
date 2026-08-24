@@ -51,8 +51,6 @@ Tiny fixes x2:
 8. delate the gray pinball and ball at the bottom of the shop 
 
 
-
-
 Powerups: 
 1. Redesign all powerups except the levelup powerup using simple geometric shapes in interesting combonations and spins that are distinct but not too visually intense. using layering to achieve complex and interesting powerups without relying on a singular shape. It's not super important that the powerup image conveys what it does. design everything except fire_trail and freeze wave (but remove the dots circling them)
 

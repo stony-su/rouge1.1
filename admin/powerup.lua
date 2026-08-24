@@ -278,56 +278,114 @@ function Powerup:draw_level_rune()
 end
 
 
--- Per-kind elemental icon painters. Each draws the powerup's BODY -- a small
--- vector silhouette of the effect itself (a medic cross, a stretching paddle,
--- a licking flame, a snowflake, ...) instead of the old anonymous diamond +
--- letter. Icons are drawn UPRIGHT for readability; the physics tumble stays
--- visible on the tier-2 outline ring in :draw. `s` is the catch/deflect
--- spring scale, `now` the shared clock driving each icon's mini-animation.
+-- Per-kind vector icon painters.
+--
+-- Every icon here is built from the SAME two ideas: a stack of plain geometric
+-- layers (regular polygons, discs, bars) and at least one layer turning against
+-- the others. Nothing tries to illustrate what the powerup does -- the read is
+-- "which emblem is that", not "what does the picture mean" -- so each kind gets
+-- its own polygon family and its own rotation signature instead:
+--
+--   heal        3   nested triangles, outer and inner counter-turning
+--   wide_paddle 4   a turning square frame around rungs that stay level
+--   big_ball    o   concentric breathing rings + one orbiting arc
+--   water_wave  6   two hexagons scalloping past each other
+--   multi_ball  3   beads carried on a turning triangular linkage
+--   pierce      4+4 two squares crossed into a folding eight-point star
+--   floor       5   a pentagon shell over a bar sweeping through it
+--
+-- fire_trail and freeze_wave keep their literal flame/snowflake.
+--
+-- Icons are drawn UPRIGHT (their own spins are clock-driven, not body-driven);
+-- the physics tumble stays visible on the tier-2 outline ring in :draw. `s` is
+-- the catch/deflect spring scale, `now` the shared clock.
+
+-- Vertices of a regular n-gon: radius `rad` about (cx, cy), first vertex at
+-- angle `a0`. This is the one construction the redesigned icons share, which is
+-- what makes them read as a set rather than seven unrelated doodles.
+local function ngon(cx, cy, rad, n, a0)
+  local v = {}
+  for i = 0, n - 1 do
+    local a = a0 + i*(2*math.pi/n)
+    v[#v + 1] = cx + math.cos(a)*rad
+    v[#v + 1] = cy + math.sin(a)*rad
+  end
+  return v
+end
+
+-- Palette shims. Layers are separated by VALUE rather than by hue, so a stack
+-- stays legible at 8px without any one layer having to shout.
+local function dim(c, k)  return Color(c.r*k, c.g*k, c.b*k, 1) end
+local function lift(c, k) return Color(c.r + (1 - c.r)*k, c.g + (1 - c.g)*k, c.b + (1 - c.b)*k, 1) end
+local function fade(c, a) return Color(c.r, c.g, c.b, a) end
+
 local ICONS = {}
 
--- Heal: a medic cross with a lub-dub heartbeat swell.
+-- Heal: three triangles on two clocks. The outer ring and the solid core turn
+-- together while the mid plate turns back against them, so the silhouette folds
+-- through a six-point star twice a revolution and then unwinds.
 ICONS.heal = function(self, s, now)
   local c, r = self.color, self.r_size
-  local ph   = (now*1.3) % 1
-  local beat = 0
-  if ph < 0.15 then beat = math.sin(ph/0.15*math.pi)
-  elseif ph > 0.22 and ph < 0.37 then beat = math.sin((ph - 0.22)/0.15*math.pi) end
-  local k  = (1 + 0.14*beat)*s
-  local aw = r*2.2*k                                  -- cross arm length
-  local at = r*0.85*k                                 -- cross arm thickness
-  graphics.rectangle(self.x, self.y, aw + 1.6, at + 1.6, 1, 1, bg[-2])
-  graphics.rectangle(self.x, self.y, at + 1.6, aw + 1.6, 1, 1, bg[-2])
-  graphics.rectangle(self.x, self.y, aw, at, 1, 1, c)
-  graphics.rectangle(self.x, self.y, at, aw, 1, 1, c)
-  graphics.rectangle(self.x, self.y, at*0.55, at*0.55, nil, nil, fg[5])
+  local x, y = self.x, self.y
+  local a, b = now*0.8, -now*1.2
+
+  graphics.circle(x, y, r*1.5*s, fade(bg[-2], 0.85))
+
+  graphics.polygon(ngon(x, y, r*1.25*s, 3, b), dim(c, 0.5))
+
+  local o = ngon(x, y, r*1.95*s, 3, a)
+  graphics.polygon(o, bg[-2], 3.2)
+  graphics.polygon(o, c, 1.3)
+
+  graphics.polygon(ngon(x, y, r*0.70*s, 3, a + math.pi), lift(c, 0.35))
 end
 
--- Wide: the paddle bar itself, with stretch chevrons sliding off both ends.
+-- Wide: a square frame turning around three rungs that never tilt. The frame and
+-- its contents disagreeing about which way is up is the whole trick; a bright pip
+-- slides along the middle rung so the still layer isn't actually still.
 ICONS.wide_paddle = function(self, s, now)
   local c, r = self.color, self.r_size
-  local bw, bh = r*2.4*s, r*0.8*s
-  graphics.rectangle(self.x, self.y, bw + 1.6, bh + 1.6, 2, 2, bg[-2])
-  graphics.rectangle(self.x, self.y, bw, bh, 2, 2, c)
-  local ph  = (now*1.6) % 1
-  local off = bw/2 + 1 + ph*r*1.2
-  local ch  = Color(c.r, c.g, c.b, 1 - ph)
-  for _, dir in ipairs({1, -1}) do
-    local x0 = self.x + dir*off
-    graphics.line(x0, self.y - bh*0.8, x0 + dir*r*0.5, self.y, ch, 1.5)
-    graphics.line(x0 + dir*r*0.5, self.y, x0, self.y + bh*0.8, ch, 1.5)
+  local x, y = self.x, self.y
+
+  local f = ngon(x, y, r*2.0*s, 4, now*0.55)
+  graphics.polygon(f, bg[-2], 3)
+  graphics.polygon(f, dim(c, 0.7), 1.2)
+
+  -- Dark plates for all three rungs first, then the faces, so a rung's backing
+  -- can never cut into the rung above it.
+  local rw = {r*1.15*s, r*2.0*s, r*1.15*s}
+  local rh = r*0.44*s
+  for i = 1, 3 do
+    graphics.rectangle(x, y + (i - 2)*r*0.74*s, rw[i] + 1.5, rh + 1.5, 1, 1, bg[-2])
   end
+  for i = 1, 3 do
+    graphics.rectangle(x, y + (i - 2)*r*0.74*s, rw[i], rh, 1, 1, i == 2 and c or dim(c, 0.8))
+  end
+
+  graphics.rectangle(x + math.sin(now*1.7)*r*0.78*s, y, r*0.36*s, r*0.36*s, nil, nil, fg[5])
 end
 
--- Big: a ball mid-growth -- an expanding ghost ring swells off the rim.
+-- Big: the only all-curve emblem in the set, so it reads instantly against the
+-- polygon ones. A solid core under two rings breathing outward on a half-beat
+-- offset, with one arc orbiting the pair to give the stack a direction to turn in.
 ICONS.big_ball = function(self, s, now)
   local c, r = self.color, self.r_size
-  local br = r*0.95*s
-  graphics.circle(self.x, self.y, br + 0.8, bg[-2])
-  graphics.circle(self.x, self.y, br, c)
-  graphics.circle(self.x - br*0.3, self.y - br*0.3, br*0.32, fg[5])
-  local ph = (now*1.2) % 1
-  graphics.circle(self.x, self.y, br + 1 + ph*r*1.6, Color(c.r, c.g, c.b, (1 - ph)*0.8), 1.5)
+  local x, y = self.x, self.y
+  local br   = r*0.80*s
+
+  for i = 0, 1 do
+    local ph = ((now*0.55) + i*0.5) % 1
+    graphics.circle(x, y, br + 1.4 + ph*r*1.5, fade(c, (1 - ph)*0.5), 1.2)
+  end
+
+  graphics.circle(x, y, br + 1.1, bg[-2])
+  graphics.circle(x, y, br, c)
+  graphics.circle(x - br*0.32, y - br*0.32, br*0.34, fg[5])
+
+  local ao, orb = now*1.05, r*1.7*s
+  graphics.arc('open', x, y, orb, ao, ao + 1.2, bg[-2], 3)
+  graphics.arc('open', x, y, orb, ao, ao + 1.2, lift(c, 0.3), 1.4)
+  graphics.circle(x + math.cos(ao + 1.2)*orb, y + math.sin(ao + 1.2)*orb, r*0.26*s, fg[5])
 end
 
 -- Fire: a licking flame -- round base, swaying/fluttering tip, hot core.
@@ -369,78 +427,89 @@ ICONS.freeze_wave = function(self, s, now)
     Color(math.min(1, c.r*0.5 + 0.5), math.min(1, c.g*0.5 + 0.55), math.min(1, c.b*0.5 + 0.6), 1))
 end
 
--- Water: a deep pool badge with two crests rolling across it.
+-- Water: two hexagons turning opposite ways, one filled and one drawn only as an
+-- edge, so the gap between them scallops open and shut as they pass. A chord
+-- swung on the inner ring's clock keeps the middle from reading as a flat plate.
 ICONS.water_wave = function(self, s, now)
   local c, r = self.color, self.r_size
-  local br = r*1.3*s
-  graphics.circle(self.x, self.y, br + 0.8, bg[-2])
-  graphics.circle(self.x, self.y, br, Color(c.r*0.55, c.g*0.6, c.b*0.85, 1))
-  local crest = Color(math.min(1, c.r*0.5 + 0.5), math.min(1, c.g*0.5 + 0.55), math.min(1, c.b*0.5 + 0.65), 1)
-  for row = 0, 1 do
-    local yy  = self.y + (row == 0 and -br*0.25 or br*0.35)
-    local amp = br*0.22
-    local pts = {crest, 1.2}
-    local n   = 6
-    for i = 0, n do
-      pts[#pts + 1] = self.x - br*0.8 + (i/n)*br*1.6
-      pts[#pts + 1] = yy + math.sin(now*4 + row*1.7 + i*1.1)*amp
-    end
-    graphics.polyline(unpack(pts))
-  end
+  local x, y = self.x, self.y
+  local a    = now*0.5
+
+  graphics.polygon(ngon(x, y, r*1.50*s + 1.3, 6, a), bg[-2])
+  graphics.polygon(ngon(x, y, r*1.50*s, 6, a), dim(c, 0.45))
+  graphics.polygon(ngon(x, y, r*1.50*s, 6, a), lift(c, 0.25), 1.1)
+
+  local b  = -a*1.6
+  local ir = r*0.90*s
+  graphics.polygon(ngon(x, y, ir, 6, b + math.pi/6), lift(c, 0.45), 1.4)
+  graphics.line(x + math.cos(b)*ir, y + math.sin(b)*ir,
+                x - math.cos(b)*ir, y - math.sin(b)*ir, fade(bg[-2], 0.85), 1.6)
+
+  graphics.circle(x, y, r*0.30*s, fg[5])
 end
 
--- Multi: three little hero-balls orbiting a common centre -- the split, live.
+-- Multi: three beads carried on a turning triangular linkage. The linkage is
+-- drawn UNDER the beads and the beads sit out past its corners, so they sweep
+-- across the tier-2 ring on their way round -- the one icon with anything
+-- leaving the badge.
 ICONS.multi_ball = function(self, s, now)
   local c, r = self.color, self.r_size
-  local orb  = r*0.55*s
-  local ring = r*0.95
+  local x, y = self.x, self.y
+  local a0   = now*1.1
+  local ring = r*1.20*s
+
+  local tri = ngon(x, y, ring, 3, a0)
+  graphics.polygon(tri, bg[-2], 2.8)
+  graphics.polygon(tri, fade(c, 0.5), 1)
+
+  graphics.circle(x, y, r*0.52*s + 1, bg[-2])
+  graphics.circle(x, y, r*0.52*s, dim(c, 0.65))
+
+  local br = r*0.44*s
   for i = 0, 2 do
-    local a = now*1.6 + i*(2*math.pi/3)
-    local bx, by = self.x + math.cos(a)*ring, self.y + math.sin(a)*ring
-    graphics.circle(bx, by, orb + 0.8, bg[-2])
-    graphics.circle(bx, by, orb, c)
-    graphics.circle(bx - orb*0.3, by - orb*0.3, orb*0.33, fg[5])
+    local a = a0 + i*(2*math.pi/3)
+    local bx, by = x + math.cos(a)*ring, y + math.sin(a)*ring
+    graphics.circle(bx, by, br + 1, bg[-2])
+    graphics.circle(bx, by, br, c)
+    graphics.circle(bx - br*0.32, by - br*0.32, br*0.34, fg[5])
   end
 end
 
--- Pierce: an arrow punched clean through a brick, shards off the exit face.
+-- Pierce: two squares crossed at different rates. Every few seconds they line up
+-- into a plain diamond and then fold back out into an eight-point star -- the
+-- busiest silhouette in the set, which is why both squares are outlines and only
+-- the small core is solid.
 ICONS.pierce = function(self, s, now)
   local c, r = self.color, self.r_size
-  local bs = r*1.5*s                                  -- the brick being pierced
-  graphics.rectangle(self.x, self.y, bs + 1.6, bs + 1.6, 1, 1, bg[-2])
-  graphics.rectangle(self.x, self.y, bs, bs, 1, 1, Color(c.r*0.5, c.g*0.5, c.b*0.7, 1))
-  local push_x = r*0.3*math.abs(math.sin(now*4))      -- nudges forward on a loop
-  local x0, x1 = self.x - r*2.2 + push_x, self.x + r*1.3 + push_x
-  graphics.line(x0, self.y, x1, self.y, bg[-2], 2.6)
-  graphics.line(x0, self.y, x1, self.y, c, 1.4)
-  graphics.triangle(x1 + r*0.35, self.y, r*1.0 + 1.2, r*1.1 + 1.2, bg[-2])
-  graphics.triangle(x1 + r*0.35, self.y, r*1.0, r*1.1, c)
-  for i, dy in ipairs({-1, 1}) do                     -- exit-face shards
-    local ph = (now*2 + i*0.4) % 1
-    graphics.rectangle(self.x + bs/2 + 1 + ph*r*1.1, self.y + dy*(bs*0.35 + ph*r*0.7),
-                       1.3, 1.3, nil, nil, Color(c.r, c.g, c.b, 1 - ph))
+  local x, y = self.x, self.y
+  local a    = now*0.7
+
+  for _, sq in ipairs({{a, 1.55, 0.6}, {-a*1.4, 1.28, 1.0}}) do
+    local v = ngon(x, y, r*sq[2]*s, 4, sq[1])
+    graphics.polygon(v, bg[-2], 3)
+    graphics.polygon(v, dim(c, sq[3]), 1.3)
   end
+
+  graphics.polygon(ngon(x, y, r*0.60*s, 4, -a*1.4), lift(c, 0.4))
 end
 
--- Floor: a safety line with a ball bouncing off it, squashing on impact.
+-- Floor: a pentagon -- the only odd-sided shell here, so it never reads as the
+-- square or the hex one at a glance -- turning over a bar that sweeps through it.
+-- A second, shorter bar counter-sweeps at a fraction of the travel, so the two
+-- cross rather than ever stacking up.
 ICONS.floor = function(self, s, now)
   local c, r = self.color, self.r_size
-  local fy = self.y + r*1.0
-  local fw = r*2.6*s
-  graphics.rectangle(self.x, fy, fw + 1.6, 2.6, 1, 1, bg[-2])
-  graphics.rectangle(self.x, fy, fw, 1.6, 1, 1, c)
-  local ph = math.abs(math.sin(now*3.2))
-  local by = fy - 2 - ph*r*1.7
-  local squash = math.min(1, 0.7 + ph)
-  graphics.push(self.x, by, 0, 1, squash)
-    graphics.circle(self.x, by, r*0.55 + 0.8, bg[-2])
-    graphics.circle(self.x, by, r*0.55, fg[0])
-  graphics.pop()
-  if ph < 0.22 then                                   -- impact ticks
-    local ta = 1 - ph/0.22
-    graphics.line(self.x - fw*0.32, fy - 2, self.x - fw*0.32 - r*0.5, fy - 2 - r*0.4, Color(c.r, c.g, c.b, ta), 1)
-    graphics.line(self.x + fw*0.32, fy - 2, self.x + fw*0.32 + r*0.5, fy - 2 - r*0.4, Color(c.r, c.g, c.b, ta), 1)
-  end
+  local x, y = self.x, self.y
+
+  local p = ngon(x, y, r*1.55*s, 5, now*0.42 - math.pi/2)
+  graphics.polygon(p, bg[-2], 3.2)
+  graphics.polygon(p, c, 1.2)
+
+  local u  = math.sin(now*1.2)
+  local bw = r*1.40*s
+  graphics.rectangle(x, y - u*r*0.42*s, bw*0.62, r*0.32*s, 1, 1, fade(c, 0.45))
+  graphics.rectangle(x, y + u*r*0.72*s, bw + 1.5, r*0.42*s + 1.5, 1, 1, bg[-2])
+  graphics.rectangle(x, y + u*r*0.72*s, bw, r*0.42*s, 1, 1, lift(c, 0.3))
 end
 
 
@@ -477,15 +546,5 @@ function Powerup:draw()
       graphics.rectangle(self.x, self.y, inner_sz + 1.5, inner_sz + 1.5, 1, 1, bg[-2])
       graphics.rectangle(self.x, self.y, inner_sz, inner_sz, 1, 1, self.color)
     graphics.pop()
-  end
-
-  -- Sparkle: a few tiny offsets that orbit the icon, sold as "this is
-  -- not background scenery, grab me". Clock-driven so they keep orbiting even
-  -- after the body's spin damps out.
-  local spark_r = self.r_size + 4
-  for i = 0, 2 do
-    local a = now*2 + i*(math.pi*2/3)
-    local sx, sy = self.x + math.cos(a)*spark_r, self.y + math.sin(a)*spark_r
-    graphics.rectangle(sx, sy, 1.4, 1.4, nil, nil, fg[5])
   end
 end
