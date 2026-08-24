@@ -45,6 +45,12 @@ function shared_init()
 
   fat_font   = Font('FatPixelFont', 8)
   pixul_font = Font('PixulBrush', 8)
+  -- Monospaced cut of the same brush face. Every glyph gets its own cell, so
+  -- running prose (the hero ability tooltip, the shop's loadout copy) reads
+  -- far cleaner than the tightly-kerned proportional version. It is ~1.68x
+  -- wider per character, so everything drawn in it is laid out against a
+  -- MEASURED width rather than an assumed one.
+  pixul_mono_font = Font('PixulBrush-Mono', 8)
 
   background_canvas = Canvas(gw, gh)
   main_canvas       = Canvas(gw, gh, {stencil = true})

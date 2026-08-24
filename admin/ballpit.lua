@@ -183,11 +183,16 @@ local COMBO_BAR_MIN_RATE = 55    -- ...but never slower than this (points/sec)
 local COMBO_GHOST_LAG    = 0.35
 local COMBO_FX_MAX       = 48    -- hard cap on live meter particles
 
--- Meter layout. The rank label is auto-fitted into LABEL_BOX px (so 'D' and
--- 'FRENZY' occupy the same slot), and draw_hud ends the XP bar STRIP_W px
--- short of the right edge to reserve the whole meter block.
-local COMBO_LABEL_BOX = 30
-local COMBO_STRIP_W   = 102
+-- Meter layout. The rank label hangs BELOW the bar and is right-aligned on the
+-- arena wall, so it reads as a badge stamped on the corner rather than a word
+-- wedged between the XP bar and the meter. It is auto-fitted into LABEL_BOX px
+-- (so 'D' and 'FRENZY' still occupy one fixed slot), and LABEL_TOP is where its
+-- ink starts, measured down from the bar's centre line. draw_hud ends the XP
+-- bar STRIP_W px short of the right edge -- now only enough to clear the bar
+-- itself, since the label no longer shares that row.
+local COMBO_LABEL_BOX = 54
+local COMBO_LABEL_TOP = 10
+local COMBO_STRIP_W   = 69
 
 -- Effective rank values: the equipped paddle's damage master file
 -- (balance/<paddle>.lua, `combo.ranks`) can override every rank's threshold
@@ -242,7 +247,9 @@ end
 
 
 function BallPit:settings_option_under_mouse()
-  local opt_w, opt_h = 200, 16
+  -- Same pitch draw_settings paints with, or the hit boxes creep out from
+  -- under the rows they belong to as you go down the list.
+  local opt_w, opt_h = 200, 18
   local n = #self.scale_options
   local start_y = gh/2 - (n*opt_h)/2 + opt_h/2
   for i = 1, n do
@@ -306,12 +313,21 @@ function BallPit:draw_settings()
 end
 
 
+-- Absolute y of the FIRST roster row, and the row pitch. The label, the grid
+-- and the hover tooltip all anchor off these, so the block sits as one unit a
+-- slim gap under the last window-size row instead of floating in the middle of
+-- the empty bottom half. Deferred into a function because gh isn't defined yet
+-- when this file is required.
+local function hero_grid_top() return gh/2 + 88 end
+local HERO_CELL_H = 24
+
+
 -- 8-per-row grid position helper. Each row is centered on its own contents,
 -- so 1 hero is centered, 8 heroes span the full row width, and a partial
 -- second row stays visually balanced under the first row.
 function BallPit:hero_grid_pos(i)
   local n = #self.heroes
-  local cell_w, cell_h = 22, 24
+  local cell_w, cell_h = 22, HERO_CELL_H
   local cols_per_row   = 8
   local row = math.floor((i-1)/cols_per_row)
   local col = (i-1) - row*cols_per_row
@@ -320,7 +336,7 @@ function BallPit:hero_grid_pos(i)
   local row_items   = row_end_i - row_start_i + 1
   local start_x = gw/2 - (row_items*cell_w)/2 + cell_w/2
   local hx = start_x + col*cell_w
-  local hy = gh/2 + 140 + row*cell_h
+  local hy = hero_grid_top() + row*cell_h
   return hx, hy
 end
 
@@ -338,7 +354,9 @@ end
 function BallPit:draw_settings_heroes()
   if not self.heroes or #self.heroes == 0 then return end
 
-  graphics.print_centered('HEROES', pixul_font, gw/2, gh/2 + 110, 0, 1, 1, 0, 0, fg[0])
+  -- Sits just under the bottom window-size row (its box ends at gh/2 + 53), so
+  -- the roster reads as the next section down rather than a detached island.
+  graphics.print_centered('HEROES', pixul_font, gw/2, gh/2 + 68, 0, 1, 1, 0, 0, fg[0])
 
   local hovered_idx = self:hero_under_mouse_in_settings()
 
@@ -1053,6 +1071,12 @@ function BallPit:update(dt)
     return
   end
 
+  -- Page transitions run ahead of every early return below: a restart's gate
+  -- has to keep animating after game_over has already been cleared, and the
+  -- reset itself happens on the frame the shutters are shut (paddles.lua).
+  -- (It does pause with the terminal, which suspends everything.)
+  self:tick_page_gate(dt)
+
   -- ESC toggles the settings overlay (window size). Checked after the
   -- terminal early-return so ESC is ignored while the operator is typing.
   if input.escape.pressed then
@@ -1075,7 +1099,7 @@ function BallPit:update(dt)
     self.ui:update(dt*s)
     -- The game-over overlay doubles as the paddle shop (see paddles.lua).
     self:update_shop(dt)
-    if input.restart.pressed then self:reset_run() end
+    if input.restart.pressed then self:begin_page_gate('restart') end
     return
   end
 
@@ -1248,6 +1272,10 @@ function BallPit:draw()
   if self.upgrade_pending then self:draw_upgrade() end
   if self.game_over then self:draw_game_over() end
   if self.settings_open then self:draw_settings() end
+  -- The transition shutters close over whatever is on screen, including live
+  -- play (that is what a restart parts them onto) -- but under the terminal
+  -- and the admin button, which stay reachable at all times.
+  self:draw_page_gate()
   -- Terminal draws on top of everything so it stays readable over flashes,
   -- the upgrade dialog, and the game-over overlay.
   if self.terminal then self.terminal:draw() end
@@ -1923,13 +1951,15 @@ end
 -- Meter geometry, shared by tick_combo_fx and draw_combo_meter so particles
 -- spawn exactly on the bar. draw_hud reserves this strip by ending the XP bar
 -- at x2 - COMBO_STRIP_W.
--- Returns: rank-label centre x, shared centre y, bar left x, bar width, bar height.
+-- Returns: rank-label RIGHT edge x, bar centre y, bar left x, bar width, bar
+-- height, rank-label ink TOP y. The label is right-aligned on the wall and
+-- hangs under the bar, so it anchors by its right edge, not by its centre.
 function BallPit:combo_meter_rect()
   local bx1 = self.x2 - 3
   local bw  = 60
   local bx0 = bx1 - bw
   local cy  = self.y1 + 2
-  return bx0 - 6 - COMBO_LABEL_BOX/2, cy, bx0, bw, 6
+  return self.x2, cy, bx0, bw, 6, cy + COMBO_LABEL_TOP
 end
 
 
@@ -2102,8 +2132,9 @@ end
 -- / drain / flash / punch / shock / demote / fx), so it stays a pure painter
 -- and the meter animates identically no matter how often draw runs.
 --
--- Layout, left to right:  [rank label]  [====== fill bar ======]
---                                       [.. tier ladder chips ..]
+-- Layout:  [====== fill bar ======]
+--          [.. tier ladder chips ..]
+--                       [rank label]   <- right-aligned on the arena wall
 function BallPit:draw_combo_meter()
   local c = self.combo
   if not c then return end
@@ -2112,8 +2143,7 @@ function BallPit:draw_combo_meter()
   local base = _G[rank.color_key][0]
   local t    = love.timer.getTime()
 
-  local lx, cy, bx0, bw, bh = self:combo_meter_rect()
-  local bx1 = bx0 + bw
+  local lrx, cy, bx0, bw, bh, lty = self:combo_meter_rect()
   local cx  = bx0 + bw/2
 
   -- Bleeding dims the whole meter, so "I'm losing it" reads before you've
@@ -2123,11 +2153,11 @@ function BallPit:draw_combo_meter()
 
   -- ---- hot-streak underglow (S and up) ----
   if c.heat > 0.01 then
-    -- Spans the whole reserved strip (label box through the bar's right edge)
-    -- so it sits centred behind the block and stops exactly on the frame.
-    local gx0, gx1 = lx - COMBO_LABEL_BOX/2 - 3, bx1 + 3
+    -- Wraps the BAR ONLY. The rank label sits on its own row underneath and is
+    -- deliberately outside the glow, so the tier letter stays a clean badge
+    -- instead of a word sitting inside a lit box.
     local pulse = 0.5 + 0.5*math.sin(t*7)
-    graphics.rectangle((gx0 + gx1)/2, cy, gx1 - gx0, bh + 10, 5, 5,
+    graphics.rectangle(cx, cy, bw + 8, bh + 10, 5, 5,
                        Color(col.r, col.g, col.b, 0.09 + 0.15*c.heat*pulse))
   end
 
@@ -2138,14 +2168,21 @@ function BallPit:draw_combo_meter()
   local lsc = math.min(1.15, COMBO_LABEL_BOX/lw)
   local pop = 1 + 0.55*c.punch*c.punch                          -- promotion spring
   local wob = (c.heat > 0.01) and (1 + 0.05*c.heat*math.sin(t*9)) or 1
-  -- Hard ceiling so even a springing 'FRENZY' can't grow out of its slot and
-  -- collide with the XP bar on the left or the meter bar on the right.
-  local ls  = math.min(lsc*pop*wob, (COMBO_LABEL_BOX + 6)/lw)
+  -- Hard ceiling so even a springing 'FRENZY' can't grow out of its slot.
+  local ls  = math.min(lsc*pop*wob, (COMBO_LABEL_BOX + 10)/lw)
+  -- print_centered scales about the centre, so the centre is derived from the
+  -- LIVE scale every frame: that pins the label's right edge on the wall and
+  -- makes a promotion spring grow leftward instead of over it. Vertically the
+  -- anchor is the ink TOP -- fat_font at size 8 paints 3..22px below its draw
+  -- origin and print_centered lifts by font.h/2 (20), so ink_top = y - 17*s --
+  -- which keeps the gap under the tier chips identical at every scale.
+  local lx  = lrx - lw*ls/2
+  local ly  = lty + 17*ls
 
   if c.heat > 0.01 then                                          -- heat halo
     for i = 1, 2 do
       local hs = ls*(1 + 0.10*i)
-      graphics.print_centered(rank.label, fat_font, lx, cy, 0, hs, hs, 0, 0,
+      graphics.print_centered(rank.label, fat_font, lx, lty + 17*hs, 0, hs, hs, 0, 0,
                               Color(col.r, col.g, col.b, 0.16*c.heat/i))
     end
   end
@@ -2155,12 +2192,14 @@ function BallPit:draw_combo_meter()
                  math.lerp(c.demote, col.g, red[0].g),
                  math.lerp(c.demote, col.b, red[0].b), 1)
   end
-  graphics.print_centered(rank.label, fat_font, lx, cy, 0, ls, ls, 0, 0, lcol)
+  graphics.print_centered(rank.label, fat_font, lx, ly, 0, ls, ls, 0, 0, lcol)
   if c.flash > 0.01 then
-    graphics.print_centered(rank.label, fat_font, lx, cy, 0, ls, ls, 0, 0, Color(1, 1, 1, c.flash))
+    graphics.print_centered(rank.label, fat_font, lx, ly, 0, ls, ls, 0, 0, Color(1, 1, 1, c.flash))
   end
   if c.shock > 0.01 then                                         -- break-through hoop
-    graphics.circle(lx, cy, 5 + 20*(1 - c.shock), Color(col.r, col.g, col.b, c.shock*0.7), 1)
+    -- Centred on the label's INK centre (ink_top + half the 19px ink height).
+    graphics.circle(lx, lty + 9.5*ls, 5 + 20*(1 - c.shock),
+                    Color(col.r, col.g, col.b, c.shock*0.7), 1)
   end
 
   -- ---- track ----
@@ -2758,85 +2797,100 @@ function BallPit:get_hero_ability_data(c)
 end
 
 
+-- Greedy word wrap against a PIXEL budget rather than a character count, so a
+-- line can never overrun its panel just because the font or the scale changed.
+-- A word wider than the budget gets its own line instead of being dropped.
+local function wrap_to_width(text, font, scale, max_w)
+  local lines, line = {}, nil
+  for word in tostring(text or ''):gmatch('%S+') do
+    local try = line and (line .. ' ' .. word) or word
+    if (not line) or font:get_text_width(try)*scale <= max_w then
+      line = try
+    else
+      lines[#lines + 1] = line
+      line = word
+    end
+  end
+  if line then lines[#lines + 1] = line end
+  return lines
+end
+
+
+-- Hover card for one roster hero: name + level, what the ability does, and the
+-- three upgrade tiers side by side.
+--
+-- Everything here is laid out from MEASURED text: the copy is wrapped to the
+-- panel's inner width and the panel's height is then computed from how many
+-- lines that produced, so no line can spill past the frame or collide with the
+-- row under it however long the ability text is. The prose uses the monospaced
+-- brush font -- one cell per glyph reads much cleaner at this size than the
+-- proportional cut, which crowds letters together.
+--
+-- Vertical arithmetic note: pixul ink runs y .. y+9 below a `print` origin and
+-- print_centered lifts by font.h/2 (6.5), so a centred line's ink sits
+-- y-6.5 .. y+2.5 (y+4.5 with descenders).
 function BallPit:draw_hero_tooltip(hero, total_heroes)
   local rows = math.ceil(total_heroes/8)
-  local base_y = gh/2 + 140 + rows*24 + 8
-  local current_level = hero.level or 1
-  local ability_data = self:get_hero_ability_data(hero.character)
+  local data = self:get_hero_ability_data(hero.character)
+  local lvl  = hero.level or 1
 
-  -- Header: Name + current level
-  local name_str = string.upper(hero.character) .. '  LEVEL ' .. current_level
-  graphics.print_centered(name_str, pixul_font, gw/2, base_y, 0, 1, 1, 0, 0, hero.color)
+  local pw   = 300                                   -- was 220: the copy needs it
+  local px0  = gw/2 - pw/2
+  local py   = hero_grid_top() + rows*HERO_CELL_H + 10
+  local tw   = pw/3                                  -- one tier column
 
-  -- Ability description
-  local desc_y = base_y + 12
-  graphics.print_centered(ability_data.desc, pixul_font, gw/2, desc_y, 0, 0.85, 0.85, 0, 0, fg_alt[0])
+  -- Wrap first, size the panel second.
+  local desc = wrap_to_width(data.desc, pixul_mono_font, 0.7, pw - 24)
+  local spec, spec_rows = {}, 0
+  for tier = 1, 3 do
+    spec[tier] = wrap_to_width(data.tiers[tier].special, pixul_mono_font, 0.55, tw - 10)
+    spec_rows  = math.max(spec_rows, #spec[tier])
+  end
+  local ty = py + 24 + #desc*9 + 6                    -- top of the tier columns
+  local ph = (ty - py) + 27 + math.max(1, spec_rows)*8 + 6
 
-  -- Tier breakdown box
-  local box_y = desc_y + 14
-  local box_w = 220
-  local box_h = 42
-  graphics.rectangle(gw/2, box_y + box_h/2, box_w, box_h, 3, 3, bg[-2])
-  graphics.rectangle(gw/2, box_y + box_h/2, box_w, box_h, 3, 3, fg[0], 1)
+  graphics.rectangle(gw/2, py + ph/2, pw, ph, 4, 4, bg[-2])
+  graphics.rectangle(gw/2, py + ph/2, pw, ph, 4, 4,
+                     Color(hero.color.r, hero.color.g, hero.color.b, 0.6), 1)
 
-  -- Draw each tier as a column
-  local tier_w = box_w / 3
-  local tier_start_x = gw/2 - box_w/2
+  -- Header + rule.
+  graphics.print_centered(string.upper(hero.character) .. '  LEVEL ' .. lvl,
+                          pixul_font, gw/2, py + 13.5, 0, 1, 1, 0, 0, hero.color)
+  graphics.line(px0 + 10, py + 20, px0 + pw - 10, py + 20, Color(1, 1, 1, 0.12), 1)
+
+  for i, line in ipairs(desc) do
+    graphics.print_centered(line, pixul_mono_font, gw/2, py + 28.55 + (i - 1)*9,
+                            0, 0.7, 0.7, 0, 0, fg_alt[0])
+  end
+
+  -- Tier columns. Hairline separators so three stacks of copy don't read as
+  -- one paragraph.
+  for i = 1, 2 do
+    graphics.line(px0 + i*tw, ty - 4, px0 + i*tw, py + ph - 6, Color(1, 1, 1, 0.10), 1)
+  end
 
   for tier = 1, 3 do
-    local tier_x = tier_start_x + (tier - 0.5) * tier_w
-    local is_current = (tier == current_level)
-    local is_unlocked = (tier <= current_level)
+    local tx         = px0 + (tier - 0.5)*tw
+    local is_current = (tier == lvl)
+    local is_open    = (tier <= lvl)
+    local tcol = is_current and yellow[0] or (is_open and fg[0] or fg[-2])
 
-    -- Tier header with roman numeral
-    local tier_label = (tier == 1 and 'I') or (tier == 2 and 'II') or 'III'
-    local tier_color = is_current and yellow[0] or (is_unlocked and fg[0] or fg[-2])
-    graphics.print_centered(tier_label, pixul_font, tier_x, box_y + 3, 0, 0.9, 0.9, 0, 0, tier_color)
+    graphics.print_centered((tier == 1 and 'I') or (tier == 2 and 'II') or 'III',
+                            pixul_font, tx, ty + 5.85, 0, 0.9, 0.9, 0, 0, tcol)
 
-    -- Current tier indicator (small filled circle)
-    if is_current then
-      graphics.circle(tier_x, box_y + 12, 2.5, yellow[0])
-    elseif is_unlocked then
-      graphics.circle(tier_x, box_y + 12, 2, fg[-1])
-    else
-      graphics.circle(tier_x, box_y + 12, 1.5, fg[-3], 1)
-    end
+    if is_current then      graphics.circle(tx, ty + 13, 2.5, yellow[0])
+    elseif is_open then     graphics.circle(tx, ty + 13, 2,   fg[-1])
+    else                    graphics.circle(tx, ty + 13, 1.5, fg[-3], 1) end
 
-    -- Damage multiplier
-    local tier_data = ability_data.tiers[tier]
-    local dmg_pct = math.floor((tier_data.dmg_mult - 1.0) * 100)
-    local dmg_str = dmg_pct > 0 and ('+' .. dmg_pct .. '%') or 'BASE'
-    local dmg_color = is_unlocked and (is_current and yellow[0] or green[0]) or fg[-3]
-    graphics.print_centered(dmg_str, pixul_font, tier_x, box_y + 17, 0, 0.75, 0.75, 0, 0, dmg_color)
+    local pct = math.floor((data.tiers[tier].dmg_mult - 1.0)*100)
+    graphics.print_centered(pct > 0 and ('+' .. pct .. '%') or 'BASE',
+                            pixul_font, tx, ty + 22.875, 0, 0.75, 0.75, 0, 0,
+                            is_open and (is_current and yellow[0] or green[0]) or fg[-3])
 
-    -- Special ability text (if any)
-    if tier_data.special and tier_data.special ~= '' then
-      local spec_color = is_unlocked and fg_alt[0] or fg[-3]
-      -- Word wrap for long special text
-      local words = {}
-      for word in tier_data.special:gmatch('%S+') do
-        table.insert(words, word)
-      end
-
-      local line1, line2 = '', ''
-      local char_limit = 12  -- chars per line for tier column
-
-      for _, word in ipairs(words) do
-        if #line1 == 0 then
-          line1 = word
-        elseif #line1 + 1 + #word <= char_limit then
-          line1 = line1 .. ' ' .. word
-        elseif #line2 == 0 then
-          line2 = word
-        elseif #line2 + 1 + #word <= char_limit then
-          line2 = line2 .. ' ' .. word
-        end
-      end
-
-      graphics.print_centered(line1, pixul_font, tier_x, box_y + 27, 0, 0.65, 0.65, 0, 0, spec_color)
-      if line2 ~= '' then
-        graphics.print_centered(line2, pixul_font, tier_x, box_y + 34, 0, 0.65, 0.65, 0, 0, spec_color)
-      end
+    local scol = is_open and fg_alt[0] or fg[-3]
+    for i, line in ipairs(spec[tier]) do
+      graphics.print_centered(line, pixul_mono_font, tx, ty + 30.575 + (i - 1)*8,
+                              0, 0.55, 0.55, 0, 0, scol)
     end
   end
 end

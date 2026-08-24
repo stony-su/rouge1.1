@@ -75,7 +75,7 @@ PADDLES.defs = {
       -- tip. speed_cap is the hard ceiling. First-pass; expect to retune.
       launch_speed = 150, gravity = 170, speed_cap = 620, restitution = 0.12,
     },
-    blurb = 'Two long flippers with a central drain — balls fall, you flip them back up.',
+    blurb = 'Two long flippers with a central drain - balls fall, you flip them back up.',
     sig_blurb = 'tap left/right to flip; gravity does the rest',
   },
   aegis = {
@@ -95,7 +95,7 @@ PADDLES.defs = {
       greater_nova_dmg = 40, greater_nova_radius = 120,
     },
     blurb = 'A shield that answers: raise it at the right moment to parry balls and bullets.',
-    sig_blurb = 'E/click raises the shield; parries bank bulwark — a full meter turns the next raise gold',
+    sig_blurb = 'E/click raises the shield; parries bank bulwark - a full meter turns the next raise gold',
   },
   mitosis = {
     id = 'mitosis', name = 'Mitosis', price = 500, color_key = 'green',
@@ -113,7 +113,7 @@ PADDLES.defs = {
     start_balls = {'infestor', 'infestor', 'infestor'},
     signature = 'hive',
     sig = {contact_zero = true, maggot_cap = 24, maggot_dmg_mult = 0.8, maggot_speed = 85},
-    blurb = 'Balls deal NO damage — maggots infest bricks with a spreading rot.',
+    blurb = 'Balls deal NO damage - maggots infest bricks with a spreading rot.',
     sig_blurb = 'one bite blackens a brick; the plague creeps to its neighbours',
   },
   vampire = {
@@ -178,7 +178,7 @@ PADDLES.defs = {
     sig = {blast_radius = 78, blast_radius_per_level = 0.05, blast_radius_max = 150,
            blast_mult = 5.0, blast_dmg_per_level = 0.18, other_dmg_mult = 0.2,
            passive_xp_pct = 0.1538},
-    blurb = 'Press E to detonate balls near blocks — the blast is your real damage.',
+    blurb = 'Press E to detonate balls near blocks - the blast is your real damage.',
     sig_blurb = 'spent balls are gone; level-ups auto-arm a new random ball',
   },
   cannon = {
@@ -1221,13 +1221,15 @@ local RADAR_ICON_OUT  = 13    -- how far past the rim the axis symbols sit
 
 -- Run-report buttons + the shop's BACK button.
 local GO_BUTTONS = {
-  {id = 'restart', label = 'RESTART'},
-  {id = 'shop',    label = 'SHOP'},
+  {id = 'restart', label = 'RESTART RUN'},
+  {id = 'shop',    label = 'PADDLE SHOP'},
 }
-local GO_BTN_W, GO_BTN_H = 160, 26
+-- Sized and spaced as cab_target drop tabs, the same hardware the shop's EXIT
+-- and BUY buttons are made of.
+local GO_BTN_W, GO_BTN_H = 260, 36
 
 local function go_button_pos(i)
-  return gw/2, gh/2 + 84 + (i - 1)*36
+  return gw/2, 490 + (i - 1)*58
 end
 
 -- The EXIT drop target shares the credit-reel row: the marquee owns the whole
@@ -1289,7 +1291,9 @@ local function cab_bumper(cx, cy, r, col, t, dir, hot)
   graphics.circle(cx, cy, r*0.66,   Color(col.r, col.g, col.b, 0.22 + 0.3*lamp), 1)
   if dir then
     local s = r*0.34
-    graphics.polygon({cx + dir*s, cy - s, cx + dir*s, cy + s, cx - dir*s*0.7, cy},
+    -- Apex leads, flat back edge trails, so the left bumper's arrow points
+    -- LEFT and the right one points RIGHT (dir is -1 left / +1 right).
+    graphics.polygon({cx - dir*s, cy - s, cx - dir*s, cy + s, cx + dir*s*0.7, cy},
                      hot and Color(1, 1, 1, 1) or Color(col.r, col.g, col.b, 0.85))
   else
     graphics.circle(cx, cy, r*0.26, Color(col.r, col.g, col.b, 0.4 + 0.5*lamp))
@@ -1311,7 +1315,9 @@ local function cab_target(cx, cy, w, h, label, col, hot, dim)
   graphics.circle(cx - w/2 + 5, cy + h/2 - 4, 1, Color(1, 1, 1, 0.18))
   graphics.circle(cx + w/2 - 5, cy + h/2 - 4, 1, Color(1, 1, 1, 0.18))
   local tcol = dim and fg_alt[0] or (hot and Color(1, 1, 1, 1) or fg[0])
-  graphics.print_centered(label, pixul_font, cx, cy + 1, 0, 1, 1, 0, 0, tcol)
+  -- Mono at 0.85: near enough the old ink height, far more legible, and the
+  -- widest label ('INSERT 5000 BLOCKS' = 153px) still clears the 260px target.
+  graphics.print_centered(label, pixul_mono_font, cx, cy + 1, 0, 0.85, 0.85, 0, 0, tcol)
 end
 
 
@@ -1326,7 +1332,10 @@ local function cab_reel(cx, cy, value, digits, col)
     local x = cx - total/2 + dw/2 + (i - 1)*(dw + gap)
     graphics.rectangle(x, cy, dw, dh, 2, 2, Color(0, 0, 0, 0.8))
     graphics.rectangle(x, cy, dw, dh, 2, 2, Color(1, 1, 1, 0.13), 1)
-    graphics.print_centered(s:sub(i, i), fat_font, x, cy - 1, 0, 1.05, 1.05, 0, 0, col)
+    -- fat_font ink runs y-17s .. y+2s through print_centered, so cy + 7.5s is
+    -- the draw y that actually centres a digit in its window; at the old cy - 1
+    -- every digit hung ~7px out of the top of its own reel.
+    graphics.print_centered(s:sub(i, i), fat_font, x, cy + 7.9, 0, 1.05, 1.05, 0, 0, col)
     graphics.rectangle(x, cy, dw - 2, 0.6, nil, nil, Color(0, 0, 0, 0.55))   -- reel seam
   end
 end
@@ -1537,7 +1546,7 @@ function BallPit:draw_stat_tooltip(i, def)
   if ax.key == 'xp' and def.xp_mode == 'flat' then val = 'FLAT CURVE' end
   local txt = ax.label .. '   ' .. val
 
-  local w = pixul_font:get_text_width(txt)*0.9 + 16
+  local w = pixul_mono_font:get_text_width(txt)*0.8 + 16
   local h = 16
   local ix, iy = radar_axis_pos(i, RADAR_ICON_OUT)
   local tx = math.clamp(ix, w/2 + 4, gw - w/2 - 4)
@@ -1549,9 +1558,9 @@ function BallPit:draw_stat_tooltip(i, def)
   -- Colour the value by whether it beats the baseline.
   local vcol = fg[0]
   if v > 1.001 then vcol = green[0] elseif v < 0.999 then vcol = red[0] end
-  local lw = pixul_font:get_text_width(ax.label)*0.9
-  graphics.print(ax.label, pixul_font, tx - w/2 + 8, ty - 5, 0, 0.9, 0.9, 0, 0, fg[0])
-  graphics.print(val, pixul_font, tx - w/2 + 8 + lw + 8, ty - 5, 0, 0.9, 0.9, 0, 0, vcol)
+  local lw = pixul_mono_font:get_text_width(ax.label)*0.8
+  graphics.print(ax.label, pixul_mono_font, tx - w/2 + 8, ty - 5, 0, 0.8, 0.8, 0, 0, fg[0])
+  graphics.print(val, pixul_mono_font, tx - w/2 + 8 + lw + 8, ty - 5, 0, 0.8, 0.8, 0, 0, vcol)
 end
 
 
@@ -1631,18 +1640,20 @@ function BallPit:draw_shop_card(i, id, def, x, s, alpha, focused, now)
   Paddle.draw_preview(id, def, x, py)
   graphics.pop()
 
-  graphics.print_centered(def.name, focused and fat_font or pixul_font,
-                          x, CARO_CY + 22*s, 0, focused and 0.85 or 0.9,
-                          focused and 0.85 or 0.9, 0, 0,
+  -- The title now scales WITH the card. It used to be drawn at a flat 0.9 on
+  -- shrunken neighbours, so the longest names hung over their tile's edges.
+  -- 0.8 keeps the widest ('Pinball Lobber', 159px) inside the 176px focus card.
+  local ns = 0.8*(focused and 1 or s)
+  graphics.print_centered(def.name, fat_font, x, CARO_CY + 22*s, 0, ns, ns, 0, 0,
                           Color(fg[0].r, fg[0].g, fg[0].b, alpha))
 
   -- Ownership line. Locked cards wear the NEXT unlock's positional price.
   local ly = CARO_CY + h/2 - 14*s
   if equipped then
-    graphics.print_centered('EQUIPPED', pixul_font, x, ly, 0, s, s, 0, 0,
+    graphics.print_centered('EQUIPPED', pixul_mono_font, x, ly, 0, 0.8*s, 0.8*s, 0, 0,
                             Color(yellow[0].r, yellow[0].g, yellow[0].b, alpha))
   elseif owned then
-    graphics.print_centered('OWNED', pixul_font, x, ly, 0, s, s, 0, 0,
+    graphics.print_centered('OWNED', pixul_mono_font, x, ly, 0, 0.8*s, 0.8*s, 0, 0,
                             Color(green[0].r, green[0].g, green[0].b, alpha))
   else
     local price  = PADDLES.next_price()
@@ -1652,8 +1663,8 @@ function BallPit:draw_shop_card(i, id, def, x, s, alpha, focused, now)
     graphics.rectangle(x - 20*s, ly, 6*s, 5*s, 1, 1, Color(pc.r, pc.g, pc.b, alpha))
     graphics.arc('open', x - 20*s, ly - 2.5*s, 2.6*s, math.pi, 2*math.pi,
                  Color(pc.r, pc.g, pc.b, alpha), 1)
-    graphics.print_centered(tostring(price), pixul_font, x + 2*s, ly, 0, s, s, 0, 0,
-                            Color(pc.r, pc.g, pc.b, alpha))
+    graphics.print_centered(tostring(price), pixul_mono_font, x + 2*s, ly,
+                            0, 0.8*s, 0.8*s, 0, 0, Color(pc.r, pc.g, pc.b, alpha))
   end
 end
 
@@ -1667,6 +1678,10 @@ function BallPit:update_shop(dt)
   self.go_screen     = self.go_screen or 'over'
   self.shop_selected = self.shop_selected or 1
   self.shop_scroll   = self.shop_scroll or self.shop_selected
+
+  -- A transition is running: the page underneath is mid-move and is about to
+  -- be swapped, so taking input now would stack a second switch on the first.
+  if self.gate then return end
 
   -- Run report screen: RESTART / SHOP buttons (mouse hover + click, or
   -- up/down + enter).
@@ -1690,19 +1705,10 @@ function BallPit:update_shop(dt)
       ui_switch1:play{volume = 0.3}
     end
     if (hovered and input.click.pressed) or input.confirm.pressed then
-      local id = GO_BUTTONS[self.go_selected].id
-      if id == 'restart' then
-        confirm1:play{volume = 0.4}
-        self:reset_run()
-      else
-        self.go_screen = 'shop'
-        -- Open the carousel already focused on what you have equipped.
-        for i, pid in ipairs(PADDLES.order) do
-          if pid == state.selected_paddle then self.shop_selected = i end
-        end
-        self.shop_scroll = self.shop_selected
-        ui_switch1:play{volume = 0.35}
-      end
+      -- Both routes go through the gate, which owns the sound, the screen
+      -- swap and (for a restart) the reset itself.
+      self:begin_page_gate(GO_BUTTONS[self.go_selected].id == 'restart'
+                           and 'restart' or 'shop')
     end
     return
   end
@@ -1729,8 +1735,7 @@ function BallPit:update_shop(dt)
   local ex, ey, ew, eh = shop_back_rect()
   if input.click.pressed
   and math.abs(mouse.x - ex) <= ew/2 and math.abs(mouse.y - ey) <= eh/2 then
-    self.go_screen = 'over'
-    ui_switch1:play{volume = 0.3}
+    self:begin_page_gate('over')
     input.click.pressed = false
     return
   end
@@ -1805,6 +1810,142 @@ end
 
 
 -- ---------------------------------------------------------------------------
+-- PAGE TRANSITIONS
+-- ---------------------------------------------------------------------------
+-- One mechanism serves all three moves, because the cabinet already has the
+-- part for it: a ball GATE. A pair of steel shutters slams shut across the
+-- screen, everything that has to change happens in the single frame while
+-- they are closed, and then they part again.
+--
+-- Underneath, the page you are leaving slides the way you are travelling and
+-- the page you arrive at comes in from the opposite edge, so "deeper into the
+-- machine" and "back out of it" read as opposite moves instead of the same cut
+-- played twice:
+--
+--   'shop'     report -> shop    travelling DOWN into the cabinet
+--   'over'     shop   -> report  travelling back UP
+--   'restart'  either -> a fresh run: the page is launched out and the
+--              shutters part onto live play
+local GATE_CLOSE = 0.24
+local GATE_OPEN  = 0.30
+local GATE_SLIDE = 54     -- how far a page travels while it is covered
+
+
+-- Start a transition. Ignored if one is already running, so a mashed key can't
+-- stack two switches (or fire reset_run twice).
+function BallPit:begin_page_gate(kind)
+  if self.gate then return end
+  self.gate = {kind = kind, phase = 'close', t = 0}
+  mine1:play{volume = 0.5, pitch = 0.8}
+end
+
+
+-- Drive the gate. Called from BallPit:update every frame, NOT from update_shop:
+-- a 'restart' has to keep animating after game_over has already been cleared
+-- and the shop's update has stopped running.
+function BallPit:tick_page_gate(dt)
+  local g = self.gate
+  if not g then return end
+  g.t = g.t + dt
+
+  if g.phase == 'close' then
+    if g.t < GATE_CLOSE then return end
+    -- Fully covered. This is the only frame anything is allowed to change.
+    -- The open phase restarts its clock at zero rather than carrying the
+    -- overshoot: carrying it meant the shutters had already parted by up to a
+    -- frame's worth (~16% of the screen) on the very frame the page swapped,
+    -- so you could catch the swap through the gap.
+    g.phase, g.t = 'open', 0
+    if g.kind == 'restart' then
+      self:reset_run()
+      spawn1:play{volume = 0.45}
+    else
+      self.go_screen = g.kind
+      if g.kind == 'shop' then
+        -- Open the carousel already focused on what is equipped.
+        PADDLES.ensure_state()
+        for i, pid in ipairs(PADDLES.order) do
+          if pid == state.selected_paddle then self.shop_selected = i end
+        end
+        self.shop_scroll = self.shop_selected
+      end
+      confirm1:play{volume = 0.28, pitch = (g.kind == 'shop') and 1.1 or 0.9}
+    end
+    camera:shake(2, 0.14, 90)
+  elseif g.t >= GATE_OPEN then
+    self.gate = nil
+  end
+end
+
+
+-- How far the shutters have travelled: 0 wide open, 1 fully closed.
+function BallPit:page_gate_cover()
+  local g = self.gate
+  if not g then return 0 end
+  if g.phase == 'close' then
+    local p = math.clamp(g.t/GATE_CLOSE, 0, 1)
+    return p*p                     -- accelerates into the slam
+  end
+  return (1 - math.clamp(g.t/GATE_OPEN, 0, 1))^3   -- springs apart, eases to rest
+end
+
+
+-- Vertical offset for whichever page is on screen. The slide is always smaller
+-- than what the shutters have already hidden (54*p^2 against the 328*p each
+-- shutter covers), so a travelling page can never show a bare edge.
+function BallPit:page_slide()
+  local g = self.gate
+  if not g then return 0 end
+  local down = (g.kind == 'over')          -- coming back out travels down-screen
+  if g.phase == 'close' then
+    local p = math.clamp(g.t/GATE_CLOSE, 0, 1)
+    return (down and 1 or -1)*GATE_SLIDE*p*p
+  end
+  local p = math.clamp(g.t/GATE_OPEN, 0, 1)
+  return (down and -1 or 1)*GATE_SLIDE*(1 - p)^3
+end
+
+
+-- The shutters themselves, drawn over EVERYTHING -- including live play, which
+-- is what a restart parts them onto.
+function BallPit:draw_page_gate()
+  local c = self:page_gate_cover()
+  if c <= 0.001 then return end
+  local half = gh/2
+  local d    = half*c                      -- how far each shutter has come in
+  local now  = love.timer.getTime()
+
+  -- One steel panel per side. `edge` is its leading lip, `dir` which way the
+  -- lip faces, so the same code draws both.
+  local function shutter(cy, edge, dir)
+    graphics.rectangle(gw/2, cy, gw, half, nil, nil, bg[-2])
+    graphics.rectangle(gw/2, cy, gw - 26, half - 18, 4, 4, Color(1, 1, 1, 0.03))
+    for x = 26, gw - 26, 34 do
+      graphics.circle(x, edge - dir*9, 1.6, Color(1, 1, 1, 0.10))   -- rivet row
+    end
+    graphics.rectangle(gw/2, edge - dir*1.5, gw, 3, nil, nil, Color(1, 1, 1, 0.13))
+    graphics.rectangle(gw/2, edge + dir*4,   gw, 8, nil, nil, Color(0, 0, 0, 0.35))
+  end
+  shutter(d - half/2,      d,      1)
+  shutter(gh - d + half/2, gh - d, -1)
+
+  -- Nearly shut: a seam lamp strip along the join, coloured by where you are
+  -- headed. Deliberately a thin strip and not a screen flash.
+  if c > 0.86 then
+    local k   = (c - 0.86)/0.14
+    local col = (self.gate.kind == 'restart') and green[0]
+             or ((self.gate.kind == 'shop') and yellow[0] or fg_alt[0])
+    graphics.rectangle(gw/2, half, gw, 2, nil, nil, Color(col.r, col.g, col.b, 0.5*k))
+    for i = 0, 13 do
+      graphics.circle(18 + i*34, half, 2.2,
+                      Color(col.r, col.g, col.b,
+                            0.45*k*(0.4 + 0.6*math.abs(math.sin(now*6 + i)))))
+    end
+  end
+end
+
+
+-- ---------------------------------------------------------------------------
 -- DRAW
 -- ---------------------------------------------------------------------------
 
@@ -1813,54 +1954,135 @@ end
 -- the paddle shop.
 function BallPit:draw_game_over()
   PADDLES.ensure_state()
+  -- Whichever page is up rides the transition offset; the shutters (drawn
+  -- later, in BallPit:draw) hide the edge it exposes.
+  local dy = self:page_slide()
+  if dy ~= 0 then graphics.push(0, 0, 0, 1, 1); graphics.translate(0, dy) end
   if self.go_screen == 'shop' then
     self:draw_shop_screen()
   else
     self:draw_game_over_screen()
   end
+  if dy ~= 0 then graphics.pop() end
 end
 
 
--- The run report: dark backdrop, ember-pulsing headline, a stats panel for
--- the run that just ended, and the RESTART / SHOP buttons.
+-- The run report. Same cabinet as the shop -- solid page, bezel, header board,
+-- reel, drop targets, flippers -- so moving between the two feels like one
+-- machine changing what it is showing. It is arranged as a machine that has
+-- just ENDED a game rather than one attracting play, which is what keeps it
+-- from being the shop with different words: the header board is dark with a
+-- single lamp still walking its frame, the reel is front and centre and counts
+-- the final SCORE instead of credits, the stats read as playfield inserts down
+-- one panel, and the only lit things left are the two drop targets.
 function BallPit:draw_game_over_screen()
-  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, Color(0, 0, 0, 0.82))
+  local now  = love.timer.getTime()
+  local pdef = self.paddle_def or PADDLES.get(state.selected_paddle)
+  local pcol = _G[pdef.color_key][0]
 
-  -- Headline with a slow ember pulse, over a thin accent rule.
-  local now   = love.timer.getTime()
+  -- ---- 1. the page ----
+  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, bg[0])
+  -- Same backboard sheen as the shop, drifting the other way and dimmer.
+  for i = -6, 20 do
+    local x = i*36 - (now*5 % 36)
+    graphics.line(x, 0, x - 90, gh, Color(1, 1, 1, 0.010), 6)
+  end
+  -- Powered-down vignette: nested rims, so the cabinet reads as dark at the
+  -- edges with only the board and the targets alight.
+  for i = 1, 5 do
+    graphics.rectangle(gw/2, gh/2, gw - i*4, gh - i*4, 8, 8, Color(0, 0, 0, 0.10), 3)
+  end
+  graphics.rectangle(gw/2, gh/2, gw - 12, gh - 12, 8, 8, Color(1, 1, 1, 0.05), 2)
+  graphics.rectangle(gw/2, gh/2, gw - 18, gh - 18, 6, 6, Color(0, 0, 0, 0.35), 1)
+
+  -- ---- 2. dead header board ----
+  -- Same footprint as the shop's marquee so the two pages line up through a
+  -- transition, but unlit: one lamp still crawls the frame, the way a real
+  -- cabinet idles between games.
+  cab_panel(gw/2, SHOP_MARQUEE_CY, SHOP_MARQUEE_W, SHOP_MARQUEE_H, 6,
+            bg[-1], Color(red[0].r, red[0].g, red[0].b, 0.35))
+  local mx0, mx1 = gw/2 - SHOP_MARQUEE_W/2, gw/2 + SHOP_MARQUEE_W/2
+  local my0, my1 = SHOP_MARQUEE_CY - SHOP_MARQUEE_H/2, SHOP_MARQUEE_CY + SHOP_MARQUEE_H/2
+  local ring = {}
+  for x = mx0 + 10, mx1 - 10,  21 do ring[#ring + 1] = {x, my0 + 6} end
+  for y = my0 + 20, my1 - 20,  18 do ring[#ring + 1] = {mx1 - 8, y} end
+  for x = mx1 - 10, mx0 + 10, -21 do ring[#ring + 1] = {x, my1 - 6} end
+  for y = my1 - 20, my0 + 20, -18 do ring[#ring + 1] = {mx0 + 8, y} end
+  local walker = math.floor(now*9) % #ring + 1
+  for i, p in ipairs(ring) do cab_bulb(p[1], p[2], i == walker, red[0]) end
+
   local pulse = 0.5 + 0.5*math.sin(now*1.6)
-  graphics.print_centered('GAME OVER', fat_font, gw/2, gh/2 - 150, 0, 1.5, 1.5, 0, 0,
-                          Color(red[0].r, red[0].g*(0.6 + 0.3*pulse), red[0].b*(0.6 + 0.3*pulse), 1))
-  graphics.rectangle(gw/2, gh/2 - 126, 200, 1, nil, nil, Color(red[0].r, red[0].g, red[0].b, 0.5))
-  graphics.print_centered('the swarm broke through on wave ' .. self.wave,
-                          pixul_font, gw/2, gh/2 - 112, 0, 0.95, 0.95, 0, 0, fg_alt[0])
+  graphics.print_centered('GAME OVER', fat_font, gw/2, SHOP_MARQUEE_CY + 11, 0, 1.45, 1.45,
+                          0, 0, Color(red[0].r, red[0].g*(0.55 + 0.3*pulse),
+                                      red[0].b*(0.55 + 0.3*pulse), 1))
 
-  -- Run report panel: label column left, value column right.
-  local pw, ph   = 260, 132
-  local pcx, pcy = gw/2, gh/2 - 20
-  cab_panel(pcx, pcy, pw, ph, 4)
-  local rt   = self.run_time or 0
+  -- ---- 3. final score on the reel ----
+  graphics.print_centered('FINAL SCORE', pixul_mono_font, gw/2, 96, 0, 0.7, 0.7, 0, 0, fg_alt[0])
+  cab_reel(gw/2, 122, self.score or 0, 7, red[0])
+  graphics.print_centered('the swarm broke through on wave ' .. self.wave,
+                          pixul_mono_font, gw/2, 152, 0, 0.7, 0.7, 0, 0, fg_alt[0])
+  cab_rail(24, gw - 24, 172, red[0])
+
+  -- ---- 4. scoreboard ----
+  -- Height is the five rows plus the two footer lines, not a round number:
+  -- sized any taller and the panel ends in a band of dead space.
+  local pw, ph, pcy = 340, 214, 300
+  cab_panel(gw/2, pcy, pw, ph, 6, bg[-1], Color(red[0].r, red[0].g, red[0].b, 0.28))
+  local px0 = gw/2 - pw/2
+  local rt  = self.run_time or 0
   local rows = {
-    {'WAVE',          tostring(self.wave)},
+    {'WAVE REACHED',  tostring(self.wave)},
     {'SCORE',         tostring(self.score)},
-    {'KILLS',         tostring(self.run_kills or 0)},
-    {'LEVEL',         tostring(self.level or 1)},
-    {'TIME',          string.format('%d:%02d', math.floor(rt/60), math.floor(rt % 60))},
-    {'BLOCKS EARNED', '+' .. (self.run_kills or 0)},
+    {'BLOCKS BROKEN', tostring(self.run_kills or 0)},
+    {'HERO LEVEL',    tostring(self.level or 1)},
+    {'TIME ON TABLE', string.format('%d:%02d', math.floor(rt/60), math.floor(rt % 60))},
   }
-  local ry = pcy - ph/2 + 14
-  for i, r in ipairs(rows) do
-    local vcol = (i == #rows) and yellow[0] or fg[0]
-    graphics.print(r[1], pixul_font, pcx - pw/2 + 14, ry - 4, 0, 1, 1, 0, 0, fg_alt[0])
-    local vw = pixul_font:get_text_width(r[2])
-    graphics.print(r[2], pixul_font, pcx + pw/2 - 14 - vw, ry - 4, 0, 1, 1, 0, 0, vcol)
-    ry = ry + 19
+  local ry = pcy - ph/2 + 22
+  for _, r in ipairs(rows) do
+    -- Each row is a playfield insert: lamp, label, dotted lane, value.
+    graphics.circle(px0 + 16, ry + 3, 2.2, Color(red[0].r, red[0].g, red[0].b, 0.55))
+    graphics.print(r[1], pixul_mono_font, px0 + 26, ry, 0, 0.7, 0.7, 0, 0, fg_alt[0])
+    local vw  = pixul_mono_font:get_text_width(r[2])*0.7
+    local lx0 = px0 + 30 + pixul_mono_font:get_text_width(r[1])*0.7
+    graphics.print(r[2], pixul_mono_font, px0 + pw - 18 - vw, ry, 0, 0.7, 0.7, 0, 0, fg[0])
+    graphics.dashed_line(lx0, ry + 6, px0 + pw - 22 - vw, ry + 6, 2, 3, Color(1, 1, 1, 0.10), 1)
+    ry = ry + 26
   end
 
+  -- Footer: what the run banked (literally the shop's currency) and what you
+  -- ran it with, so the SHOP target below has an obvious reason to exist.
+  graphics.line(px0 + 14, ry + 2, px0 + pw - 14, ry + 2, Color(1, 1, 1, 0.12), 1)
+  local earned = '+' .. (self.run_kills or 0) .. ' BLOCKS'
+  local ew     = pixul_mono_font:get_text_width(earned)*0.75
+  graphics.print('BANKED', pixul_mono_font, px0 + 26, ry + 14, 0, 0.7, 0.7, 0, 0, fg_alt[0])
+  graphics.print(earned, pixul_mono_font, px0 + pw - 18 - ew, ry + 13, 0, 0.75, 0.75, 0, 0, yellow[0])
+
+  graphics.print('YOU RAN', pixul_mono_font, px0 + 26, ry + 36, 0, 0.7, 0.7, 0, 0, fg_alt[0])
+  Paddle.draw_preview(pdef.id, pdef, px0 + 140, ry + 40)
+  local nw = fat_font:get_text_width(pdef.name)*0.62
+  graphics.print(pdef.name, fat_font, px0 + pw - 18 - nw, ry + 28, 0, 0.62, 0.62, 0, 0, pcol)
+
+  cab_rail(24, gw - 24, 452, red[0])
+
+  -- ---- 5. drop targets ----
+  -- Same hardware as the shop's EXIT / BUY tabs, so the two pages share one
+  -- interaction language even though they share no layout.
   for i, b in ipairs(GO_BUTTONS) do
     local bx, by = go_button_pos(i)
-    draw_menu_button(bx, by, GO_BTN_W, GO_BTN_H, b.label, (self.go_selected or 1) == i)
+    local hot = math.abs(mouse.x - bx) <= GO_BTN_W/2
+            and math.abs(mouse.y - by) <= GO_BTN_H/2
+    cab_target(bx, by, GO_BTN_W, GO_BTN_H, b.label,
+               (i == 1) and green[0] or yellow[0],
+               hot or (self.go_selected or 1) == i)
   end
+
+  -- ---- 6. flippers, and the ball that just drained ----
+  graphics.print_centered('UP DOWN  SELECT      ENTER  START      R  RESTART RUN',
+                          pixul_mono_font, gw/2, 616, 0, 0.7, 0.7, 0, 0, fg_alt[0])
+  cab_flipper(140, 638, -1, 44, Color(1, 1, 1, 0.28), now)
+  cab_flipper(340, 638,  1, 44, Color(1, 1, 1, 0.28), now)
+  graphics.circle(240, 642, 4, Color(pcol.r, pcol.g, pcol.b, 0.55))
+  graphics.circle(238.5, 640.5, 1.4, Color(1, 1, 1, 0.55))
 end
 
 
@@ -1903,7 +2125,10 @@ function BallPit:draw_shop_screen()
     cab_bulb(mx0 + 8, y, (b + chase) % 3 == 0, yellow[0]); b = b + 1
     cab_bulb(mx1 - 8, y, (b + chase) % 3 == 0, yellow[0])
   end
-  graphics.print_centered('PADDLE EXCHANGE', fat_font, gw/2, SHOP_MARQUEE_CY - 6,
+  -- fat_font ink runs y-17s .. y+2s through print_centered, so the draw y that
+  -- puts the ink's CENTRE on the marquee's centre line is cy + 7.5s. At the old
+  -- cy - 6 the top of the lettering ran straight through the upper bulb row.
+  graphics.print_centered('PADDLE EXCHANGE', fat_font, gw/2, SHOP_MARQUEE_CY + 11,
                           0, 1.45, 1.45, 0, 0, yellow[0])
 
 
@@ -1912,7 +2137,9 @@ function BallPit:draw_shop_screen()
   local exit_hot = math.abs(mouse.x - ex) <= ew/2 and math.abs(mouse.y - ey) <= eh/2
   cab_target(ex, ey, ew, eh, 'EXIT', red[0], exit_hot)
 
-  graphics.print('CREDITS', pixul_font, 246, SHOP_CREDIT_CY - 6, 0, 0.85, 0.85, 0, 0, fg_alt[0])
+  -- Right up against the reel (its first digit window starts at x = 330) so the
+  -- label reads as belonging to the number instead of floating away from it.
+  graphics.print('CREDITS', pixul_mono_font, 262, SHOP_CREDIT_CY - 6, 0, 0.85, 0.85, 0, 0, fg_alt[0])
   cab_reel(376, SHOP_CREDIT_CY, state.wallet or 0, 5, denied and red[0] or yellow[0])
   if denied then
     -- Every pinball machine's way of saying no.
@@ -1967,17 +2194,19 @@ function BallPit:draw_shop_screen()
   if equipped then chip, ccol = 'EQUIPPED', yellow[0]
   elseif owned then chip, ccol = 'OWNED', green[0]
   else chip, ccol = 'LOCKED', afford and yellow[0] or red[0] end
-  local chw = pixul_font:get_text_width(chip)*0.9 + 14
+  local chw = pixul_mono_font:get_text_width(chip)*0.8 + 14
   graphics.rectangle(px0 + SHOP_PANEL_W - 16 - chw/2, 370, chw, 15, 3, 3,
                      Color(ccol.r, ccol.g, ccol.b, 0.18))
   graphics.rectangle(px0 + SHOP_PANEL_W - 16 - chw/2, 370, chw, 15, 3, 3,
                      Color(ccol.r, ccol.g, ccol.b, 0.7), 1)
-  graphics.print_centered(chip, pixul_font, px0 + SHOP_PANEL_W - 16 - chw/2, 369,
-                          0, 0.9, 0.9, 0, 0, ccol)
+  graphics.print_centered(chip, pixul_mono_font, px0 + SHOP_PANEL_W - 16 - chw/2, 369,
+                          0, 0.8, 0.8, 0, 0, ccol)
 
-  local by = 390
-  for _, line in ipairs(wrap_text(sel.blurb, pixul_font, 0.88, SHOP_PANEL_W - 34)) do
-    graphics.print(line, pixul_font, px0 + 16, by, 0, 0.88, 0.88, 0, 0, fg[0])
+  -- Mono needs two lines for the longest blurb; at this pitch line 2's ink ends
+  -- at 408, clear of the rule at 414.
+  local by = 388
+  for _, line in ipairs(wrap_text(sel.blurb, pixul_mono_font, 0.7, SHOP_PANEL_W - 34)) do
+    graphics.print(line, pixul_mono_font, px0 + 16, by, 0, 0.7, 0.7, 0, 0, fg[0])
     by = by + 12
   end
   graphics.line(px0 + 14, 414, px0 + SHOP_PANEL_W - 14, 414, Color(1, 1, 1, 0.12), 1)
@@ -1987,36 +2216,46 @@ function BallPit:draw_shop_screen()
 
   -- Right column: signature, hull, starting balls.
   local tx = 198
-  graphics.print('SIGNATURE', pixul_font, tx, 428, 0, 0.8, 0.8, 0, 0, fg_alt[0])
-  local sy = 442
-  for _, line in ipairs(wrap_text(sel.sig_blurb, pixul_font, 0.88, 250)) do
-    graphics.print(line, pixul_font, tx, sy, 0, 0.88, 0.88, 0, 0, fg[0])
-    sy = sy + 12
+  graphics.print('SIGNATURE', pixul_mono_font, tx, 426, 0, 0.7, 0.7, 0, 0, fg_alt[0])
+  -- The longest signature line wraps to three in mono; 11px of pitch puts the
+  -- last one's ink at 468, clear of the HULL row below.
+  local sy = 438
+  for _, line in ipairs(wrap_text(sel.sig_blurb, pixul_mono_font, 0.7, 250)) do
+    graphics.print(line, pixul_mono_font, tx, sy, 0, 0.7, 0.7, 0, 0, fg[0])
+    sy = sy + 11
   end
 
-  graphics.print('HULL', pixul_font, tx, 478, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+  graphics.print('HULL', pixul_mono_font, tx, 478, 0, 0.7, 0.7, 0, 0, fg_alt[0])
   if sel.hp_mode == 'bar' then
     -- The Vampire runs a draining blood bar instead of discrete hearts.
     graphics.rectangle(tx + 66, 482, 62, 7, 3, 3, Color(0, 0, 0, 0.6))
     graphics.rectangle(tx + 66, 482, 60, 5, 2, 2, Color(0.55, 0.03, 0.06, 1))
-    graphics.print('DRAINS', pixul_font, tx + 102, 476, 0, 0.75, 0.75, 0, 0, red[0])
+    graphics.print('DRAINS', pixul_mono_font, tx + 102, 476, 0, 0.6, 0.6, 0, 0, red[0])
   else
     for i = 1, (sel.hp or 5) do
       heart_glyph(tx + 38 + (i - 1)*13, 482, 1.5, red[0])
     end
   end
 
-  graphics.print('STARTS WITH', pixul_font, tx, 502, 0, 0.8, 0.8, 0, 0, fg_alt[0])
-  local hy = 518
+  graphics.print('STARTS WITH', pixul_mono_font, tx, 500, 0, 0.7, 0.7, 0, 0, fg_alt[0])
+  -- Collapse repeats into 'bomber x4'. Tesla and Terrorist both open with four
+  -- of the same hero, and four separate rows ran off the bottom of the panel.
+  local seen, uniq = {}, {}
   for _, c in ipairs(sel.start_balls) do
-    local hc = (character_colors and character_colors[c]) or fg[0]
+    if seen[c] then uniq[seen[c]].n = uniq[seen[c]].n + 1
+    else uniq[#uniq + 1] = {c = c, n = 1}; seen[c] = #uniq end
+  end
+  local hy = 514
+  for _, e in ipairs(uniq) do
+    local hc = (character_colors and character_colors[e.c]) or fg[0]
     graphics.circle(tx + 5, hy + 3, 3.5, hc)
     graphics.circle(tx + 4, hy + 2, 1.2, fg[5])
-    graphics.print(c, pixul_font, tx + 14, hy, 0, 0.88, 0.88, 0, 0, fg[0])
+    graphics.print(e.n > 1 and (e.c .. ' x' .. e.n) or e.c, pixul_mono_font,
+                   tx + 14, hy, 0, 0.7, 0.7, 0, 0, fg[0])
     hy = hy + 13
   end
   if sel.signature == 'twincast' then
-    graphics.print('(mirrored pair)', pixul_font, tx + 14, hy, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+    graphics.print('(mirrored pair)', pixul_mono_font, tx + 14, hy, 0, 0.65, 0.65, 0, 0, fg_alt[0])
   end
 
   -- ---- 6. action drop target ----
@@ -2032,8 +2271,10 @@ function BallPit:draw_shop_screen()
   cab_target(gw/2, SHOP_ACT_CY, 260, 36, label, acol, act_hot and not dim, dim)
 
   -- ---- 7. flippers + hints ----
-  graphics.print_centered('<  >  SELECT      ENTER  START      R  RESTART RUN',
-                          pixul_font, gw/2, 616, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+  -- '<' and '>' have no ink in either Pixul cut, so the old hint line opened
+  -- with two blanks. Words instead, measured to 357px inside the 480px canvas.
+  graphics.print_centered('ARROWS  SELECT      ENTER  START      R  RESTART RUN',
+                          pixul_mono_font, gw/2, 616, 0, 0.7, 0.7, 0, 0, fg_alt[0])
   cab_flipper(140, 638, -1, 44, Color(1, 1, 1, 0.28), now)
   cab_flipper(340, 638,  1, 44, Color(1, 1, 1, 0.28), now)
   graphics.circle(240, 642, 4, Color(1, 1, 1, 0.35))

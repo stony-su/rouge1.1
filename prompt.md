@@ -7,7 +7,6 @@ UI:
 6. in the esc menu, when the mouse hovers on a ball to see it's level and ability, show a more detailed explanation for the ability and what each level up does
 7. delate the 0.75x, 1x, 1.25x, etc on the window size screen --> they server no purpose
 
-
 Pinball paddle:
 1. stop balls getting stuck in the middle of the paddle 
 2. apply normal physics on the Jester ball so it can rotate accordingly (not fixed rotation), especially while on the pinball paddle, it stays fixed without turning 
@@ -16,7 +15,6 @@ Terrorist paddle:
 1. give a small passive XP gain for this paddle only
 2. change the detonate in "e detonate x#" into "E [detonate symbol] x#] --> also move this a bit down 
 3. remove the yellow spinning line from the bomber ball
-
 
 Gameplay:
 1. make the slow decay to the combo meter constant (tiers D to SSS) with visual effects to match
@@ -32,12 +30,32 @@ Shop:
 4. revamp the shop UI so seem more like a "shop" based on an arcade pinball machine theme
 5. change the stats each paddle into a radar graph with symbols to represent the type of stat. when hovering over the small symbol, show the text for what type of stat it it is no surprise that
 
+Tiny Fixes x1:
+1. Move the letter of the tier below and to the right of of the combo meter, so that the letter is aligned to the right wall so the right section of the letter of the tier is next to the right wall
+2. remove the highlight from the combo meter so that it does not include the letter of the tier (D, C, A, Frenzy, etc)
+3. in the esc window, for the level up details when hovering over a hero, use a different font that is easier to read (but similar) for the description. increase the size of the box and make sure it does not overlap with any text.
+4. move the "HEROS" section in the esc menu higher up a slim gap below the bottom-most window size
+5. use the easier to read font for the shop too
+6. make sure any text in the shop is inside the box and does not overlap with it
+7. flip the arrows on the right and left side in the shop carousel (so that the left one faces left and the right one faces right)
+8. move the credits a bit closer to the number of credits
 
 
 
-Restart screen
-1. delate the sentence "the swarm broke on wave #"
-2. revamp the UI to be more interesting based on the pinball and rougelike theme
+
+
+
+
+
+Tiny fixes x2:
+1. Create an individual equip animation for each paddle
+2. for telsa and bomber, the "starts with" balls have 4 balls, and there is not enough space in the bottom of the box, so they overlap on top of the box. to fix this, make it wizard x4 and bomber x4 instead
+3. Change the Hull hearts to the specific unique hearts that each paddle has ingame
+4. move the combo meter and letter slightly to the left. just edge it to the left by a few pixels
+5. add an command in the admin build that sets the combo meter to a specific tier
+6. the easier-to-read font is still hard to read because there are not enough pixels. decrease the letter spacing horizontally and make it easier to read
+7. delate the words "arrows select, enter start, and R restart run"
+8. delate the gray pinball and ball at the bottom of the shop 
 
 Powerups: 
 1. Redesign all powerups except the levelup powerup using simple geometric shapes in interesting combonations and spins that are distinct but not too visually intense. using layering to achieve complex and interesting powerups without relying on a singular shape. It's not super important that the powerup image conveys what it does. design everything except fire_trail and freeze wave (but remove the dots circling them)
@@ -57,14 +75,5 @@ Enemies:
 3. add a couple small visual effects to the enemy projectiles so they are not mistaken for balls or xp orbs, like a slight bloom colouring
 4. decrease the size and color of the xp orbs, as well as make them slightly transparent
 
-Tiny Fixes:
-1. Move the letter of the tier below and to the right of of the combo meter, so that the letter is aligned to the right wall so the right section of the letter of the tier is next to the right wall
-2. remove the highlight from the combo meter so that it does not include the letter of the tier (D, C, A, Frenzy, etc)
-3. in the esc window, for the level up details when hovering over a hero, use a different font that is easier to read (but similar) for the description. increase the size of the box and make sure it does not overlap with any text.
-4. move the "HEROS" section in the esc menu higher up a slim gap below the bottom-most window size
-5. use the easier to read font for the shop too
-6. make sure any text in the shop is inside the box and does not overlap with it
-7. flip the arrows on the right and left side in the shop carousel (so that the left one faces left and the right one faces right)
-8. move the credits a bit closer to the number of credits
 
 
