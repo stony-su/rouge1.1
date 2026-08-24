@@ -40,13 +40,6 @@ Tiny Fixes x1:
 7. flip the arrows on the right and left side in the shop carousel (so that the left one faces left and the right one faces right)
 8. move the credits a bit closer to the number of credits
 
-
-
-
-
-
-
-
 Tiny fixes x2:
 1. Create an individual equip animation for each paddle
 2. for telsa and bomber, the "starts with" balls have 4 balls, and there is not enough space in the bottom of the box, so they overlap on top of the box. to fix this, make it wizard x4 and bomber x4 instead
@@ -57,6 +50,9 @@ Tiny fixes x2:
 7. delate the words "arrows select, enter start, and R restart run"
 8. delate the gray pinball and ball at the bottom of the shop 
 
+
+
+
 Powerups: 
 1. Redesign all powerups except the levelup powerup using simple geometric shapes in interesting combonations and spins that are distinct but not too visually intense. using layering to achieve complex and interesting powerups without relying on a singular shape. It's not super important that the powerup image conveys what it does. design everything except fire_trail and freeze wave (but remove the dots circling them)
 
@@ -65,6 +61,9 @@ Mitosis paddle:
 
 Hive: 
 1. Upon bounce contact with this paddle, a small ball of the same color is produced. What is this ball and is it a bug. The small ball despawns after a couple seconds, almost never reaching the enemy blocks. It travels in a staight line
+
+Twin Cast:
+1. Right before when the mirrored balls timer goes up, pull the balls to the center of the mirrored chain --> right now they just disappear and reappear like they're teleporting
 
 Balls:
 1. Increase the projectile size and fire speed of the archer hero
@@ -76,27 +75,3 @@ Enemies:
 4. decrease the size and color of the xp orbs, as well as make them slightly transparent
 
 
-
-bug: 
-Error
-
-paddles.lua:543: attempt to call global 'heart_half' (a nil value)
-
-
-Traceback
-
-[love "callbacks.lua"]:228: in function 'handler'
-paddles.lua:543: in function 'life_glyph'
-paddles.lua:2494: in function 'draw_shop_screen'
-paddles.lua:2197: in function 'draw_game_over'
-ballpit.lua:1277: in function 'draw'
-engine/game/state.lua:79: in function 'draw'
-main.lua:129: in function 'draw_action'
-shared.lua:117: in function 'action'
-engine/graphics/canvas.lua:45: in function 'draw_to'
-shared.lua:116: in function 'shared_draw'
-main.lua:128: in function 'draw'
-engine/init.lua:170: in function <engine/init.lua:118>
-[C]: in function 'xpcall'
-
-when i pressed equip on a paddle or when i press the left arrow to switch to the aegis in the shop

@@ -1254,7 +1254,10 @@ end
 -- The EXIT drop target shares the credit-reel row: the marquee owns the whole
 -- top strip now, so a top-left button would sit inside it.
 local function shop_back_rect()
-  return 50, SHOP_CREDIT_CY, 76, 24
+  -- Left edge flush with the marquee's, so EXIT reads as hanging off the
+  -- corner of the PADDLE EXCHANGE sign instead of floating out past it.
+  local w, h = 76, 24
+  return gw/2 - SHOP_MARQUEE_W/2 + w/2, SHOP_CREDIT_CY, w, h
 end
 
 local function draw_menu_button(bx, by, w, h, label, selected)

@@ -422,6 +422,12 @@ local function heart_glyph(cx, cy, s, color)
   graphics.polygon({cx - 3.1*s, cy - 0.6*s, cx + 3.1*s, cy - 0.6*s, cx, cy + 3.4*s}, color)
 end
 
+-- One side of the classic heart (for the split-in-two death animation).
+local function heart_half(cx, cy, side, s, color)
+  graphics.circle(cx + side*1.5*s, cy - 1.2*s, 1.7*s, color)
+  graphics.polygon({cx, cy - 0.6*s, cx + side*3.1*s, cy - 0.6*s, cx, cy + 3.4*s}, color)
+end
+
 local HEART_STYLES = {
   -- Standard: the classic red heart, with an honest heartbeat thump.
   none = function(cx, cy, lit, i, t)
@@ -1248,7 +1254,10 @@ end
 -- The EXIT drop target shares the credit-reel row: the marquee owns the whole
 -- top strip now, so a top-left button would sit inside it.
 local function shop_back_rect()
-  return 50, SHOP_CREDIT_CY, 76, 24
+  -- Left edge flush with the marquee's, so EXIT reads as hanging off the
+  -- corner of the PADDLE EXCHANGE sign instead of floating out past it.
+  local w, h = 76, 24
+  return gw/2 - SHOP_MARQUEE_W/2 + w/2, SHOP_CREDIT_CY, w, h
 end
 
 local function draw_menu_button(bx, by, w, h, label, selected)
