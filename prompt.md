@@ -56,6 +56,7 @@ Powerups:
 
 Mitosis paddle:
 1. renew the decay life timer on decaying copies of the balls on paddle contact, with a slightly faster decay timer
+2. Buff decay life timers so that ball copies will last longer
 
 Hive: 
 1. Upon bounce contact with this paddle, a small ball of the same color is produced. What is this ball and is it a bug. The small ball despawns after a couple seconds, almost never reaching the enemy blocks. It travels in a staight line
@@ -63,13 +64,21 @@ Hive:
 Twin Cast:
 1. Right before when the mirrored balls timer goes up, pull the balls to the center of the mirrored chain --> right now they just disappear and reappear like they're teleporting
 
+
+
+
+
 Balls:
 1. Increase the projectile size and fire speed of the archer hero
 
-Enemies:
+Twin cast:
+1. make balls inbetween the mirrored lazer connection of two mirrored balls take damage
+2. longer distance between mirroed balls before they get pulled together to form a supanova = bigger blast 
+3. change the twin cast description in the shop to reflect this
+
+ Enemies:
 1. Set all enemy projectiles to the same color (red)
 2. keep the grid background, but set it to almost completely dark
 3. add a couple small visual effects to the enemy projectiles so they are not mistaken for balls or xp orbs, like a slight bloom colouring
 4. decrease the size and color of the xp orbs, as well as make them slightly transparent
-
 

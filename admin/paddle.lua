@@ -957,6 +957,15 @@ function Paddle:on_ball_bounce(ball)
   -- conduction web runs persistently from BallPit:tesla_tick.)
   if arena then
     if sig == 'hive' and arena.hive_spawn_maggot then arena:hive_spawn_maggot(ball) end
+    -- Mitosis: a decaying daughter cell that makes it back to the paddle gets
+    -- FED -- its countdown restarts, on a shorter fuse than the one it was born
+    -- with (clone_renew_mult). Keeping a doomed clone alive becomes paddle work
+    -- rather than luck. No-ops on every other ball: the method returns unless
+    -- the ball is actually mid-decay.
+    if sig == 'mitosis' and ball.renew_mitosis_decay then
+      local sigt = (mods and mods.sig) or {}
+      ball:renew_mitosis_decay((sigt.clone_life or 4.5)*(sigt.clone_renew_mult or 0.75))
+    end
   end
 end
 

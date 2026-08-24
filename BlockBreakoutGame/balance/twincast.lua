@@ -38,6 +38,11 @@ return {
     nova_dmg     = 26,             -- base nova damage (x loadout dmg)
     nova_level_growth = 0.5,       -- +50% nova damage per pair level
     orbit_pull   = 2.4,
+    fuse_converge = 0.2,   -- last fraction of the charge spent spiralling the
+                           -- twins bodily onto the fuse point (0 = no approach,
+                           -- they snap to the centre when the meter fills).
+                           -- x fuse_time = the approach in seconds, so 0.2 of an
+                           -- 8s charge is a 1.6s draw-in.
     -- Element carry-over layered onto the nova blast:
     nova_burn_dps_mult  = 0.22,    -- burn dps = this x nova damage (Boss only;
                                    -- bricks always burn at dots.burn_max_hp_frac)

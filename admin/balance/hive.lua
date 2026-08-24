@@ -34,7 +34,14 @@ return {
     contact_zero    = true,
     maggot_cap      = 24,     -- max live maggots
     maggot_dmg_mult = 0.8,    -- maggot bite = this x ball damage
-    maggot_speed    = 85,
+    -- Maggots home in on the nearest brick, so speed x life is their REACH.
+    -- One vented on a paddle bounce starts at the bottom of the pit and needs
+    -- ~600px to reach a swarm entering at the top: that crossing alone costs
+    -- ~4.3s here, and the rest of the fuse is the margin for a swarm that has
+    -- moved or a target that died mid-flight. Cutting either much below this
+    -- puts the paddle-spawned half of the signature back to expiring in open air.
+    maggot_speed    = 140,
+    maggot_life     = 7,      -- seconds before a maggot that found nothing dies
   },
 
   -- ======================================================================

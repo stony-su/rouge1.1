@@ -102,9 +102,9 @@ PADDLES.defs = {
     size = 1.0, move = 1.0, ball = 1.0, charge = 0.9, aim = 1.0, dmg = 0.5,
     xp = 1.4, combo = 1.3, hp = 4, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'vagrant'},
-    signature = 'mitosis', sig = {clone_life = 2.5, clone_cap = 10},
+    signature = 'mitosis', sig = {clone_life = 4.5, clone_cap = 10, clone_renew_mult = 0.75},
     blurb = 'Every kill makes a ball divide in two like a splitting cell.',
-    sig_blurb = 'one daughter cell decays away; lost types regrow',
+    sig_blurb = 'one daughter decays - bounce it off the paddle to feed it; lost types regrow',
   },
   hive = {
     id = 'hive', name = 'Hive', price = 750, color_key = 'orange',
@@ -112,7 +112,8 @@ PADDLES.defs = {
     xp = 1.6, combo = 0.9, hp = 4, hp_mode = 'hearts', xp_mode = 'scale',
     start_balls = {'infestor', 'infestor', 'infestor'},
     signature = 'hive',
-    sig = {contact_zero = true, maggot_cap = 24, maggot_dmg_mult = 0.8, maggot_speed = 85},
+    sig = {contact_zero = true, maggot_cap = 24, maggot_dmg_mult = 0.8, maggot_speed = 140,
+           maggot_life = 7},
     blurb = 'Balls deal NO damage - maggots infest bricks with a spreading rot.',
     sig_blurb = 'one bite blackens a brick; the plague creeps to its neighbours',
   },
@@ -149,7 +150,7 @@ PADDLES.defs = {
     -- echo of the old "double cast" feel).
     signature = 'twincast',
     sig = {cd_mult = 0.75, fuse_time = 8, fuse_window = 0.42, split_cd = 0.6,
-           nova_radius = 80, nova_dmg = 26, orbit_pull = 2.4},
+           nova_radius = 80, nova_dmg = 26, orbit_pull = 2.4, fuse_converge = 0.2},
     blurb = 'Bonded twins orbit and FUSE into a nova supercast, then split.',
     sig_blurb = 'charge the binary; strongest right after a fusion',
   },
@@ -645,6 +646,11 @@ function BallPit:hive_spawn_maggot(ball)
   local x, y   = ball.x, ball.y
   local color  = ball.color
   local dmg    = ball:current_dmg()*(sig.maggot_dmg_mult or 0.8)
+  -- Reach. A maggot vented on a PADDLE bounce starts at the bottom of the pit
+  -- and has the whole arena (~600px) to cross; speed x life has to cover that
+  -- or the bug dies in open air. seek makes it steer at the nearest brick
+  -- instead of flying its launch heading (AllyCritter:steer).
+  local life   = sig.maggot_life or 7
   local effect = nil
   local ob = ball.stats and ball.stats.on_bounce
   if ob == 'burn' then effect = 'burn' elseif ob == 'slow' then effect = 'slow' end
@@ -652,7 +658,8 @@ function BallPit:hive_spawn_maggot(ball)
   self.t:after(0, function()
     if not (self.main and self.main.world) then return end
     AllyCritter{group = self.main, x = x, y = y, color = color,
-                speed = sig.maggot_speed or 85, dmg = dmg, effect = effect, infest = true}
+                speed = sig.maggot_speed or 140, dmg = dmg, effect = effect, infest = true,
+                seek = true, lifetime = life}
   end)
   if random:bool(30) then critter1:play{volume = 0.2, pitch = random:float(0.95, 1.1)} end
 end
@@ -1019,6 +1026,11 @@ function BallPit:twincast_fuse_blast(x, y, radius, dmg, color, element)
 end
 
 
+-- Tangential speed of the final approach spiral, in px/sec. Held roughly
+-- constant as the radius closes, so the pair never outruns a live ball on its
+-- way into the fuse (a hero ball tops out near 385px/s at FRENZY).
+local TWIN_APPROACH_SPIN = 190
+
 -- Per-frame driver (called unconditionally from BallPit:update). Advances every
 -- bonded pair's charge -> fuse -> split cycle. No-op off a Twin Cast run.
 function BallPit:twincast_tick(dt)
@@ -1029,6 +1041,7 @@ function BallPit:twincast_tick(dt)
   local fuse_window = sig.fuse_window or 0.42
   local split_cd    = sig.split_cd    or 0.6
   local pull        = sig.orbit_pull  or 2.4
+  local converge    = sig.fuse_converge or 0.2
   for _, pr in ipairs(self.twin_pairs or {}) do
     local a, b = pr.a, pr.b
     if a and b and not a.dead and not b.dead and a.body and b.body then
@@ -1040,12 +1053,47 @@ function BallPit:twincast_tick(dt)
         if in_play then
           pr.charge = math.min(1, pr.charge + dt/fuse_time)
           local mx, my = (a.x + b.x)/2, (a.y + b.y)/2
-          self:twincast_orbit(a, mx, my, pr.charge, pr.winding, pull, dt)
-          self:twincast_orbit(b, mx, my, pr.charge, pr.winding, pull, dt)
+
+          -- FINAL APPROACH. twincast_orbit only bends each twin's heading --
+          -- normalize_speed puts the magnitude straight back every frame -- so
+          -- steering alone can leave the pair half the arena apart at the
+          -- instant the meter fills, and the fuse then reads as both balls
+          -- blinking out and reappearing in the middle. Over the last
+          -- `converge` fraction of the charge the pair is instead flown on a
+          -- scripted spiral: the radius closes to nothing and the spin winds
+          -- up as it does (a skater pulling their arms in), so the twins ARRIVE
+          -- at the fuse point under visible motion and r is already 0 by the
+          -- time the blast fires. The centre is frozen when the approach begins
+          -- so the nova lands where the spiral has been telegraphing it.
+          if converge > 0 and pr.charge >= 1 - converge then
+            if not pr.conv_r then
+              pr.conv_r = (math.distance(a.x, a.y, mx, my) + math.distance(b.x, b.y, mx, my))/2
+              pr.conv_a = math.atan2(a.y - my, a.x - mx)
+              pr.conv_x, pr.conv_y = mx, my
+              a.spring:pull(0.25);  b.spring:pull(0.25)
+            end
+            local f = math.clamp((pr.charge - (1 - converge))/converge, 0, 1)
+            local r = pr.conv_r*(1 - f*f*(3 - 2*f))       -- smoothstep closure
+            -- Spin at a fixed LINEAR speed, not a fixed angular one: the twins
+            -- whip up as the radius closes (the skater pulling their arms in)
+            -- while their actual travel stays ball-paced instead of blurring.
+            -- The cap stops r -> 0 dividing out into a strobe.
+            pr.conv_a = pr.conv_a
+                      + pr.winding*math.min(14, TWIN_APPROACH_SPIN/math.max(r, 4))*dt
+            local ca, sa = math.cos(pr.conv_a), math.sin(pr.conv_a)
+            a:set_position(pr.conv_x + ca*r, pr.conv_y + sa*r)
+            b:set_position(pr.conv_x - ca*r, pr.conv_y - sa*r)
+            mx, my = pr.conv_x, pr.conv_y
+          else
+            self:twincast_orbit(a, mx, my, pr.charge, pr.winding, pull, dt)
+            self:twincast_orbit(b, mx, my, pr.charge, pr.winding, pull, dt)
+          end
+
           if pr.charge >= 1 then
             pr.state, pr.timer = 'fused', fuse_window
             pr.fuse_window = fuse_window
             pr.fx_x, pr.fx_y = mx, my
+            pr.conv_r = nil
             a:set_position(mx, my);  b:set_position(mx, my)
             a:set_velocity(0, 0);    b:set_velocity(0, 0)
             a.spring:pull(0.6);      b.spring:pull(0.6)
@@ -1053,6 +1101,10 @@ function BallPit:twincast_tick(dt)
             local dmg = (sig.nova_dmg or 26)*(1 + BAL('signature.nova_level_growth', 0.5)*(lvl - 1))*((self.run_mods.dmg) or 1)
             self:twincast_fuse_blast(mx, my, sig.nova_radius or 80, dmg, pr.color or blue[0], pr.element)
           end
+        else
+          -- Caught / serving mid-approach: drop the captured spiral so it is
+          -- re-measured from wherever the pair actually is when play resumes.
+          pr.conv_r = nil
         end
 
       elseif pr.state == 'fused' then

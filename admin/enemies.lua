@@ -642,6 +642,12 @@ function AllyCritter:init(args)
   self.dmg      = self.dmg or 6
   self.speed    = self.speed or 70
   self.lifetime = self.lifetime or 4
+  -- Seeking maggots (Hive) steer at the nearest brick instead of flying the
+  -- fixed launch heading; see AllyCritter:steer. The infestor's pets leave
+  -- this off and keep their original straight drift.
+  self.turn_rate = self.turn_rate or 3.0     -- radians/sec of steering authority
+  self.wig_t     = random:float(0, 2*math.pi)
+  self.wig_f     = random:float(7, 10)       -- grub crawl, so it isn't a missile
 
   self:set_as_circle(self.r_size, 'dynamic', 'projectile')
   self.body:setBullet(true)
@@ -652,6 +658,7 @@ function AllyCritter:init(args)
   self:set_mass(0.2)
 
   local angle = -math.pi/2 + random:float(-0.6, 0.6)
+  self.head = angle          -- own heading, turned by :steer (wiggle is cosmetic)
   self:set_velocity(math.cos(angle)*self.speed, math.sin(angle)*self.speed)
   self.hfx:add('hit', 1)
 
@@ -663,9 +670,51 @@ function AllyCritter:init(args)
   self.t:after(self.lifetime, function() self.dead = true end)
 end
 
+-- Nearest live enemy worth biting, re-picked when the current one dies. The
+-- boss counts: it is tagged 'brick', so a maggot that reaches it lands a bite
+-- through on_brick_contact like anything else.
+function AllyCritter:retarget()
+  local arena = main.current
+  if not (arena and arena.main) then return end
+  local best, bd = nil, 1e9
+  for _, o in ipairs(arena.main.objects) do
+    if not o.dead and o.is and (o:is(Brick) or o:is(Boss)) then
+      local d = math.distance(self.x, self.y, o.x, o.y)
+      if d < bd then bd = d; best = o end
+    end
+  end
+  self.target = best
+end
+
+
+-- Turn toward the target at a limited rate -- NOT the Locust's hard per-frame
+-- heading set -- and lay a shallow sine over the result, so the maggot reads as
+-- something crawling through the air rather than a guided missile.
+function AllyCritter:steer(dt)
+  if not self.target or self.target.dead then self:retarget() end
+  local tgt = self.target
+  if not tgt then return end
+  local want = math.atan2(tgt.y - self.y, tgt.x - self.x)
+  local d    = (want - self.head + math.pi)%(2*math.pi) - math.pi   -- shortest turn
+  local lim  = self.turn_rate*dt
+  self.head  = self.head + math.clamp(d, -lim, lim)
+  self.wig_t = self.wig_t + dt*self.wig_f
+  local a = self.head + math.sin(self.wig_t)*0.25
+  self:set_velocity(math.cos(a)*self.speed, math.sin(a)*self.speed)
+end
+
+
 function AllyCritter:update(dt)
   self:update_game_object(dt)
   local arena = main.current
+  -- Hive maggots home. Straight-line flight is fine for the infestor's pets,
+  -- which are dropped in the middle of the field right beside their target,
+  -- but the Hive paddle also vents a maggot on every PADDLE bounce -- down at
+  -- y~618, with the swarm entering at y~18. At the old 85px/s x 4s that is
+  -- 340px of travel: it expired around mid-arena and the paddle-spawned half
+  -- of the signature never landed a bite. Steering plus the longer fuse
+  -- (sig.maggot_life) is what makes those arrive.
+  if self.seek then self:steer(dt) end
   if arena and (self.y < arena.y1 - 8 or self.y > arena.y2 + 8) then self.dead = true end
 end
 

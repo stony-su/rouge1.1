@@ -2761,6 +2761,31 @@ function BallHero:begin_mitosis_decay(life)
 end
 
 
+-- Feed a decaying cell at the paddle: the countdown restarts from full, but on
+-- whatever (shorter) fuse the caller passes, so a bounce buys the clone more
+-- time without ever making it immortal. mitosis_decay_max is reset alongside
+-- the remaining time, so the rot visual (decay_t/decay_max, see
+-- draw_mitosis_cell) restarts from a fresh-looking cell and rots out over the
+-- new window instead of resuming mid-decay. No-op on anything not dying.
+function BallHero:renew_mitosis_decay(life)
+  if not self.mitosis_decay_t then return end
+  life = life or 2.5
+  self.mitosis_decay_max = life
+  self.mitosis_decay_t   = life
+  self.spring:pull(0.35)
+  local arena = main.current
+  if arena and arena.effects then
+    -- Quiet feedback only: the cell visibly plumps back up on its own, so this
+    -- is a couple of spores off the membrane, not a flash.
+    for _ = 1, 3 do
+      SporeMote{group = arena.effects, x = self.x, y = self.y, color = self.color,
+        vx = random:float(-30, 30), vy = random:float(-40, -10),
+        rs = random:float(0.8, 1.8), alpha = 0.5, duration = random:float(0.25, 0.45)}
+    end
+  end
+end
+
+
 -- The decaying cell ruptures: a small cytoplasm/spore burst, then it despawns.
 function BallHero:mitosis_die()
   if self.dead then return end

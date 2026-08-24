@@ -30,8 +30,11 @@ return {
 
   -- Cell division on kill. Clones inherit the source ball damage directly.
   signature = {
-    clone_life = 2.5,    -- seconds the decaying daughter cell survives
-    clone_cap  = 10,     -- max live clones
+    clone_life       = 4.5,   -- seconds the decaying daughter cell survives
+    clone_cap        = 10,    -- max live clones
+    clone_renew_mult = 0.75,  -- a paddle bounce restarts a decaying cell's
+                              -- countdown at this x clone_life (1.0 = a full
+                              -- refill, 0 = bouncing it does nothing)
   },
 
   -- ======================================================================

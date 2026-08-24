@@ -773,20 +773,48 @@ function Brick:draw()
     graphics.circle(self.x, self.y, self.w*0.7, c, 1.5)
   end
 
-  -- Jester hex mark: four harlequin diamond pips orbiting the brick, so the
-  -- player can read at a glance which enemies will burst into knives on death.
+  -- Jester hex mark: a red vortex swirling INSIDE the brick's own grid cell, so
+  -- the player can read at a glance which enemies will burst into knives.
+  --
+  -- This used to be four diamond pips orbiting at w*0.62. On a 1x1 brick that
+  -- is a radius of 11 around an 18x10 body -- the pips flew outside their own
+  -- brick entirely, and since swarm cells are only CELL_W/CELL_H (22x14) apart,
+  -- a cluster of cursed bricks had every mark sitting on top of its neighbours'
+  -- and the whole group blurred into one field of pips with no way to tell how
+  -- many bricks were actually hexed. Everything below is inscribed in the
+  -- brick's OWN cell (half a cell is 11x7; on a 1x1 the whole mark spans
+  -- 19.4x11.5, and it scales with the bounding box on multi-cell bricks),
+  -- leaving ~1.25px of gutter on every side -- so six adjacent cursed bricks
+  -- read as six separate swirls.
   if self.jester_cursed then
-    local c    = self.jester_color or red[0]
-    local t    = love.timer.getTime()
-    local a0   = t*2.2
-    local rad  = self.w*0.62
-    local pip  = 1.4 + 0.4*math.sin(t*6)
-    local col  = Color(c.r, c.g, c.b, 0.85)
-    for i = 0, 3 do
-      local a  = a0 + i*math.pi/2
-      local px = self.x + math.cos(a)*rad
-      local py = self.y + math.sin(a)*rad
-      graphics.polygon({px, py - pip, px + pip, py, px, py + pip, px - pip, py}, col)
+    local c  = self.jester_color or red[0]
+    local t  = love.timer.getTime()
+    -- Elliptical, following the brick's aspect: a circle would either overflow
+    -- a flat brick's height or waste its width. The head dot (radius up to
+    -- 1.25) sits ON this ellipse, so the arms stop half a pixel inside the body
+    -- to keep the whole mark -- dot included -- clear of the next cell.
+    local rx = self.w/2 - 0.5
+    local ry = self.h/2 - 0.5
+    local a0 = t*4.2                                   -- swirl rate
+    local segs = 7
+    for arm = 0, 1 do                                  -- two opposed arms = vortex
+      local base = a0 + arm*math.pi
+      local px, py
+      for i = 0, segs do
+        local f = i/segs                               -- 0 = tail, 1 = head
+        local a = base - (1 - f)*2.0                   -- tail trails behind...
+        local k = 0.55 + 0.45*f                        -- ...from core to rim
+        local x = self.x + math.cos(a)*rx*k
+        local y = self.y + math.sin(a)*ry*k
+        if i > 0 then
+          -- Taper alpha AND width toward the head so each arm reads as motion
+          -- rather than as a static ring drawn around the brick.
+          graphics.line(px, py, x, y, Color(c.r, c.g, c.b, 0.15 + 0.65*f), 0.8 + f)
+        end
+        px, py = x, y
+      end
+      graphics.circle(px, py, 1.0 + 0.25*math.sin(t*7),
+                      Color(math.min(1, c.r + 0.45), c.g + 0.3, c.b + 0.3, 0.9))
     end
   end
 end
