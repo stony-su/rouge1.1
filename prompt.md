@@ -33,6 +33,8 @@ Shop:
 5. change the stats each paddle into a radar graph with symbols to represent the type of stat. when hovering over the small symbol, show the text for what type of stat it it is no surprise that
 
 
+
+
 Restart screen
 1. delate the sentence "the swarm broke on wave #"
 2. revamp the UI to be more interesting based on the pinball and rougelike theme
@@ -54,4 +56,13 @@ Enemies:
 2. keep the grid background, but set it to almost completely dark
 3. add a couple small visual effects to the enemy projectiles so they are not mistaken for balls or xp orbs, like a slight bloom colouring
 4. decrease the size and color of the xp orbs, as well as make them slightly transparent
+
+Tiny Fixes:
+1. Move the letter of the tier below and to the right of of the combo meter, so that the letter is aligned to the right wall so the right section of the letter of the tier is next to the right wall
+2. remove the highlight from the combo meter so that it does not include the letter of the tier (D, C, A, Frenzy, etc)
+3. in the esc window, for the level up details when hovering over a hero, use a different font that is easier to read (but similar) for the description. increase the size of the box and make sure it does not overlap with any text.
+4. move the "HEROS" section in the esc menu higher up a slim gap below the bottom-most window size
+5. use the easier to read font for the shop too
+6. make sure any text in the shop is inside the box and does not overlap with it
+
 

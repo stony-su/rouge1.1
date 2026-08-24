@@ -339,7 +339,6 @@ function BallPit:draw_settings_heroes()
   if not self.heroes or #self.heroes == 0 then return end
 
   graphics.print_centered('HEROES', pixul_font, gw/2, gh/2 + 110, 0, 1, 1, 0, 0, fg[0])
-  graphics.print_centered('hover a ball for level + ability', pixul_font, gw/2, gh/2 + 122, 0, 0.85, 0.85, 0, 0, fg_alt[0])
 
   local hovered_idx = self:hero_under_mouse_in_settings()
 
@@ -1705,9 +1704,14 @@ end
 
 
 function BallPit:draw_hud()
-  -- (No frame around the playfield: the arena walls read on their own, and the
-  -- grey outline boxed the whole screen in. The solid left/right/top walls are
-  -- still there physically -- see reset_run -- just not outlined.)
+  -- Playfield frame, open at the TOP. Drawn as one polyline down the left
+  -- side, across the bottom and back up the right, so the three solid edges
+  -- read as a channel the balls live in while the top stays uncapped -- the
+  -- combo meter and the HP/XP strip sit on that top edge, and a line through
+  -- them boxed the whole screen in.
+  graphics.polyline(fg_transparent_weak, 1,
+                    {self.x1, self.y1, self.x1, self.y2,
+                     self.x2, self.y2, self.x2, self.y1})
 
   -- Red dotted "defense line" at the top of the paddle's dodge band. Any enemy
   -- that crosses it costs the player HP (see breach_line_y consumers), so it

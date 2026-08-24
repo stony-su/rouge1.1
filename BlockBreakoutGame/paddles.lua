@@ -1186,12 +1186,38 @@ end
 --           report. Cards render the loadout's REAL paddle body via
 --           Paddle.draw_preview. R still restarts from either screen.
 
-local SHOP_COLS   = 4
-local CARD_W      = 104
-local CARD_H      = 78
-local CARD_GAP_X  = 112
-local CARD_GAP_Y  = 88
-local GRID_TOP    = 130
+-- ===========================================================================
+-- THE SHOP: an arcade pinball cabinet
+-- ===========================================================================
+-- The shop is not an overlay on the dead arena any more -- it is its own
+-- opaque PAGE, dressed as the backglass of a pinball machine: a bulb-lit
+-- marquee, an electro-mechanical credit reel, chrome ball-guide rails,
+-- pop-bumper nav buttons, drop-target buttons and a pair of idling flippers.
+--
+-- Page layout (canvas is 480 x 656):
+--     12.. 74   marquee + chase lights
+--     84..112   credit reel  |  EXIT drop target
+--    128..340   paddle CAROUSEL (focus card + neighbours) + position lamps
+--    352..560   spec panel: stat RADAR (left) + loadout copy (right)
+--    570..608   BUY / EQUIP drop target
+--    612..656   flippers + control hints
+local SHOP_MARQUEE_CY = 44
+local SHOP_MARQUEE_W  = 404
+local SHOP_MARQUEE_H  = 58
+local SHOP_CREDIT_CY  = 98
+local CARO_CY         = 232
+local CARO_W          = 176   -- focus card size; neighbours are scaled down
+local CARO_H          = 148
+local CARO_STEP       = 142   -- x distance between adjacent carousel slots
+local CARO_SIDE_S     = 0.66  -- scale of the immediate neighbours
+local SHOP_PANEL_CY   = 456
+local SHOP_PANEL_W    = 440
+local SHOP_PANEL_H    = 208
+local SHOP_ACT_CY     = 586   -- BUY / EQUIP drop target
+local RADAR_CX        = 116
+local RADAR_CY        = 486
+local RADAR_R         = 46
+local RADAR_ICON_OUT  = 13    -- how far past the rim the axis symbols sit
 
 -- Run-report buttons + the shop's BACK button.
 local GO_BUTTONS = {
@@ -1204,8 +1230,10 @@ local function go_button_pos(i)
   return gw/2, gh/2 + 84 + (i - 1)*36
 end
 
+-- The EXIT drop target shares the credit-reel row: the marquee owns the whole
+-- top strip now, so a top-left button would sit inside it.
 local function shop_back_rect()
-  return 40, 26, 56, 18
+  return 50, SHOP_CREDIT_CY, 76, 24
 end
 
 local function draw_menu_button(bx, by, w, h, label, selected)
@@ -1214,35 +1242,431 @@ local function draw_menu_button(bx, by, w, h, label, selected)
   graphics.print_centered(label, pixul_font, bx, by - 1, 0, 1, 1, 0, 0, selected and yellow[0] or fg[0])
 end
 
-function BallPit:shop_card_pos(i)
-  local total = #PADDLES.order
-  local rows  = math.ceil(total/SHOP_COLS)
-  local row   = math.ceil(i/SHOP_COLS)
-  local col   = i - (row - 1)*SHOP_COLS
-  -- The last row may be short (13 cards -> 4/4/4/1); centre whatever it holds.
-  local in_row = (row < rows) and SHOP_COLS or (total - (rows - 1)*SHOP_COLS)
-  local cx = gw/2 + (col - (in_row + 1)/2)*CARD_GAP_X
-  local cy = GRID_TOP + (row - 1)*CARD_GAP_Y
-  return cx, cy
+-- ---------------------------------------------------------------------------
+-- Cabinet hardware. Every one of these is a real part off a pinball machine,
+-- so the whole screen reads as playfield furniture rather than as a menu.
+-- ---------------------------------------------------------------------------
+
+-- A marquee bulb. Lit bulbs get a hot core and a halo; dark ones are a socket.
+local function cab_bulb(x, y, lit, col)
+  if lit then
+    graphics.circle(x, y, 3.6, Color(col.r, col.g, col.b, 0.26))
+    graphics.circle(x, y, 1.9, col)
+    graphics.circle(x - 0.5, y - 0.6, 0.7, Color(1, 1, 1, 0.9))
+  else
+    graphics.circle(x, y, 1.8, Color(0, 0, 0, 0.5))
+    graphics.circle(x, y, 1.8, Color(col.r, col.g, col.b, 0.22), 1)
+  end
 end
 
 
-function BallPit:shop_card_under_mouse()
-  for i = 1, #PADDLES.order do
-    local cx, cy = self:shop_card_pos(i)
-    if mouse.x >= cx - CARD_W/2 and mouse.x <= cx + CARD_W/2
-    and mouse.y >= cy - CARD_H/2 and mouse.y <= cy + CARD_H/2 then
-      return i
+-- Brushed-metal panel: dark face, a bright hairline along the top edge (the
+-- light in an arcade always comes from the marquee above), thin bezel.
+local function cab_panel(cx, cy, w, h, r, face, edge)
+  graphics.rectangle(cx, cy, w, h, r, r, face or bg[-1])
+  graphics.rectangle(cx, cy - h/2 + 2, w - 8, 1, nil, nil, Color(1, 1, 1, 0.09))
+  graphics.rectangle(cx, cy, w, h, r, r, edge or Color(1, 1, 1, 0.15), 1)
+end
+
+
+-- Chrome ball guide: the twin rails that shepherd a ball across a playfield,
+-- with a post at each end.
+local function cab_rail(x1, x2, y, col)
+  graphics.line(x1, y,     x2, y,     Color(1, 1, 1, 0.20), 1)
+  graphics.line(x1, y + 2, x2, y + 2, Color(col.r, col.g, col.b, 0.28), 1)
+  graphics.circle(x1, y + 1, 2.4, Color(1, 1, 1, 0.22))
+  graphics.circle(x2, y + 1, 2.4, Color(1, 1, 1, 0.22))
+end
+
+
+-- Pop bumper. Doubles as the carousel's prev/next button: `dir` (-1/1) draws
+-- the chevron, `hot` lights the lamp when the mouse is over it.
+local function cab_bumper(cx, cy, r, col, t, dir, hot)
+  local p = 0.5 + 0.5*math.sin(t*2.4 + cx*0.05)
+  local lamp = hot and 1 or (0.35 + 0.25*p)
+  graphics.circle(cx, cy, r,        Color(col.r, col.g, col.b, 0.10 + 0.14*lamp))
+  graphics.circle(cx, cy, r,        Color(col.r, col.g, col.b, 0.30 + 0.5*lamp), hot and 2 or 1)
+  graphics.circle(cx, cy, r*0.66,   Color(col.r, col.g, col.b, 0.22 + 0.3*lamp), 1)
+  if dir then
+    local s = r*0.34
+    graphics.polygon({cx + dir*s, cy - s, cx + dir*s, cy + s, cx - dir*s*0.7, cy},
+                     hot and Color(1, 1, 1, 1) or Color(col.r, col.g, col.b, 0.85))
+  else
+    graphics.circle(cx, cy, r*0.26, Color(col.r, col.g, col.b, 0.4 + 0.5*lamp))
+  end
+end
+
+
+-- A DROP TARGET: the standing plastic tab you knock down with the ball. Every
+-- button on this page is one, so the UI is all playfield hardware.
+local function cab_target(cx, cy, w, h, label, col, hot, dim)
+  local face = hot and Color(col.r*0.30, col.g*0.30, col.b*0.30, 1) or bg[-1]
+  graphics.rectangle(cx, cy, w, h, 3, 3, face)
+  -- Lit strip across the top of the tab -- the target's own lamp.
+  graphics.rectangle(cx, cy - h/2 + 4, w - 12, 2, 1, 1,
+                     Color(col.r, col.g, col.b, hot and 0.95 or 0.30))
+  graphics.rectangle(cx, cy, w, h, 3, 3,
+                     hot and col or Color(col.r, col.g, col.b, 0.42), hot and 2 or 1)
+  -- Mounting screws either side, like the real plastic.
+  graphics.circle(cx - w/2 + 5, cy + h/2 - 4, 1, Color(1, 1, 1, 0.18))
+  graphics.circle(cx + w/2 - 5, cy + h/2 - 4, 1, Color(1, 1, 1, 0.18))
+  local tcol = dim and fg_alt[0] or (hot and Color(1, 1, 1, 1) or fg[0])
+  graphics.print_centered(label, pixul_font, cx, cy + 1, 0, 1, 1, 0, 0, tcol)
+end
+
+
+-- Electro-mechanical score reel: fixed-width digit windows with a seam across
+-- the middle, the way a cabinet actually shows credits.
+local function cab_reel(cx, cy, value, digits, col)
+  local dw, dh, gap = 16, 24, 3
+  local total = digits*dw + (digits - 1)*gap
+  local s = string.format('%0' .. digits .. 'd',
+                          math.min(math.max(math.floor(value or 0), 0), 10^digits - 1))
+  for i = 1, digits do
+    local x = cx - total/2 + dw/2 + (i - 1)*(dw + gap)
+    graphics.rectangle(x, cy, dw, dh, 2, 2, Color(0, 0, 0, 0.8))
+    graphics.rectangle(x, cy, dw, dh, 2, 2, Color(1, 1, 1, 0.13), 1)
+    graphics.print_centered(s:sub(i, i), fat_font, x, cy - 1, 0, 1.05, 1.05, 0, 0, col)
+    graphics.rectangle(x, cy, dw - 2, 0.6, nil, nil, Color(0, 0, 0, 0.55))   -- reel seam
+  end
+end
+
+
+-- A flipper bat, pivoting at (px, py). side = -1 left / 1 right. Idles with an
+-- occasional demo kick so the cabinet never looks dead.
+local function cab_flipper(px, py, side, len, col, t)
+  local kick = math.max(0, math.sin(t*1.1 + (side > 0 and 2.1 or 0)))^14
+  local rest = 0.40 - kick*0.78
+  local ang  = (side < 0) and rest or (math.pi - rest)
+  local tx, ty = px + math.cos(ang)*len, py + math.sin(ang)*len
+  local nx, ny = -math.sin(ang), math.cos(ang)
+  graphics.polygon({px + nx*5,   py + ny*5,   px - nx*5,   py - ny*5,
+                    tx - nx*2.6, ty - ny*2.6, tx + nx*2.6, ty + ny*2.6}, col)
+  graphics.circle(px, py, 5, col)
+  graphics.circle(tx, ty, 2.6, col)
+  graphics.circle(px, py, 1.8, Color(0, 0, 0, 0.5))
+end
+
+
+-- Greedy word wrap against a pixel width, for the loadout copy.
+local function wrap_text(text, font, scale, max_w)
+  local lines, line = {}, nil
+  for word in tostring(text or ''):gmatch('%S+') do
+    local try = line and (line .. ' ' .. word) or word
+    if (not line) or font:get_text_width(try)*scale <= max_w then
+      line = try
+    else
+      lines[#lines + 1] = line
+      line = word
     end
+  end
+  if line then lines[#lines + 1] = line end
+  return lines
+end
+
+
+-- ---------------------------------------------------------------------------
+-- STAT RADAR
+-- ---------------------------------------------------------------------------
+-- The eight loadout multipliers, in radar order (clockwise from the top). The
+-- paddle-feel stats occupy the left half and the ball/offence stats the right,
+-- so two loadouts are comparable at a glance by which side of the web bulges.
+-- `icon` picks the glyph; `label` is what the hover tooltip says.
+local STAT_AXES = {
+  {key = 'size',   icon = 'size',   label = 'PADDLE SIZE'},
+  {key = 'ball',   icon = 'ball',   label = 'BALL SPEED'},
+  {key = 'dmg',    icon = 'dmg',    label = 'DAMAGE'},
+  {key = 'combo',  icon = 'combo',  label = 'COMBO GAIN'},
+  {key = 'xp',     icon = 'xp',     label = 'XP GAIN'},
+  {key = 'charge', icon = 'charge', label = 'CHARGE RATE'},
+  {key = 'aim',    icon = 'aim',    label = 'AIM CONTROL'},
+  {key = 'move',   icon = 'move',   label = 'MOVE SPEED'},
+}
+
+-- Every multiplier in PADDLES.defs lives in 0.2 .. 1.7, so one shared scale
+-- keeps all eight axes comparable. The floor stops a crippled stat (Aegis
+-- charge 0.2) from collapsing to a point, and 1.0 -- the Standard baseline --
+-- lands just past half radius, so "better than default" reads as "outside the
+-- dashed ring".
+local function stat_norm(v)
+  return math.clamp(((v or 1) - 0.2)/1.5, 0.08, 1)
+end
+
+
+-- Tiny 7px pictograms for the radar rim. All built from convex primitives
+-- (graphics.polygon fills convex only), so bolts and stars are unions of
+-- triangles rather than single concave outlines.
+local function draw_stat_icon(kind, x, y, s, col)
+  if kind == 'size' then            -- a paddle bar with expand arrows
+    graphics.rectangle(x, y, 1.5*s, 0.6*s, 0.3, 0.3, col)
+    graphics.polygon({x - 1.7*s, y, x - 0.9*s, y - 0.8*s, x - 0.9*s, y + 0.8*s}, col)
+    graphics.polygon({x + 1.7*s, y, x + 0.9*s, y - 0.8*s, x + 0.9*s, y + 0.8*s}, col)
+
+  elseif kind == 'move' then        -- double chevron
+    graphics.polygon({x - 1.5*s, y - 1.1*s, x - 0.3*s, y, x - 1.5*s, y + 1.1*s}, col)
+    graphics.polygon({x + 0.1*s, y - 1.1*s, x + 1.3*s, y, x + 0.1*s, y + 1.1*s}, col)
+
+  elseif kind == 'ball' then        -- ball with a speed trail
+    graphics.circle(x + 0.5*s, y, 0.9*s, col)
+    graphics.circle(x - 0.7*s, y, 0.45*s, Color(col.r, col.g, col.b, 0.65))
+    graphics.circle(x - 1.5*s, y, 0.3*s,  Color(col.r, col.g, col.b, 0.35))
+
+  elseif kind == 'charge' then      -- lightning bolt, as two triangles
+    graphics.polygon({x + 0.2*s, y - 1.6*s, x - 1.1*s, y + 0.2*s, x + 0.35*s, y - 0.1*s}, col)
+    graphics.polygon({x + 1.1*s, y - 0.2*s, x - 0.2*s, y + 1.6*s, x - 0.35*s, y + 0.1*s}, col)
+
+  elseif kind == 'aim' then         -- crosshair
+    graphics.circle(x, y, 1.2*s, col, 1)
+    graphics.circle(x, y, 0.32*s, col)
+    graphics.rectangle(x, y - 1.7*s, 0.5, 0.8*s, nil, nil, col)
+    graphics.rectangle(x, y + 1.7*s, 0.5, 0.8*s, nil, nil, col)
+    graphics.rectangle(x - 1.7*s, y, 0.8*s, 0.5, nil, nil, col)
+    graphics.rectangle(x + 1.7*s, y, 0.8*s, 0.5, nil, nil, col)
+
+  elseif kind == 'dmg' then         -- impact starburst (four spikes)
+    for i = 0, 3 do
+      local a = i*math.pi/2 + math.pi/4
+      local ca, sa = math.cos(a), math.sin(a)
+      graphics.polygon({x + ca*1.7*s, y + sa*1.7*s,
+                        x - sa*0.55*s, y + ca*0.55*s,
+                        x + sa*0.55*s, y - ca*0.55*s}, col)
+    end
+    graphics.circle(x, y, 0.5*s, col)
+
+  elseif kind == 'combo' then       -- flame
+    graphics.polygon({x, y - 1.7*s, x + 1.0*s, y + 0.5*s, x - 1.0*s, y + 0.5*s}, col)
+    graphics.circle(x, y + 0.55*s, 0.85*s, col)
+    graphics.circle(x, y + 0.75*s, 0.38*s, Color(1, 1, 1, 0.55))
+
+  elseif kind == 'xp' then          -- gem
+    graphics.polygon({x, y - 1.6*s, x + 1.1*s, y, x, y + 1.6*s, x - 1.1*s, y}, col)
+    graphics.polygon({x, y - 1.6*s, x + 1.1*s, y, x - 0.2*s, y - 0.1*s}, Color(1, 1, 1, 0.35))
+  end
+end
+
+
+-- Screen position of radar axis `i`. Shared by the painter and the hit test so
+-- the tooltip can never drift off its symbol.
+local function radar_axis_pos(i, out)
+  local a = -math.pi/2 + (i - 1)*(2*math.pi/#STAT_AXES)
+  local r = RADAR_R + (out or 0)
+  return RADAR_CX + math.cos(a)*r, RADAR_CY + math.sin(a)*r
+end
+
+
+-- Which axis symbol the mouse is on, or nil.
+function BallPit:shop_radar_hover()
+  for i = 1, #STAT_AXES do
+    local ix, iy = radar_axis_pos(i, RADAR_ICON_OUT)
+    if math.distance(mouse.x, mouse.y, ix, iy) <= 9 then return i end
   end
   return nil
 end
 
 
+-- The spider web itself. `hovered` lights one axis; the caller draws the
+-- tooltip afterwards so it floats above everything.
+function BallPit:draw_stat_radar(def, col, hovered)
+  local n = #STAT_AXES
+
+  -- Web: concentric rings + a spoke per axis.
+  for _, f in ipairs{0.34, 0.67, 1.0} do
+    local pts = {}
+    for i = 1, n do
+      local x, y = radar_axis_pos(i, 0)
+      pts[#pts + 1] = RADAR_CX + (x - RADAR_CX)*f
+      pts[#pts + 1] = RADAR_CY + (y - RADAR_CY)*f
+    end
+    pts[#pts + 1], pts[#pts + 2] = pts[1], pts[2]
+    graphics.polyline(Color(1, 1, 1, f == 1 and 0.20 or 0.08), 1, pts)
+  end
+  for i = 1, n do
+    local x, y = radar_axis_pos(i, 0)
+    graphics.line(RADAR_CX, RADAR_CY, x, y, Color(1, 1, 1, 0.10), 1)
+  end
+
+  -- Baseline ring at 1.0x: anything outside it beats the Standard paddle.
+  local base = stat_norm(1.0)
+  local bpts = {}
+  for i = 1, n do
+    local x, y = radar_axis_pos(i, 0)
+    bpts[#bpts + 1] = RADAR_CX + (x - RADAR_CX)*base
+    bpts[#bpts + 1] = RADAR_CY + (y - RADAR_CY)*base
+  end
+  bpts[#bpts + 1], bpts[#bpts + 2] = bpts[1], bpts[2]
+  graphics.polyline(Color(fg_alt[0].r, fg_alt[0].g, fg_alt[0].b, 0.35), 1, bpts)
+
+  -- The loadout's profile. Filled as a fan of triangles from the centre so a
+  -- concave web (e.g. Aegis: huge size, no charge) still fills correctly.
+  local vx, vy = {}, {}
+  for i = 1, n do
+    local x, y = radar_axis_pos(i, 0)
+    local f = stat_norm(def[STAT_AXES[i].key])
+    vx[i] = RADAR_CX + (x - RADAR_CX)*f
+    vy[i] = RADAR_CY + (y - RADAR_CY)*f
+  end
+  for i = 1, n do
+    local j = (i % n) + 1
+    graphics.polygon({RADAR_CX, RADAR_CY, vx[i], vy[i], vx[j], vy[j]},
+                     Color(col.r, col.g, col.b, 0.28))
+  end
+  local opts = {}
+  for i = 1, n do opts[#opts + 1] = vx[i]; opts[#opts + 1] = vy[i] end
+  opts[#opts + 1], opts[#opts + 2] = vx[1], vy[1]
+  graphics.polyline(col, 1.5, opts)
+  for i = 1, n do graphics.circle(vx[i], vy[i], 1.7, col) end
+
+  -- Axis symbols on the rim, each in its own little lamp socket.
+  for i = 1, n do
+    local ix, iy = radar_axis_pos(i, RADAR_ICON_OUT)
+    local hot = (i == hovered)
+    graphics.circle(ix, iy, 7.5, hot and Color(col.r, col.g, col.b, 0.35) or Color(0, 0, 0, 0.5))
+    graphics.circle(ix, iy, 7.5, hot and col or Color(1, 1, 1, 0.16), 1)
+    draw_stat_icon(STAT_AXES[i].icon, ix, iy, 2.6,
+                   hot and Color(1, 1, 1, 1) or Color(fg[0].r, fg[0].g, fg[0].b, 0.85))
+  end
+end
+
+
+-- Hover tooltip for one axis symbol: what the stat IS, plus this loadout's
+-- actual multiplier and how it compares to the 1.0 baseline. Drawn last.
+function BallPit:draw_stat_tooltip(i, def)
+  local ax  = STAT_AXES[i]
+  local v   = def[ax.key] or 1
+  local val = string.format('%.2fx', v)
+  if ax.key == 'xp' and def.xp_mode == 'flat' then val = 'FLAT CURVE' end
+  local txt = ax.label .. '   ' .. val
+
+  local w = pixul_font:get_text_width(txt)*0.9 + 16
+  local h = 16
+  local ix, iy = radar_axis_pos(i, RADAR_ICON_OUT)
+  local tx = math.clamp(ix, w/2 + 4, gw - w/2 - 4)
+  local ty = iy - 16
+  if ty - h/2 < SHOP_PANEL_CY - SHOP_PANEL_H/2 then ty = iy + 16 end
+
+  graphics.rectangle(tx, ty, w, h, 3, 3, Color(0, 0, 0, 0.92))
+  graphics.rectangle(tx, ty, w, h, 3, 3, Color(1, 1, 1, 0.3), 1)
+  -- Colour the value by whether it beats the baseline.
+  local vcol = fg[0]
+  if v > 1.001 then vcol = green[0] elseif v < 0.999 then vcol = red[0] end
+  local lw = pixul_font:get_text_width(ax.label)*0.9
+  graphics.print(ax.label, pixul_font, tx - w/2 + 8, ty - 5, 0, 0.9, 0.9, 0, 0, fg[0])
+  graphics.print(val, pixul_font, tx - w/2 + 8 + lw + 8, ty - 5, 0, 0.9, 0.9, 0, 0, vcol)
+end
+
+
+-- ---------------------------------------------------------------------------
+-- CAROUSEL
+-- ---------------------------------------------------------------------------
+
+-- Where a card sits, given its signed distance in slots from the focus.
+-- `d` is fractional (it comes off the animated scroll), so cards glide and
+-- shrink continuously rather than snapping between slots.
+local function caro_slot(d)
+  local ad = math.min(math.abs(d), 2.4)
+  local s  = 1 - (1 - CARO_SIDE_S)*math.min(ad, 1)
+  if ad > 1 then s = s*(1 - 0.20*(ad - 1)) end
+  return gw/2 + d*CARO_STEP, s, math.clamp(1 - 0.40*ad, 0.10, 1)
+end
+
+
+-- Carousel nav bumpers.
+local function caro_arrow_pos(dir)
+  return (dir < 0) and 26 or (gw - 26), CARO_CY
+end
+
+
+-- Topmost card under the mouse (nearest the focus wins, matching draw order).
+function BallPit:shop_caro_hit()
+  local scroll = self.shop_scroll or 1
+  local best, bestd
+  for i = 1, #PADDLES.order do
+    local d = i - scroll
+    if math.abs(d) <= 2.4 then
+      local x, s = caro_slot(d)
+      if math.abs(mouse.x - x) <= CARO_W*s/2 and math.abs(mouse.y - CARO_CY) <= CARO_H*s/2 then
+        if not bestd or math.abs(d) < bestd then best, bestd = i, math.abs(d) end
+      end
+    end
+  end
+  return best
+end
+
+
+-- One carousel card: a backglass tile carrying the loadout's REAL paddle body
+-- (Paddle.draw_preview), its name and its ownership state.
+function BallPit:draw_shop_card(i, id, def, x, s, alpha, focused, now)
+  local w, h = CARO_W*s, CARO_H*s
+  local col  = _G[def.color_key][0]
+  local owned    = state.paddles_owned[id] == true
+  local equipped = (state.selected_paddle == id)
+
+  local edge = Color(1, 1, 1, 0.16*alpha)
+  if equipped   then edge = Color(yellow[0].r, yellow[0].g, yellow[0].b, alpha)
+  elseif owned  then edge = Color(green[0].r,  green[0].g,  green[0].b,  alpha) end
+
+  -- Focused card gets a colour wash + a breathing lamp glow behind it.
+  if focused then
+    local p = 0.5 + 0.5*math.sin(now*3)
+    graphics.rectangle(x, CARO_CY, w + 12, h + 12, 8, 8,
+                       Color(col.r, col.g, col.b, 0.07 + 0.05*p))
+  end
+  graphics.rectangle(x, CARO_CY, w, h, 5, 5, Color(bg[-1].r, bg[-1].g, bg[-1].b, alpha))
+  graphics.rectangle(x, CARO_CY - h/2 + 2, w - 10, 1, nil, nil, Color(1, 1, 1, 0.10*alpha))
+  graphics.rectangle(x, CARO_CY, w, h, 5, 5, edge, focused and 2 or 1)
+
+  -- Just-bought celebration: a ring popping off the card.
+  if self.shop_bought_i == i and self.shop_bought_t and (now - self.shop_bought_t) < 0.55 then
+    local k = (now - self.shop_bought_t)/0.55
+    graphics.rectangle(x, CARO_CY, w + 34*k, h + 34*k, 8, 8,
+                       Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.8*(1 - k)), 2)
+  end
+
+  -- The paddle itself, on a lit "playfield" strip so it looks mounted.
+  local py = CARO_CY - 22*s
+  graphics.rectangle(x, py + 12*s, w - 22*s, 1, nil, nil, Color(col.r, col.g, col.b, 0.30*alpha))
+  -- Scaled with the card so a neighbour's paddle shrinks with its tile
+  -- (draw_preview always paints at true in-game width).
+  graphics.push(x, py, 0, s, s)
+  Paddle.draw_preview(id, def, x, py)
+  graphics.pop()
+
+  graphics.print_centered(def.name, focused and fat_font or pixul_font,
+                          x, CARO_CY + 22*s, 0, focused and 0.85 or 0.9,
+                          focused and 0.85 or 0.9, 0, 0,
+                          Color(fg[0].r, fg[0].g, fg[0].b, alpha))
+
+  -- Ownership line. Locked cards wear the NEXT unlock's positional price.
+  local ly = CARO_CY + h/2 - 14*s
+  if equipped then
+    graphics.print_centered('EQUIPPED', pixul_font, x, ly, 0, s, s, 0, 0,
+                            Color(yellow[0].r, yellow[0].g, yellow[0].b, alpha))
+  elseif owned then
+    graphics.print_centered('OWNED', pixul_font, x, ly, 0, s, s, 0, 0,
+                            Color(green[0].r, green[0].g, green[0].b, alpha))
+  else
+    local price  = PADDLES.next_price()
+    local afford = (state.wallet or 0) >= price
+    local pc = afford and yellow[0] or red[0]
+    -- A padlock, then the price, so a locked card reads as locked at any scale.
+    graphics.rectangle(x - 20*s, ly, 6*s, 5*s, 1, 1, Color(pc.r, pc.g, pc.b, alpha))
+    graphics.arc('open', x - 20*s, ly - 2.5*s, 2.6*s, math.pi, 2*math.pi,
+                 Color(pc.r, pc.g, pc.b, alpha), 1)
+    graphics.print_centered(tostring(price), pixul_font, x + 2*s, ly, 0, s, s, 0, 0,
+                            Color(pc.r, pc.g, pc.b, alpha))
+  end
+end
+
+
+-- ---------------------------------------------------------------------------
+-- UPDATE
+-- ---------------------------------------------------------------------------
+
 function BallPit:update_shop(dt)
   PADDLES.ensure_state()
   self.go_screen     = self.go_screen or 'over'
   self.shop_selected = self.shop_selected or 1
+  self.shop_scroll   = self.shop_scroll or self.shop_selected
 
   -- Run report screen: RESTART / SHOP buttons (mouse hover + click, or
   -- up/down + enter).
@@ -1272,65 +1696,89 @@ function BallPit:update_shop(dt)
         self:reset_run()
       else
         self.go_screen = 'shop'
+        -- Open the carousel already focused on what you have equipped.
+        for i, pid in ipairs(PADDLES.order) do
+          if pid == state.selected_paddle then self.shop_selected = i end
+        end
+        self.shop_scroll = self.shop_selected
         ui_switch1:play{volume = 0.35}
       end
     end
     return
   end
 
-  -- Shop screen. The BACK button returns to the run report; eat the click so
-  -- it can't also land on a card underneath.
-  local bx, by, bw, bh = shop_back_rect()
+  -- ---- shop page ----
+  local n = #PADDLES.order
+
+  -- The carousel glides toward the selection instead of cutting to it.
+  self.shop_scroll = math.lerp_dt(0.0002, dt, self.shop_scroll, self.shop_selected)
+  if math.abs(self.shop_scroll - self.shop_selected) < 0.001 then
+    self.shop_scroll = self.shop_selected
+  end
+
+  local function step(d)
+    local nx = math.clamp(self.shop_selected + d, 1, n)
+    if nx ~= self.shop_selected then
+      self.shop_selected = nx
+      ui_switch1:play{volume = 0.3}
+    end
+  end
+
+  -- EXIT drop target (top-left) returns to the run report. Eat the click so it
+  -- can't also land on whatever is underneath.
+  local ex, ey, ew, eh = shop_back_rect()
   if input.click.pressed
-  and math.abs(mouse.x - bx) <= bw/2 and math.abs(mouse.y - by) <= bh/2 then
+  and math.abs(mouse.x - ex) <= ew/2 and math.abs(mouse.y - ey) <= eh/2 then
     self.go_screen = 'over'
     ui_switch1:play{volume = 0.3}
     input.click.pressed = false
     return
   end
 
-  -- Mouse: hover selects, click buys/equips.
-  local hovered = self:shop_card_under_mouse()
-  if hovered then
-    if hovered ~= self.shop_selected then
-      self.shop_selected = hovered
-      ui_switch1:play{volume = 0.25}
-    end
-    if input.click.pressed then
-      self:shop_activate(self.shop_selected)
-      return
+  -- Nav bumpers.
+  if input.click.pressed then
+    for _, dir in ipairs{-1, 1} do
+      local ax, ay = caro_arrow_pos(dir)
+      if math.distance(mouse.x, mouse.y, ax, ay) <= 20 then
+        step(dir)
+        input.click.pressed = false
+        return
+      end
     end
   end
 
-  -- Keyboard: arrows move within a row, W/S jump rows, Enter buys/equips.
-  local n = #PADDLES.order
-  if input.aim_left.pressed then
-    self.shop_selected = math.max(1, self.shop_selected - 1)
-    ui_switch1:play{volume = 0.3}
-  end
-  if input.aim_right.pressed then
-    self.shop_selected = math.min(n, self.shop_selected + 1)
-    ui_switch1:play{volume = 0.3}
-  end
-  if input.move_up.pressed then
-    self.shop_selected = math.max(1, self.shop_selected - SHOP_COLS)
-    ui_switch1:play{volume = 0.3}
-  end
-  if input.move_down.pressed then
-    self.shop_selected = math.min(n, self.shop_selected + SHOP_COLS)
-    ui_switch1:play{volume = 0.3}
-  end
-  if input.confirm.pressed then
+  -- BUY / EQUIP drop target.
+  if input.click.pressed
+  and math.abs(mouse.x - gw/2) <= 130 and math.abs(mouse.y - SHOP_ACT_CY) <= 18 then
     self:shop_activate(self.shop_selected)
+    input.click.pressed = false
+    return
   end
+
+  -- Cards: clicking a neighbour scrolls to it, clicking the focus buys/equips.
+  local hit = self:shop_caro_hit()
+  if hit and input.click.pressed then
+    if hit == self.shop_selected then
+      self:shop_activate(self.shop_selected)
+    else
+      self.shop_selected = hit
+      ui_switch1:play{volume = 0.3}
+    end
+    input.click.pressed = false
+    return
+  end
+
+  -- Keyboard: left/right (or A/D) spin the carousel, Enter buys/equips.
+  if input.aim_left.pressed  or input.move_left.pressed  then step(-1) end
+  if input.aim_right.pressed or input.move_right.pressed then step(1)  end
+  if input.confirm.pressed then self:shop_activate(self.shop_selected) end
 end
 
 
--- Buy (if affordable) or equip (if owned) the i-th paddle card.
+-- Buy (if affordable) or equip (if owned) the i-th paddle.
 function BallPit:shop_activate(i)
   PADDLES.ensure_state()
-  local id  = PADDLES.order[i]
-  local def = PADDLES.get(id)
+  local id = PADDLES.order[i]
   if not id then return end
 
   if state.paddles_owned[id] then
@@ -1349,16 +1797,20 @@ function BallPit:shop_activate(i)
     self.shop_bought_i = i
     self.shop_bought_t = love.timer.getTime()
   else
-    -- Can't afford it: buzz + flash the wallet readout red for a beat.
+    -- Can't afford it. A pinball machine has a word for this.
     hit1:play{volume = 0.3, pitch = 0.7}
     self.shop_denied_t = love.timer.getTime()
   end
 end
 
 
+-- ---------------------------------------------------------------------------
+-- DRAW
+-- ---------------------------------------------------------------------------
+
 -- Replaces the original plain game-over overlay (this file is required after
 -- ballpit.lua, so this definition wins). Routes between the run report and
--- the paddle shop (see the section comment above).
+-- the paddle shop.
 function BallPit:draw_game_over()
   PADDLES.ensure_state()
   if self.go_screen == 'shop' then
@@ -1372,10 +1824,10 @@ end
 -- The run report: dark backdrop, ember-pulsing headline, a stats panel for
 -- the run that just ended, and the RESTART / SHOP buttons.
 function BallPit:draw_game_over_screen()
-  local now = love.timer.getTime()
   graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, Color(0, 0, 0, 0.82))
 
   -- Headline with a slow ember pulse, over a thin accent rule.
+  local now   = love.timer.getTime()
   local pulse = 0.5 + 0.5*math.sin(now*1.6)
   graphics.print_centered('GAME OVER', fat_font, gw/2, gh/2 - 150, 0, 1.5, 1.5, 0, 0,
                           Color(red[0].r, red[0].g*(0.6 + 0.3*pulse), red[0].b*(0.6 + 0.3*pulse), 1))
@@ -1386,8 +1838,7 @@ function BallPit:draw_game_over_screen()
   -- Run report panel: label column left, value column right.
   local pw, ph   = 260, 132
   local pcx, pcy = gw/2, gh/2 - 20
-  graphics.rectangle(pcx, pcy, pw, ph, 4, 4, bg[-1])
-  graphics.rectangle(pcx, pcy, pw, ph, 4, 4, fg_transparent_weak, 1)
+  cab_panel(pcx, pcy, pw, ph, 4)
   local rt   = self.run_time or 0
   local rows = {
     {'WAVE',          tostring(self.wave)},
@@ -1406,7 +1857,6 @@ function BallPit:draw_game_over_screen()
     ry = ry + 19
   end
 
-  -- RESTART / SHOP buttons.
   for i, b in ipairs(GO_BUTTONS) do
     local bx, by = go_button_pos(i)
     draw_menu_button(bx, by, GO_BTN_W, GO_BTN_H, b.label, (self.go_selected or 1) == i)
@@ -1414,93 +1864,182 @@ function BallPit:draw_game_over_screen()
 end
 
 
--- The paddle shop: wallet + card grid + detail panel, with a BACK button
--- returning to the run report.
+-- The shop page. Opaque, full-bleed, and dressed as a pinball cabinet.
 function BallPit:draw_shop_screen()
-  local now = love.timer.getTime()
+  local now    = love.timer.getTime()
+  local sel_id = PADDLES.order[self.shop_selected or 1]
+  local sel    = PADDLES.get(sel_id)
+  local scol   = _G[sel.color_key][0]
+  local owned    = state.paddles_owned[sel_id] == true
+  local equipped = (state.selected_paddle == sel_id)
+  local price    = PADDLES.next_price()
+  local afford   = (state.wallet or 0) >= price
+  local denied   = self.shop_denied_t and (now - self.shop_denied_t) < 0.6
 
-  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, Color(0, 0, 0, 0.82))
-  graphics.print_centered('PADDLE SHOP', fat_font, gw/2, 30, 0, 1.0, 1.0, 0, 0, yellow[0])
+  -- ---- 1. the page itself: SOLID, not an overlay ----
+  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, bg[0])
+  -- Cabinet backboard: a slow diagonal sheen plus faint playfield lamp inserts,
+  -- so the solid fill still has some depth to it.
+  for i = -6, 20 do
+    local x = i*36 + (now*7 % 36)
+    graphics.line(x, 0, x - 90, gh, Color(1, 1, 1, 0.012), 6)
+  end
+  graphics.rectangle(gw/2, gh/2, gw - 12, gh - 12, 8, 8, Color(1, 1, 1, 0.06), 2)
+  graphics.rectangle(gw/2, gh/2, gw - 18, gh - 18, 6, 6, Color(0, 0, 0, 0.35), 1)
 
-  local denied = self.shop_denied_t and (now - self.shop_denied_t) < 0.35
-  local wcol   = denied and red[0] or yellow[0]
-  graphics.print_centered('BLOCKS  ' .. math.floor(state.wallet or 0),
-                          fat_font, gw/2, 58, 0, 0.8, 0.8, 0, 0, wcol)
+  -- ---- 2. marquee ----
+  cab_panel(gw/2, SHOP_MARQUEE_CY, SHOP_MARQUEE_W, SHOP_MARQUEE_H, 6,
+            bg[-1], Color(scol.r, scol.g, scol.b, 0.5))
+  local chase = math.floor(now*7)
+  local mx0, mx1 = gw/2 - SHOP_MARQUEE_W/2, gw/2 + SHOP_MARQUEE_W/2
+  local my0, my1 = SHOP_MARQUEE_CY - SHOP_MARQUEE_H/2, SHOP_MARQUEE_CY + SHOP_MARQUEE_H/2
+  local b = 0
+  for x = mx0 + 10, mx1 - 10, 21 do
+    cab_bulb(x, my0 + 6, (b + chase) % 3 == 0, yellow[0])
+    cab_bulb(x, my1 - 6, (b + chase + 1) % 3 == 0, yellow[0])
+    b = b + 1
+  end
+  for y = my0 + 20, my1 - 20, 18 do
+    cab_bulb(mx0 + 8, y, (b + chase) % 3 == 0, yellow[0]); b = b + 1
+    cab_bulb(mx1 - 8, y, (b + chase) % 3 == 0, yellow[0])
+  end
+  graphics.print_centered('PADDLE EXCHANGE', fat_font, gw/2, SHOP_MARQUEE_CY - 6,
+                          0, 1.45, 1.45, 0, 0, yellow[0])
+  graphics.print_centered('select your loadout', pixul_font, gw/2, SHOP_MARQUEE_CY + 16,
+                          0, 0.9, 0.9, 0, 0, fg_alt[0])
 
-  -- BACK button (top-left), hover-lit.
-  local bx, by, bw, bh = shop_back_rect()
-  local back_hover = math.abs(mouse.x - bx) <= bw/2 and math.abs(mouse.y - by) <= bh/2
-  draw_menu_button(bx, by, bw, bh, 'BACK', back_hover)
+  -- ---- 3. credit reel + EXIT ----
+  local ex, ey, ew, eh = shop_back_rect()
+  local exit_hot = math.abs(mouse.x - ex) <= ew/2 and math.abs(mouse.y - ey) <= eh/2
+  cab_target(ex, ey, ew, eh, 'EXIT', red[0], exit_hot)
 
-  for i, id in ipairs(PADDLES.order) do
-    local def = PADDLES.get(id)
-    local cx, cy = self:shop_card_pos(i)
-    local selected = (i == self.shop_selected)
-    local owned    = state.paddles_owned[id] == true
-    local equipped = (state.selected_paddle == id)
-    local col      = _G[def.color_key][0]
+  graphics.print('CREDITS', pixul_font, 246, SHOP_CREDIT_CY - 6, 0, 0.85, 0.85, 0, 0, fg_alt[0])
+  cab_reel(376, SHOP_CREDIT_CY, state.wallet or 0, 5, denied and red[0] or yellow[0])
+  if denied then
+    -- Every pinball machine's way of saying no.
+    graphics.print_centered('TILT', fat_font, 168, SHOP_CREDIT_CY, 0, 1.2, 1.2, 0, 0,
+                            Color(red[0].r, red[0].g, red[0].b, 0.5 + 0.5*math.sin(now*26)))
+  end
 
-    local border = fg_transparent_weak
-    if equipped then border = yellow[0]
-    elseif owned then border = green[0] end
-    graphics.rectangle(cx, cy, CARD_W, CARD_H, 4, 4, bg[-1])
-    graphics.rectangle(cx, cy, CARD_W, CARD_H, 4, 4,
-                       selected and fg[0] or border, selected and 2 or 1)
+  -- ---- 4. carousel ----
+  cab_rail(24, gw - 24, 136, scol)
+  cab_rail(24, gw - 24, 318, scol)
 
-    -- Just-bought celebration: an expanding ring around the card.
-    if self.shop_bought_i == i and self.shop_bought_t and (now - self.shop_bought_t) < 0.5 then
-      local k = (now - self.shop_bought_t)/0.5
-      graphics.rectangle(cx, cy, CARD_W + 24*k, CARD_H + 24*k, 6, 6,
-                         Color(yellow[0].r, yellow[0].g, yellow[0].b, 0.7*(1 - k)), 2)
-    end
+  local scroll = self.shop_scroll or 1
+  local order  = {}
+  for i = 1, #PADDLES.order do
+    local d = i - scroll
+    if math.abs(d) <= 2.4 then order[#order + 1] = {i = i, d = d} end
+  end
+  -- Farthest first so the focus card lands on top.
+  table.sort(order, function(p, q) return math.abs(p.d) > math.abs(q.d) end)
+  for _, e in ipairs(order) do
+    local x, s, a = caro_slot(e.d)
+    local id = PADDLES.order[e.i]
+    self:draw_shop_card(e.i, id, PADDLES.get(id), x, s, a, e.i == self.shop_selected, now)
+  end
 
-    -- Live paddle preview: the loadout's REAL in-game body (skin painters via
-    -- Paddle.draw_preview) at its true width, so the card IS the paddle.
-    local gy = cy - 18
-    Paddle.draw_preview(id, def, cx, gy)
+  -- Nav bumpers, dimmed at the ends of the rack.
+  for _, dir in ipairs{-1, 1} do
+    local ax, ay = caro_arrow_pos(dir)
+    local live = (dir < 0) and (self.shop_selected > 1)
+                            or (self.shop_selected < #PADDLES.order)
+    local hot  = live and math.distance(mouse.x, mouse.y, ax, ay) <= 20
+    cab_bumper(ax, ay, 17, live and scol or bg[2], now, dir, hot)
+  end
 
-    graphics.print_centered(def.name, pixul_font, cx, cy + 2, 0, 0.9, 0.9, 0, 0, fg[0])
+  -- Position lamps: one insert per loadout, lit through the current pick.
+  local n  = #PADDLES.order
+  local lw = (n - 1)*14
+  for i = 1, n do
+    local lx = gw/2 - lw/2 + (i - 1)*14
+    local on = (i == self.shop_selected)
+    graphics.circle(lx, 334, on and 3.4 or 2, on and scol or Color(1, 1, 1, 0.18))
+    if on then graphics.circle(lx, 334, 5.6, Color(scol.r, scol.g, scol.b, 0.28)) end
+  end
 
-    if equipped then
-      graphics.print_centered('EQUIPPED', pixul_font, cx, cy + 18, 0, 1, 1, 0, 0, yellow[0])
-    elseif owned then
-      graphics.print_centered('OWNED', pixul_font, cx, cy + 18, 0, 1, 1, 0, 0, green[0])
-    else
-      -- Positional pricing: every locked card wears the NEXT unlock's cost.
-      local price  = PADDLES.next_price()
-      local afford = (state.wallet or 0) >= price
-      local pcol = afford and fg[0] or Color(red[0].r, red[0].g, red[0].b, 0.7)
-      graphics.print_centered(price .. ' BLOCKS', pixul_font, cx, cy + 18, 0, 1, 1, 0, 0, pcol)
-    end
+  -- ---- 5. spec panel ----
+  cab_panel(gw/2, SHOP_PANEL_CY, SHOP_PANEL_W, SHOP_PANEL_H, 6,
+            bg[-1], Color(scol.r, scol.g, scol.b, 0.35))
+  local px0 = gw/2 - SHOP_PANEL_W/2
 
-    if owned and not equipped then
-      graphics.print_centered('click to equip', pixul_font, cx, cy + 30, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+  graphics.print(sel.name, fat_font, px0 + 16, 364, 0, 0.95, 0.95, 0, 0, scol)
+  local chip, ccol = nil, fg[0]
+  if equipped then chip, ccol = 'EQUIPPED', yellow[0]
+  elseif owned then chip, ccol = 'OWNED', green[0]
+  else chip, ccol = 'LOCKED', afford and yellow[0] or red[0] end
+  local chw = pixul_font:get_text_width(chip)*0.9 + 14
+  graphics.rectangle(px0 + SHOP_PANEL_W - 16 - chw/2, 370, chw, 15, 3, 3,
+                     Color(ccol.r, ccol.g, ccol.b, 0.18))
+  graphics.rectangle(px0 + SHOP_PANEL_W - 16 - chw/2, 370, chw, 15, 3, 3,
+                     Color(ccol.r, ccol.g, ccol.b, 0.7), 1)
+  graphics.print_centered(chip, pixul_font, px0 + SHOP_PANEL_W - 16 - chw/2, 369,
+                          0, 0.9, 0.9, 0, 0, ccol)
+
+  local by = 390
+  for _, line in ipairs(wrap_text(sel.blurb, pixul_font, 0.88, SHOP_PANEL_W - 34)) do
+    graphics.print(line, pixul_font, px0 + 16, by, 0, 0.88, 0.88, 0, 0, fg[0])
+    by = by + 12
+  end
+  graphics.line(px0 + 14, 414, px0 + SHOP_PANEL_W - 14, 414, Color(1, 1, 1, 0.12), 1)
+
+  local hovered = self:shop_radar_hover()
+  self:draw_stat_radar(sel, scol, hovered)
+
+  -- Right column: signature, hull, starting balls.
+  local tx = 198
+  graphics.print('SIGNATURE', pixul_font, tx, 428, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+  local sy = 442
+  for _, line in ipairs(wrap_text(sel.sig_blurb, pixul_font, 0.88, 250)) do
+    graphics.print(line, pixul_font, tx, sy, 0, 0.88, 0.88, 0, 0, fg[0])
+    sy = sy + 12
+  end
+
+  graphics.print('HULL', pixul_font, tx, 478, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+  if sel.hp_mode == 'bar' then
+    -- The Vampire runs a draining blood bar instead of discrete hearts.
+    graphics.rectangle(tx + 66, 482, 62, 7, 3, 3, Color(0, 0, 0, 0.6))
+    graphics.rectangle(tx + 66, 482, 60, 5, 2, 2, Color(0.55, 0.03, 0.06, 1))
+    graphics.print('DRAINS', pixul_font, tx + 102, 476, 0, 0.75, 0.75, 0, 0, red[0])
+  else
+    for i = 1, (sel.hp or 5) do
+      heart_glyph(tx + 38 + (i - 1)*13, 482, 1.5, red[0])
     end
   end
 
-  -- Detail panel for the selected card.
-  local sel = PADDLES.get(PADDLES.order[self.shop_selected or 1])
-  local py = 478
-  graphics.rectangle(gw/2, py + 56, gw - 40, 118, 4, 4, bg[-1])
-  graphics.rectangle(gw/2, py + 56, gw - 40, 118, 4, 4, fg_transparent_weak, 1)
-  graphics.print_centered(sel.name, fat_font, gw/2, py + 14, 0, 0.8, 0.8, 0, 0, _G[sel.color_key][0])
-  graphics.print_centered(sel.blurb, pixul_font, gw/2, py + 34, 0, 0.9, 0.9, 0, 0, fg[0])
-  graphics.print_centered(sel.sig_blurb, pixul_font, gw/2, py + 48, 0, 0.9, 0.9, 0, 0, fg_alt[0])
+  graphics.print('STARTS WITH', pixul_font, tx, 502, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+  local hy = 518
+  for _, c in ipairs(sel.start_balls) do
+    local hc = (character_colors and character_colors[c]) or fg[0]
+    graphics.circle(tx + 5, hy + 3, 3.5, hc)
+    graphics.circle(tx + 4, hy + 2, 1.2, fg[5])
+    graphics.print(c, pixul_font, tx + 14, hy, 0, 0.88, 0.88, 0, 0, fg[0])
+    hy = hy + 13
+  end
+  if sel.signature == 'twincast' then
+    graphics.print('(mirrored pair)', pixul_font, tx + 14, hy, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+  end
 
-  local hp_s = (sel.hp_mode == 'bar') and 'BAR' or tostring(sel.hp)
-  local xp_s = (sel.xp_mode == 'flat') and 'FLAT' or string.format('%.1f', sel.xp)
-  graphics.print_centered(string.format(
-      'SIZE %.1f  MOVE %.1f  BALL %.1f  CHARGE %.1f  AIM %.1f',
-      sel.size, sel.move, sel.ball, sel.charge, sel.aim),
-    pixul_font, gw/2, py + 68, 0, 0.85, 0.85, 0, 0, fg[0])
-  graphics.print_centered(string.format(
-      'DMG %.1f  XP %s  COMBO %.1f  HP %s',
-      sel.dmg, xp_s, sel.combo, hp_s),
-    pixul_font, gw/2, py + 82, 0, 0.85, 0.85, 0, 0, fg[0])
+  -- ---- 6. action drop target ----
+  local act_hot = math.abs(mouse.x - gw/2) <= 130 and math.abs(mouse.y - SHOP_ACT_CY) <= 18
+  local label, acol, dim
+  if equipped then
+    label, acol, dim = 'EQUIPPED', green[0], true
+  elseif owned then
+    label, acol = 'PRESS START TO EQUIP', yellow[0]
+  else
+    label, acol = 'INSERT ' .. price .. ' BLOCKS', afford and yellow[0] or red[0]
+  end
+  cab_target(gw/2, SHOP_ACT_CY, 260, 36, label, acol, act_hot and not dim, dim)
 
-  local starts = {}
-  for _, c in ipairs(sel.start_balls) do starts[#starts + 1] = c end
-  graphics.print_centered('starts with: ' .. table.concat(starts, ', ') ..
-                          (sel.signature == 'twincast' and ' (mirrored)' or ''),
-                          pixul_font, gw/2, py + 96, 0, 0.85, 0.85, 0, 0, fg_alt[0])
+  -- ---- 7. flippers + hints ----
+  graphics.print_centered('<  >  SELECT      ENTER  START      R  RESTART RUN',
+                          pixul_font, gw/2, 616, 0, 0.8, 0.8, 0, 0, fg_alt[0])
+  cab_flipper(140, 638, -1, 44, Color(1, 1, 1, 0.28), now)
+  cab_flipper(340, 638,  1, 44, Color(1, 1, 1, 0.28), now)
+  graphics.circle(240, 642, 4, Color(1, 1, 1, 0.35))
+  graphics.circle(238.5, 640.5, 1.4, Color(1, 1, 1, 0.7))
+
+  -- ---- 8. tooltip, above everything ----
+  if hovered then self:draw_stat_tooltip(hovered, sel) end
 end
