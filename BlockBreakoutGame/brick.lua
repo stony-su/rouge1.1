@@ -20,6 +20,10 @@ local BRICK_W, BRICK_H = 18, 10
 -- up with the swarm planner's grid and adjacent cells of the same brick
 -- inherit the 4px gap that lives between separate 1×1 bricks.
 local CELL_W, CELL_H = 22, 14
+
+-- Seconds over which the Jester hex mark dissipates as its curse runs out (see
+-- the mark's draw block in Brick:draw). 0 = snap off with no fade.
+local JESTER_FADE = 0.7
 local DEFAULT_SHAPE = {{0, 0}}
 
 -- Hive "Infestation Contagion" tuning. The rot eats a brick (fraction of max HP
@@ -789,12 +793,22 @@ function Brick:draw()
   if self.jester_cursed then
     local c  = self.jester_color or red[0]
     local t  = love.timer.getTime()
+    -- Dissipate over the last JESTER_FADE seconds of the hex rather than
+    -- snapping off: the vortex dims AND draws its arms in, so a lapsing curse
+    -- reads as one winding down (and telegraphs that the brick is about to
+    -- stop being a knife bomb) instead of a mark that silently vanished.
+    -- jester_cursed clears the same frame the timer hits 0, so this is always a
+    -- live 1 -> 0 ramp and needs no extra state; a re-hex takes the max of the
+    -- timers, so refreshing mid-fade simply winds the swirl back up.
+    local fade   = math.min(1, (self.jester_curse_timer or 0)/JESTER_FADE)
+    local shrink = 0.8 + 0.2*fade
     -- Elliptical, following the brick's aspect: a circle would either overflow
     -- a flat brick's height or waste its width. The head dot (radius up to
     -- 1.25) sits ON this ellipse, so the arms stop half a pixel inside the body
     -- to keep the whole mark -- dot included -- clear of the next cell.
-    local rx = self.w/2 - 0.5
-    local ry = self.h/2 - 0.5
+    -- shrink only ever pulls the arms further in, so the gutter is safe.
+    local rx = (self.w/2 - 0.5)*shrink
+    local ry = (self.h/2 - 0.5)*shrink
     local a0 = t*4.2                                   -- swirl rate
     local segs = 7
     for arm = 0, 1 do                                  -- two opposed arms = vortex
@@ -809,12 +823,12 @@ function Brick:draw()
         if i > 0 then
           -- Taper alpha AND width toward the head so each arm reads as motion
           -- rather than as a static ring drawn around the brick.
-          graphics.line(px, py, x, y, Color(c.r, c.g, c.b, 0.15 + 0.65*f), 0.8 + f)
+          graphics.line(px, py, x, y, Color(c.r, c.g, c.b, (0.15 + 0.65*f)*fade), 0.8 + f)
         end
         px, py = x, y
       end
-      graphics.circle(px, py, 1.0 + 0.25*math.sin(t*7),
-                      Color(math.min(1, c.r + 0.45), c.g + 0.3, c.b + 0.3, 0.9))
+      graphics.circle(px, py, (1.0 + 0.25*math.sin(t*7))*fade,
+                      Color(math.min(1, c.r + 0.45), c.g + 0.3, c.b + 0.3, 0.9*fade))
     end
   end
 end
