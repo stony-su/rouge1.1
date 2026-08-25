@@ -20,6 +20,11 @@ function Projectile:init(args)
   self.chain    = self.chain or 0
   self.color    = self.color or fg[0]
   self.type     = self.type or 'arrow'
+  -- Per-shot size multiplier on both the drawn body and the physics circle.
+  -- Three different heroes fire type='arrow' (vagrant, archer, the turret in
+  -- effects.lua), so a bigger bolt has to be opt-in per shot rather than baked
+  -- into the type -- hence a scalar carried on the projectile itself.
+  self.proj_scale = self.proj_scale or 1
   -- Assassin extras: crit doubles the strike (already baked into dmg by the
   -- caller) and adds a burst on hit; bleed is the TOTAL DoT applied to every
   -- brick the knife pierces, spread over bleed_dur (see on_hit_brick).
@@ -61,7 +66,9 @@ function Projectile:init(args)
   self.life     = self.life or (self.wall_stick and 6 or (self.type == 'spellblade' and 0.85 or 1.5))
   self.hits     = {}
 
-  self:set_as_circle(2, 'dynamic', 'projectile')
+  -- The hit circle scales with the drawn body, so a visibly fatter bolt
+  -- actually catches more -- it isn't just a bigger sprite on the same dot.
+  self:set_as_circle(2*self.proj_scale, 'dynamic', 'projectile')
   self.body:setBullet(true)
   self:set_fixed_rotation(false)
   self:set_restitution(1)
@@ -199,8 +206,9 @@ function Projectile:draw()
   local r = self:get_angle() or 0
   graphics.push(self.x, self.y, r)
     if self.type == 'arrow' then
-      graphics.rectangle(self.x, self.y, 8, 2, nil, nil, self.color)
-      graphics.triangle(self.x + 4, self.y, 3, 3, self.color)
+      local ps = self.proj_scale
+      graphics.rectangle(self.x, self.y, 8*ps, 2*ps, nil, nil, self.color)
+      graphics.triangle(self.x + 4*ps, self.y, 3*ps, 3*ps, self.color)
     else
       graphics.rectangle(self.x, self.y, 6, 2, nil, nil, self.color)
     end

@@ -15,8 +15,15 @@ function XpOrb:init(args)
   -- shower now reads as a faint scatter you can see through. Value still tints
   -- the orb (blue < green < yellow) and nudges its size, just more subtly.
   local ramp  = self.value >= 5 and yellow or (self.value >= 2 and green or blue)
-  self.color  = Color(ramp[0].r, ramp[0].g, ramp[0].b, 0.6)
-  self.r_size = self.value >= 5 and 2.5 or (self.value >= 2 and 2 or 1.5)
+  -- Muted further: blended toward neutral, dimmed, and more transparent than
+  -- before. Two reasons. A cleared swarm dumps dozens of these at once and
+  -- they were still reading as a wall of beads; and enemy fire is now a single
+  -- red with a bloom on it (see EnemyProjectile:draw_glow), which only works
+  -- as a danger signal if the harmless pickups stay quiet by comparison.
+  local MUTE, GREY, DIM = 0.35, 0.42, 0.75
+  local function mute(v) return (v + (GREY - v)*MUTE)*DIM end
+  self.color  = Color(mute(ramp[0].r), mute(ramp[0].g), mute(ramp[0].b), 0.4)
+  self.r_size = self.value >= 5 and 1.8 or (self.value >= 2 and 1.4 or 1.1)
   -- Magnet range — the paddle pulls in any orb within this radius. Widened
   -- over time (64 -> 88 -> 130) so the paddle vacuums up a whole column of
   -- falling XP without having to pass directly under each orb.

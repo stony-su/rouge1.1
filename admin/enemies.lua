@@ -130,7 +130,15 @@ function EnemyProjectile:init(args)
   -- Bumped from 2.5 → 3.5 so the projectile reads as a real threat, not a
   -- pickup. Hero balls can also intercept it more easily at this size.
   self.r_size = self.r_size or 3.5
-  self.color  = self.color or fg[0]
+  -- ONE colour for every enemy shot. Callers used to pass their own (the
+  -- spreader's hue, the boss's phase tint, etc.) and the screen ended up with
+  -- incoming fire in five palettes, several of which are also hero-ball or
+  -- XP-gem colours. Red is now the single "this will hurt you" channel, and
+  -- nothing friendly uses it: the ONLY thing that repaints a shot after this
+  -- is EnemyProjectile:reflect, which turns a parried bullet gold precisely
+  -- because it has stopped being an enemy shot. Cloned rather than aliased so
+  -- a shot can never mutate the shared palette entry.
+  self.color  = Color(red[0].r, red[0].g, red[0].b, 1)
   self.speed  = self.speed or 60
   self.dmg    = self.dmg or 1
   -- Firing direction in radians. Defaults to straight down (π/2) so existing
@@ -394,9 +402,35 @@ function EnemyProjectile:draw_trail(color)
 end
 
 
--- Per-shape draw dispatch. The default 'spike' branch is the original
--- shooter look — kept identical so existing callers don't need updates.
+-- Shared glow, drawn UNDER every shot shape. Now that all enemy fire is one
+-- red, the shape alone is what separates a bullet from a hero ball or an XP
+-- gem -- and at 3.5px, in a busy field, shape is not enough. Two cheap layers
+-- fix it:
+--
+--   * a red BLOOM, three soft rings breathing on the shot's own spin clock.
+--     Neither a hero ball nor an XP orb glows, so a halo means "incoming"
+--     before the player has parsed the shape at all.
+--   * a dark BACKING disc right under the body, which punches the bullet out
+--     of the (near-black) grid so the silhouette stays crisp instead of the
+--     bloom washing into it.
+--
+-- Alphas are deliberately low: a bullet-hell screen is dozens of these at
+-- once, and they have to add up to legible, not to a red fog.
+function EnemyProjectile:draw_glow()
+  local c = self.color
+  local p = 0.85 + 0.15*math.sin((time or 0)*7 + (self.spin_t or 0))
+  local r = self.r_size
+  graphics.circle(self.x, self.y, r*2.9*p, Color(c.r, c.g, c.b, 0.05))
+  graphics.circle(self.x, self.y, r*2.0*p, Color(c.r, c.g, c.b, 0.10))
+  graphics.circle(self.x, self.y, r*1.35,  Color(c.r, c.g, c.b, 0.18))
+  graphics.circle(self.x, self.y, r + 0.8, Color(bg[-2].r, bg[-2].g, bg[-2].b, 0.85))
+end
+
+
+-- Per-shape draw dispatch. Every shape sits on the shared glow above; the
+-- shapes themselves still differ so attack patterns stay tellable apart.
 function EnemyProjectile:draw()
+  self:draw_glow()
   if     self.kind == 'dart'     then self:draw_dart()
   elseif self.kind == 'triangle' then self:draw_triangle()
   elseif self.kind == 'orb'      then self:draw_orb()
@@ -419,18 +453,17 @@ function EnemyProjectile:draw()
 end
 
 
--- 'spike' (shooter, default): original red 4-pointed spike + red halo + red
--- trail. Color is hardcoded red regardless of self.color so the projectile
--- always reads as "danger" and can never be confused for a colored XP gem —
--- EXCEPT a reflected (parried) spike, which flips to its gold self.color so
--- it reads as "ours" on the return trip.
+-- 'spike' (shooter, default): 4-pointed spike + halo + trail. This branch used
+-- to hardcode red[0] because it was the only shot guaranteed to read as danger;
+-- every shot is red now (see init), so it just uses self.color like the others
+-- -- which is also what keeps a parried spike gold.
 function EnemyProjectile:draw_spike()
-  local base = self.reflected and self.color or red[0]
+  local base = self.color
   self:draw_trail(base)
 
   local pulse = 1 + math.sin((time or 0)*9)*0.18
   graphics.circle(self.x, self.y, (self.r_size + 2)*pulse,
-                  self.reflected and Color(base.r, base.g, base.b, 0.22) or red_transparent_weak)
+                  Color(base.r, base.g, base.b, 0.22))
 
   local s   = self.hfx.hit.x or 1
   local col = self.hfx.hit.f and fg[0] or base
@@ -967,16 +1000,19 @@ end
 
 
 -- Every projectile the boss fires routes through here, so it always spawns at
--- the boss's live position, in its current phase colour, and — crucially —
--- flagged unbreakable. Returns the projectile (or nil), and no-ops safely when
--- called from a deferred timer after the world is gone / the boss has died.
+-- the boss's live position and — crucially — flagged unbreakable. Returns the
+-- projectile (or nil), and no-ops safely when called from a deferred timer
+-- after the world is gone / the boss has died.
+--
+-- No colour is passed: every enemy shot is red now (EnemyProjectile:init), so
+-- the boss's phase tint stays on the boss BODY, which is where it was always
+-- most readable -- its bullets no longer carry it.
 function Boss:fire(opts)
   local arena = main.current
   if not (arena and arena.main and arena.main.world and not self.dead) then return end
   opts.group = arena.main
   if opts.x == nil then opts.x = self.x end
   if opts.y == nil then opts.y = self.y end
-  opts.color = opts.color or self.color
   if opts.unbreakable == nil then opts.unbreakable = true end
   -- Boss bullets must survive long enough to cross the tall (~600px) arena and
   -- then despawn at the edge via EnemyProjectile's off-screen cleanup, instead

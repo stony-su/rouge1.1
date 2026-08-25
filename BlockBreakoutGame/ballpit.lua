@@ -2838,6 +2838,7 @@ function BallPit:fire_projectile_at_nearest(hero, opts)
         chain  = opts.chain or 0,
         chain_dmg_ramp = opts.chain_dmg_ramp,
         wall_stick = opts.wall_stick,
+        proj_scale = opts.proj_scale,
         color  = color,
       }
     end

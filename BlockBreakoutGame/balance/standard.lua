@@ -221,7 +221,8 @@ return {
     -- projectile shooter: arrow at nearest brick in range
     vagrant     = {dmg = 8,  cd = 0.5,  range = 96,  speed = 220, r = 6, base_speed = 160},
     -- crossbow bolt: infinite pierce, level 3 wall-ricochet
-    archer      = {dmg = 10, cd = 2.0,  range = 160, speed = 260, r = 5.5, base_speed = 175},
+    archer      = {dmg = 10, cd = 2.0,  range = 160, speed = 380, r = 5.5, base_speed = 175,
+                   proj_scale = 1.6},
     -- chain knife: leaps brick to brick (chain = hops)
     scout       = {dmg = 6,  cd = 2.0,  range = 64,  speed = 240, chain = 3, r = 5.5, base_speed = 180},
     -- constant spiral blade stream (spellblade_dmg_mult applies per shard)

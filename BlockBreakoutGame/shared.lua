@@ -97,9 +97,23 @@ function shared_init()
 end
 
 
+-- Backdrop tones. The grid is KEPT -- it still tiles the whole canvas at the
+-- same 15px pitch -- but pulled down to nearly black so it reads as texture
+-- under the play field instead of a pattern competing with it. Roughly a third
+-- of the old brightness (bg[0] was #0c0c14), holding the same ~0.6 lightness
+-- ratio between the two tones that bg[0]/bg[-1] had, so the checker stays as
+-- perceptible as it was -- just far dimmer.
+--
+-- Deliberately NOT a change to the bg ramp itself: bg[-1] and bg[-2] back
+-- every dark outline, powerup badge, HUD plate and shot backing in the game
+-- (60+ call sites), and darkening the palette would repaint all of them.
+local GRID_BASE = Color(0.016, 0.016, 0.027, 1)
+local GRID_CELL = Color(0.008, 0.008, 0.016, 1)
+
+
 function shared_draw(draw_action)
   background_canvas:draw_to(function()
-    graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, bg[0])
+    graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, GRID_BASE)
     -- Tiled background grid. Cell counts derive from gw/gh so the grid
     -- always covers the canvas if the game dimensions change.
     local cols = math.ceil(gw/15)
@@ -107,7 +121,7 @@ function shared_draw(draw_action)
     for i = 0, cols do
       for j = 0, rows do
         if (i + j) % 2 == 0 then
-          graphics.rectangle2(i*15, j*15, 15, 15, nil, nil, bg[-1])
+          graphics.rectangle2(i*15, j*15, 15, 15, nil, nil, GRID_CELL)
         end
       end
     end

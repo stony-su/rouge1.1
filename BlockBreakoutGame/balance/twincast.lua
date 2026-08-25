@@ -38,6 +38,20 @@ return {
     nova_dmg     = 26,             -- base nova damage (x loadout dmg)
     nova_level_growth = 0.5,       -- +50% nova damage per pair level
     orbit_pull   = 2.4,
+    -- The live tether strung between two charging twins. Damage is dealt on a
+    -- cadence to everything within beam_width of the line, so it scales with
+    -- how far apart the pair is flying, not with how often they touch things.
+    beam_dmg     = 5,      -- per pulse, per enemy on the line (x loadout dmg)
+    beam_width   = 7,      -- px either side of the line that counts as "on it"
+    beam_cd      = 0.2,    -- seconds between pulses
+    -- Nova spread bonus: how far apart the twins were when the final approach
+    -- began scales the blast. ref = the separation worth 1.0x; the multiplier
+    -- is clamped to [min, max] and applied to the RADIUS in full, to the damage
+    -- only in the nova_spread_dmg share of it (radius already squares to area).
+    nova_spread_ref  = 80,
+    nova_spread_min  = 0.7,
+    nova_spread_max  = 2.0,
+    nova_spread_dmg  = 0.6,
     fuse_converge = 0.2,   -- last fraction of the charge spent spiralling the
                            -- twins bodily onto the fuse point (0 = no approach,
                            -- they snap to the centre when the meter fills).
@@ -241,7 +255,8 @@ return {
     -- projectile shooter: arrow at nearest brick in range
     vagrant     = {dmg = 8,  cd = 0.5,  range = 96,  speed = 220, r = 6, base_speed = 160},
     -- crossbow bolt: infinite pierce, level 3 wall-ricochet
-    archer      = {dmg = 10, cd = 2.0,  range = 160, speed = 260, r = 5.5, base_speed = 175},
+    archer      = {dmg = 10, cd = 2.0,  range = 160, speed = 380, r = 5.5, base_speed = 175,
+                   proj_scale = 1.6},
     -- chain knife: leaps brick to brick (chain = hops)
     scout       = {dmg = 6,  cd = 2.0,  range = 64,  speed = 240, chain = 3, r = 5.5, base_speed = 180},
     -- constant spiral blade stream (spellblade_dmg_mult applies per shard)

@@ -51,7 +51,7 @@ local HERO_STATS = {
   -- as a WallArrow. Level 3: the bolt ricochets off the side/top walls 3
   -- times first. skin draws the ball as a tower base with a compact
   -- swiveling crossbow turret mounted on top.
-  archer      = {r = 5.5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'crossbow', range = 160, cd = 2.0,  speed = 260, skin = 'crossbow'},
+  archer      = {r = 5.5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'crossbow', range = 160, cd = 2.0,  speed = 380, proj_scale = 1.6, skin = 'crossbow'},
 
   -- ----- Chain knife (SNKRX scout port; behavior = 'chain_knife') -----
   -- The knife CHAINS: on each hit it leaps to a random nearby brick it
@@ -1997,7 +1997,8 @@ function BallHero:shoot_bolt(s)
   if self.stuck or self.returning then return end
   main.current:fire_projectile_at_nearest(self, {
     type = 'arrow', dmg = self:current_dmg()*BAL('globals.projectile_dmg_mult', PROJECTILE_DMG_MULT),
-    speed = s.speed or 260, range = s.range, color = self.color,
+    speed = s.speed or 380, range = s.range, color = self.color,
+    proj_scale = s.proj_scale or 1.6,
     pierce = 1000, ricochet = (self.level >= 3) and 3 or 0, wall_stick = true,
   })
   archer1:play{pitch = random:float(0.95, 1.05), volume = 0.35}

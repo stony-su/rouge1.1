@@ -150,9 +150,12 @@ PADDLES.defs = {
     -- echo of the old "double cast" feel).
     signature = 'twincast',
     sig = {cd_mult = 0.75, fuse_time = 8, fuse_window = 0.42, split_cd = 0.6,
-           nova_radius = 80, nova_dmg = 26, orbit_pull = 2.4, fuse_converge = 0.2},
-    blurb = 'Bonded twins orbit and FUSE into a nova supercast, then split.',
-    sig_blurb = 'charge the binary; strongest right after a fusion',
+           nova_radius = 80, nova_dmg = 26, orbit_pull = 2.4, fuse_converge = 0.2,
+           beam_dmg = 5, beam_width = 7, beam_cd = 0.2,
+           nova_spread_ref = 80, nova_spread_min = 0.7, nova_spread_max = 2.0,
+           nova_spread_dmg = 0.6},
+    blurb = 'Bonded twins burn a live tether between them, then FUSE into a nova.',
+    sig_blurb = 'the tether cuts whatever it crosses; the wider the twins when they draw in, the bigger the nova',
   },
   tesla = {
     id = 'tesla', name = 'Tesla', price = 3000, color_key = 'blue',
@@ -1026,6 +1029,37 @@ function BallPit:twincast_fuse_blast(x, y, radius, dmg, color, element)
 end
 
 
+-- One damage pulse along every live tether. Anything sitting on the line
+-- between two charging twins takes a tick -- once per pulse per enemy, so a
+-- brick straddling two pairs' tethers is still only bitten once by each.
+--
+-- Deliberately NOT contact-driven: the bond is drawn continuously, so tying the
+-- damage to a cadence is what makes the visual honest. Pairs in the 'fused'
+-- state are skipped because they draw no bond at all, and the line naturally
+-- stops mattering as a pair spirals in -- a wide pair sweeps a long cutting
+-- edge, a tight one sweeps almost nothing.
+function BallPit:twincast_beam_pulse()
+  local sig   = (self.run_mods and self.run_mods.sig) or {}
+  local dmg   = (sig.beam_dmg or 5)*((self.run_mods and self.run_mods.dmg) or 1)
+  local width = sig.beam_width or 7
+  for _, pr in ipairs(self.twin_pairs or {}) do
+    local a, b = pr.a, pr.b
+    if a and b and not a.dead and not b.dead and pr.state ~= 'fused' then
+      local burned = {}
+      for _, o in ipairs(self.main.objects) do
+        if not o.dead and not burned[o.id] and o.take_damage
+           and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+          if point_segment_distance(o.x, o.y, a.x, a.y, b.x, b.y) <= width then
+            burned[o.id] = true
+            o:take_damage(dmg, pr.color or blue[0])
+          end
+        end
+      end
+    end
+  end
+end
+
+
 -- Tangential speed of the final approach spiral, in px/sec. Held roughly
 -- constant as the radius closes, so the pair never outruns a live ball on its
 -- way into the fuse (a hero ball tops out near 385px/s at FRENZY).
@@ -1042,6 +1076,17 @@ function BallPit:twincast_tick(dt)
   local split_cd    = sig.split_cd    or 0.6
   local pull        = sig.orbit_pull  or 2.4
   local converge    = sig.fuse_converge or 0.2
+
+  -- The tether between a charging pair is LIVE: it cuts whatever it crosses, on
+  -- a steady cadence rather than on contact (same shape as the Tesla web). It
+  -- is the reason to keep the twins apart and swinging -- and it fades out on
+  -- its own as they spiral in, because a nearly-fused pair spans nothing.
+  self.twin_beam_t = (self.twin_beam_t or 0) + dt
+  if self.twin_beam_t >= (sig.beam_cd or 0.2) then
+    self.twin_beam_t = 0
+    self:twincast_beam_pulse()
+  end
+
   for _, pr in ipairs(self.twin_pairs or {}) do
     local a, b = pr.a, pr.b
     if a and b and not a.dead and not b.dead and a.body and b.body then
@@ -1085,6 +1130,14 @@ function BallPit:twincast_tick(dt)
             b:set_position(pr.conv_x - ca*r, pr.conv_y - sa*r)
             mx, my = pr.conv_x, pr.conv_y
           else
+            -- How far apart the pair is flying. Sampled only while they are
+            -- still free -- once the approach takes over, the scripted radius
+            -- is collapsing to zero and would overwrite this with nothing --
+            -- so it holds the separation they COMMITTED to the fuse at, which
+            -- is what sizes the nova below. Sampling here rather than inside
+            -- the approach also keeps it honest when fuse_converge is 0 and
+            -- there is no approach at all.
+            pr.spread = (math.distance(a.x, a.y, mx, my) + math.distance(b.x, b.y, mx, my))/2
             self:twincast_orbit(a, mx, my, pr.charge, pr.winding, pull, dt)
             self:twincast_orbit(b, mx, my, pr.charge, pr.winding, pull, dt)
           end
@@ -1098,8 +1151,19 @@ function BallPit:twincast_tick(dt)
             a:set_velocity(0, 0);    b:set_velocity(0, 0)
             a.spring:pull(0.6);      b.spring:pull(0.6)
             local lvl = a.level or 1
-            local dmg = (sig.nova_dmg or 26)*(1 + BAL('signature.nova_level_growth', 0.5)*(lvl - 1))*((self.run_mods.dmg) or 1)
-            self:twincast_fuse_blast(mx, my, sig.nova_radius or 80, dmg, pr.color or blue[0], pr.element)
+            -- Spread bonus: the wider the twins were when the approach began,
+            -- the bigger the blast. Radius takes the multiplier straight;
+            -- damage takes a dampened share of it (nova_spread_dmg), because
+            -- radius already squares into area and a full double on both would
+            -- make a wide fuse worth roughly four tight ones.
+            local sp_mult = math.clamp((pr.spread or 0)/(sig.nova_spread_ref or 80),
+                                       sig.nova_spread_min or 0.7,
+                                       sig.nova_spread_max or 2.0)
+            local dmg_mult = 1 + (sp_mult - 1)*(sig.nova_spread_dmg or 0.6)
+            local dmg = (sig.nova_dmg or 26)*(1 + BAL('signature.nova_level_growth', 0.5)*(lvl - 1))
+                        *((self.run_mods.dmg) or 1)*dmg_mult
+            self:twincast_fuse_blast(mx, my, (sig.nova_radius or 80)*sp_mult, dmg,
+                                     pr.color or blue[0], pr.element)
           end
         else
           -- Caught / serving mid-approach: drop the captured spiral so it is
