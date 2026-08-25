@@ -2111,6 +2111,18 @@ function BallHero:update(dt)
     if self.mitosis_decay_t <= 0 then self:mitosis_die(); return end
   end
 
+  -- Multi-ball copy arrival / departure. Both drive the same body scale (see
+  -- copy_scale), so a copy is never on screen at full size for a frame it
+  -- wasn't also on screen for at partial size.
+  if self.copy_in_t then
+    self.copy_in_t = self.copy_in_t + dt
+    if self.copy_in_t >= (self.copy_in_dur or 0.3) then self.copy_in_t = nil end
+  end
+  if self.copy_out_t then
+    self.copy_out_t = self.copy_out_t - dt
+    if self.copy_out_t <= 0 then self:copy_expire(); return end
+  end
+
   -- Crescent skin (swordsman): bank the slash arc into the travel direction
   -- with a smooth turn; while stuck it eases back to pointing up, ready for
   -- the launch. cleave_flash_t drives the full slash-ring flash in draw.
@@ -2765,6 +2777,72 @@ function BallHero:begin_mitosis_decay(life)
 end
 
 
+-- ----- Multi-ball copies: arrival, departure, and the body scale -----
+-- A copy is a temporary duplicate of a real ball (BallPit:apply_multi_ball).
+-- It used to appear and disappear on a single frame each way, which read as a
+-- glitch rather than an effect -- twelve balls simply became six. These three
+-- functions give it a way in and a way out; the dashed ring that marks it as a
+-- copy while it's alive is in BallHero:draw.
+
+-- Body scale for a copy that is arriving or leaving. Folded into the same
+-- `grow` push the mitosis bud uses, so one transform covers both and neither
+-- has to know about the other.
+function BallHero:copy_scale()
+  -- Leaving wins over arriving: a copy killed early (the buff re-rolled, say)
+  -- collapses from wherever it had got to rather than finishing its entrance.
+  if self.copy_out_t and self.copy_out_dur then
+    local f = math.clamp(self.copy_out_t/self.copy_out_dur, 0, 1)
+    return f*f                        -- accelerating collapse: it drops away
+  end
+  if self.copy_in_t and self.copy_in_dur then
+    local f = math.clamp(self.copy_in_t/self.copy_in_dur, 0, 1)
+    return math.max(0.05, f*(2 - f))  -- ease-out: fast bloom, soft landing
+  end
+  return 1
+end
+
+
+function BallHero:begin_copy_in(dur)
+  self.is_copy     = true
+  self.copy_in_dur = dur or 0.3
+  self.copy_in_t   = 0
+  self.spring:pull(0.4)
+  local arena = main.current
+  if arena and arena.effects then
+    TelegraphRing{group = arena.effects, x = self.x, y = self.y,
+                  radius = (self.r_size or 6)*2.2, color = self.color, duration = 0.25}
+  end
+end
+
+
+-- Start the wind-down. Idempotent: a second call while one is already running
+-- must not restart the collapse and hand the copy extra life.
+function BallHero:begin_copy_out(dur)
+  if self.copy_out_t then return end
+  self.copy_out_dur = dur or 0.45
+  self.copy_out_t   = self.copy_out_dur
+  self.copy_in_t    = nil
+end
+
+
+-- The copy finishes collapsing and is gone. Mirrors mitosis_die: burst, drop
+-- the body, compact the roster.
+function BallHero:copy_expire()
+  if self.dead then return end
+  local arena = main.current
+  if arena and arena.effects then
+    spawn_burst(arena.effects, self.x, self.y, self.color, 5, 40, 90)
+  end
+  if self.body then self.body:setActive(false) end
+  self.dead = true
+  if arena and arena.heroes then
+    for i = #arena.heroes, 1, -1 do
+      if arena.heroes[i] and arena.heroes[i].dead then table.remove(arena.heroes, i) end
+    end
+  end
+end
+
+
 -- Feed a decaying cell at the paddle: the countdown restarts from full, but on
 -- whatever (shorter) fuse the caller passes, so a bounce buys the clone more
 -- time without ever making it immortal. mitosis_decay_max is reset alongside
@@ -2990,6 +3068,26 @@ function BallHero.draw_preview(character, x, y, r_size)
 end
 
 
+-- Alpha for a ball sitting in the paddle's half of the pit. Below the red
+-- dotted breach line is exactly where enemy fire converges on the paddle, and
+-- a crowd of opaque balls down there hides the shots the player has to dodge --
+-- which is the one place in the run where seeing them matters most.
+--
+-- Ramped over PIT_FADE_BAND rather than switched at the line: a ball crossing
+-- the boundary would otherwise flicker between two alphas as it bounced, and
+-- the line is a soft warning, not a hard edge.
+local PIT_FADE_ALPHA = 0.45   -- alpha once fully into the paddle's half
+local PIT_FADE_BAND  = 28     -- px below the line over which it fades in
+
+function BallHero:pit_alpha()
+  local arena = main.current
+  if not (arena and arena.breach_line_y) then return 1 end
+  local d = self.y - arena:breach_line_y()      -- >0 = below the line (y is DOWN)
+  if d <= 0 then return 1 end
+  return 1 - (1 - PIT_FADE_ALPHA)*math.clamp(d/PIT_FADE_BAND, 0, 1)
+end
+
+
 function BallHero:draw()
   -- Cannon loadout hop: the airborne ball is drawn AFTER the whole main group
   -- (BallPit:draw_hop_layer -> draw_hop) so it hovers ABOVE the bricks it
@@ -3008,9 +3106,18 @@ function BallHero:draw()
   end
 
   -- Freshly-budded daughter cell: scale the whole body up from a point so it
-  -- "grows" out of its parent (mitosis) instead of popping in.
-  local grow = self:mitosis_grow_factor()
+  -- "grows" out of its parent (mitosis) instead of popping in. A multi-ball
+  -- copy rides the SAME transform for its arrival and its collapse, so the two
+  -- compose instead of fighting over the matrix.
+  local grow = self:mitosis_grow_factor()*self:copy_scale()
   if grow < 1 then graphics.push(self.x, self.y, 0, grow, grow) end
+
+  -- Everything from here to the label is the ball's BODY -- skin, ram trail,
+  -- parry rim, terror telegraph, copy ring -- and all of it fades together
+  -- once the ball drops below the breach line. Set after the early returns
+  -- above so there is no path out of this function that skips the restore.
+  local pit_a = self:pit_alpha()
+  if pit_a < 1 then graphics.alpha_mult = pit_a end
 
   self.spring:pull(0)
   local s = self.spring.x
@@ -3048,6 +3155,24 @@ function BallHero:draw()
     end
   end
 
+  -- Multi-ball copy marker: a slowly rotating BROKEN ring, so a doubled field
+  -- reads at a glance as "these are mine, those are borrowed". Deliberately
+  -- drawn in the ball's own colour and outline-only -- gold (Aegis parry) and
+  -- red (Terrorist armed) rings already mean specific things, and a ring with
+  -- gaps in it reads as "not solid" without adding another colour to a screen
+  -- that is already carrying enemy red and the combo meter. Scaled by `grow`
+  -- so it collapses with the body instead of hanging in the air after it.
+  if self.is_copy and grow > 0.02 then
+    local ct = love.timer.getTime()
+    local rr = (self.r_size + 2.5)*grow
+    local a0 = ct*1.6
+    local c  = self.color
+    for i = 0, 5 do
+      local a = a0 + i*(math.pi/3)
+      graphics.arc('open', self.x, self.y, rr, a, a + 0.36, Color(c.r, c.g, c.b, 0.55), 1.2)
+    end
+  end
+
   -- Aegis parried ball: a thin pulsing gold rim while charged hits remain, so
   -- the player can track which ball is carrying the parry payload.
   if (self.parry_hits_left or 0) > 0 then
@@ -3069,6 +3194,11 @@ function BallHero:draw()
     graphics.circle(fx2, fy2, 1.6 + pulse*1.2, Color(1, 0.85, 0.35, 0.9))
     graphics.circle(fx2, fy2, 0.8, Color(1, 1, 1, 1))
   end
+
+  -- Body done: back to full strength. The debug label and the charge ring
+  -- below are readouts, not part of the ball, so they stay legible even when
+  -- the ball they belong to has faded.
+  graphics.alpha_mult = 1
 
   if main.current.show_hero_labels then
     graphics.print_centered(self.character:sub(1, 3), pixul_font, self.x, self.y - self.r_size - 6, 0, 1, 1, 0, 0, fg[0])

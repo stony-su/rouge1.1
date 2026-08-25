@@ -2,6 +2,25 @@ graphics = {}
 graphics.debug_queries = {}
 graphics.debug_draw = false
 
+-- Global alpha multiplier folded into every colour this module sets. 1 = off.
+--
+-- Set it around a block of draws to fade that whole block without every call
+-- site having to thread an alpha through. That matters because the things that
+-- want fading here are composites: a hero ball is ~20 different skins, each
+-- painting in its own colours, and an enemy shot is 11 shapes plus a sampled
+-- trail that builds its own alphas per sample. Neither can be dimmed by
+-- passing a colour in.
+--
+-- It is global state, so ALWAYS restore it to 1 on the same path that set it,
+-- and never leave it set across a frame boundary. Current users:
+-- BallHero:draw (balls below the breach line) and EnemyProjectile:draw (shots
+-- burning out).
+graphics.alpha_mult = 1
+
+local function set_col(color)
+  love.graphics.setColor(color.r, color.g, color.b, (color.a or 1)*graphics.alpha_mult)
+end
+
 
 -- All operations after this is called will be affected by the transform.
 function graphics.push(x, y, r, sx, sy)
@@ -76,7 +95,7 @@ end
 
 function graphics.print(text, font, x, y, r, sx, sy, ox, oy, color)
   local _r, g, b, a = love.graphics.getColor()
-  if color then love.graphics.setColor(color.r, color.g, color.b, color.a) end
+  if color then set_col(color) end
   if (font.tracking or 0) ~= 0 and (r or 0) == 0 then
     print_tracked(text, font, x, y, sx or 1, sy or 1, ox, oy)
   else
@@ -89,7 +108,7 @@ end
 -- Prints text to the screen centered on x, y, alternative to using a Text object.
 function graphics.print_centered(text, font, x, y, r, sx, sy, ox, oy, color)
   local _r, g, b, a = love.graphics.getColor()
-  if color then love.graphics.setColor(color.r, color.g, color.b, color.a) end
+  if color then set_col(color) end
   local cox = (ox or 0) + font:get_text_width(text)/2
   local coy = (oy or 0) + font.h/2
   if (font.tracking or 0) ~= 0 and (r or 0) == 0 then
@@ -105,10 +124,10 @@ function graphics.shape(shape, color, line_width, ...)
   local r, g, b, a = love.graphics.getColor()
   if not color and not line_width then love.graphics[shape]("line", ...)
   elseif color and not line_width then
-    love.graphics.setColor(color.r, color.g, color.b, color.a)
+    set_col(color)
     love.graphics[shape]("fill", ...)
   else
-    if color then love.graphics.setColor(color.r, color.g, color.b, color.a) end
+    if color then set_col(color) end
     love.graphics.setLineWidth(line_width)
     love.graphics[shape]("line", ...)
     love.graphics.setLineWidth(1)
@@ -192,7 +211,7 @@ end
 -- Draws a line with the given points.
 function graphics.line(x1, y1, x2, y2, color, line_width)
   local r, g, b, a = love.graphics.getColor()
-  if color then love.graphics.setColor(color.r, color.g, color.b, color.a) end
+  if color then set_col(color) end
   if line_width then love.graphics.setLineWidth(line_width) end
   love.graphics.line(x1, y1, x2, y2)
   love.graphics.setColor(r, g, b, a)
@@ -202,7 +221,7 @@ end
 
 function graphics.polyline(color, line_width, ...)
   local r, g, b, a = love.graphics.getColor()
-  if color then love.graphics.setColor(color.r, color.g, color.b, color.a) end
+  if color then set_col(color) end
   if line_width then love.graphics.setLineWidth(line_width) end
   love.graphics.line(...)
   love.graphics.setColor(r, g, b, a)
@@ -229,7 +248,7 @@ end
 -- If line_width is passed in then the lines will not be filled and will instead be drawn as a set of lines of the given width.
 function graphics.dashed_line(x1, y1, x2, y2, dash_size, gap_size, color, line_width)
   local r, g, b, a = love.graphics.getColor()
-  if color then love.graphics.setColor(color.r, color.g, color.b, color.a) end
+  if color then set_col(color) end
   if line_width then love.graphics.setLineWidth(line_width) end
   local dx, dy = x2-x1, y2-y1
   local an, st = math.atan2(dy, dx), dash_size + gap_size
@@ -249,7 +268,7 @@ end
 -- If color is passed in then the lines will be filled with that color (color is Color object)
 -- If line_width is passed in then the lines will not be filled and will instead be drawn as a set of lines of the given width.
 function graphics.dashed_rounded_line(x1, y1, x2, y2, dash_size, gap_size, color, line_width)
-  if color then love.graphics.setColor(color.r, color.g, color.b, color.a) end
+  if color then set_col(color) end
   if line_width then love.graphics.setLineWidth(line_width) end
   local dx, dy = x2-x1, y2-y1
   local an, st = math.atan2(dy, dx), dash_size + gap_size
@@ -293,7 +312,7 @@ end
 
 -- Sets the currently active color, the passed in argument should be a Color object.
 function graphics.set_color(color)
-  love.graphics.setColor(color.r, color.g, color.b, color.a)
+  set_col(color)
 end
 
 

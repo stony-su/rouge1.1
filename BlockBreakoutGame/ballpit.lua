@@ -3528,19 +3528,20 @@ function BallPit:apply_multi_ball()
     hero.is_clone = true
     hero.level  = src.level
     hero.dmg    = src.dmg
+    -- Mark it as a copy and scale it in. is_copy drives the dashed ring that
+    -- tells copies apart from the real balls for the whole 12s; begin_copy_in
+    -- is the arrival animation (see BallHero:copy_scale).
+    hero:begin_copy_in(0.3)
     table.insert(clones, hero)
   end
+  -- Wind them down rather than deleting them. The copies used to be killed
+  -- outright on this frame -- setActive(false) + dead on the same tick -- so
+  -- half a full field blinked out between two frames and read as a bug. Each
+  -- copy now collapses over copy_out and removes ITSELF at the end
+  -- (BallHero:copy_expire, which also compacts the roster).
   self.t:after(12, function()
     for _, h in ipairs(clones) do
-      if h and not h.dead then
-        if h.body then h.body:setActive(false) end
-        h.dead = true
-      end
-    end
-    for i = #self.heroes, 1, -1 do
-      if self.heroes[i] and self.heroes[i].dead then
-        table.remove(self.heroes, i)
-      end
+      if h and not h.dead and h.begin_copy_out then h:begin_copy_out(0.45) end
     end
   end)
 end

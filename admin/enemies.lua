@@ -209,13 +209,50 @@ function EnemyProjectile:init(args)
   -- Optional self-destruct timer so short-range bullet-hell shots don't pile
   -- up forever when fired away from the paddle.
   if self.life then
-    self.t:after(self.life, function() self.dead = true end)
+    self.t:after(self.life, function() self:begin_despawn() end)
   end
 end
+
+-- Burn-out. A shot that reached the end of its life, or was shot down by a
+-- ball, used to blink off in a single frame -- which reads as a rendering
+-- glitch rather than "that one is gone". It now leaves the FIGHT immediately
+-- (update bails before every hit test below, so it cannot strike the paddle,
+-- be parried, or damage a brick) while continuing to drift and draw for
+-- despawn_dur, fading out under a ring that pushes off it.
+--
+-- The body is deliberately left active: enemy shots collide with nothing at
+-- the Box2D level anyway (the paddle hit is a manual sweep in update), so a
+-- burning-out shot coasting on its last heading is free and looks better than
+-- one that freezes. Idempotent -- the life timer, take_damage and a stray
+-- caller can all reach it.
+function EnemyProjectile:begin_despawn(dur)
+  if self.expiring or self.dead then return end
+  self.expiring    = true
+  self.despawn_dur = dur or 0.22
+  self.despawn_t   = self.despawn_dur
+end
+
+
+-- 1 in normal flight, 1 -> 0 across the burn-out.
+function EnemyProjectile:despawn_factor()
+  if not (self.expiring and self.despawn_dur) then return 1 end
+  return math.clamp(self.despawn_t/self.despawn_dur, 0, 1)
+end
+
 
 function EnemyProjectile:update(dt)
   self:update_game_object(dt)
   local arena = main.current
+
+  -- Burning out: still drifting, still drawing, but out of the fight. Every
+  -- branch below this point is fight logic, so bail here rather than adding a
+  -- `not self.expiring` guard to each of them and hoping none is missed.
+  if self.expiring then
+    self.despawn_t = self.despawn_t - dt
+    if self.despawn_t <= 0 then self.dead = true end
+    self.spin_t = self.spin_t + self.spin_speed*dt
+    return
+  end
 
   -- Homing: smoothly rotate velocity toward the target. Capped turn rate so
   -- the player can still dodge by moving — these aren't perfect trackers —
@@ -430,6 +467,12 @@ end
 -- Per-shape draw dispatch. Every shape sits on the shared glow above; the
 -- shapes themselves still differ so attack patterns stay tellable apart.
 function EnemyProjectile:draw()
+  -- One multiplier fades the shape, its glow AND its sampled trail together.
+  -- The trail builds its own per-sample alphas, so it cannot be faded by
+  -- passing a colour in -- see graphics.alpha_mult.
+  local f = self:despawn_factor()
+  if f < 1 then graphics.alpha_mult = f end
+
   self:draw_glow()
   if     self.kind == 'dart'     then self:draw_dart()
   elseif self.kind == 'triangle' then self:draw_triangle()
@@ -449,6 +492,16 @@ function EnemyProjectile:draw()
   -- "ours now" even on shapes with busy bodies.
   if self.reflected then
     graphics.circle(self.x, self.y, self.r_size + 1.5, Color(1, 0.90, 0.50, 0.4), 1)
+  end
+
+  -- Burn-out ring: pushes outward off the shot as it fades, so the shot reads
+  -- as dissipating rather than simply getting dimmer. Drawn at full strength
+  -- (its own alpha already carries the fade) after the multiplier is released.
+  if f < 1 then
+    graphics.alpha_mult = 1
+    local c = self.color
+    graphics.circle(self.x, self.y, self.r_size*(1 + 2.4*(1 - f)),
+                    Color(c.r, c.g, c.b, 0.4*f), 1)
   end
 end
 
@@ -652,9 +705,14 @@ function EnemyProjectile:take_damage(amount, color)
   -- them (see the init mask) and the arena's AoE abilities skip non-Brick
   -- objects, so reaching here is unexpected — absorb it rather than dying.
   if self.unbreakable then return end
+  if self.expiring then return end          -- already burning out; don't re-burst
   self.hfx:use('hit', 0.25, 200, 10)
   spawn_burst(main.current.effects, self.x, self.y, color or self.color, 3, 40, 80)
-  self.dead = true
+  -- Shot down: the burst is the impact, the burn-out is the shot leaving. It
+  -- used to be deleted on this frame, which is the case the player sees most
+  -- often -- balls knock these out constantly -- so it is the one that most
+  -- needed a way out. Quicker than a timeout: this one was killed, not spent.
+  self:begin_despawn(0.14)
 end
 
 function EnemyProjectile:apply_slow() end
