@@ -455,7 +455,9 @@ function Paddle:draw()
   -- Destroyed: PaddleDeath is drawing the wreckage now (see BallPit's death
   -- sequence). Stays set until reset_run builds a fresh paddle, so the bar is
   -- gone on the game-over screen too.
-  if self.destroyed then return end
+  -- Hidden: the title screen's rule has not landed on this spot yet, so the
+  -- paddle must not be sitting there already (see BallPit:finish_title).
+  if self.destroyed or self.hidden then return end
   if not self.phased then return self:draw_body() end
   local prev = graphics.alpha_mult
   graphics.alpha_mult = prev*PHASED_ALPHA

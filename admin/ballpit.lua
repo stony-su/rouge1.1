@@ -262,6 +262,29 @@ function BallPit:init(name)
   -- Admin damage-source overlay (F2 or the terminal 'dmg' command). Lives on
   -- the State, not the run, so the toggle survives restarts.
   self.show_dmg_tally = false
+
+  -- ----- Title screen (pinball backglass) -----
+  --
+  -- Set HERE, in init, and never in reset_run: the title is a boot screen, and
+  -- a restart drops straight back into play (the run report has its own restart
+  -- button rather than bouncing you through the title again).
+  --
+  -- The only moving parts are the logo assembling and, on start, the rule
+  -- turning into the paddle. A backglass is printed art -- it does not have
+  -- things drifting across it.
+  self.title_open  = true
+  self.title_t     = 0
+  self.title_phase = 'idle'
+  self.launch_t    = 0
+  self.title_selected = 1
+  -- Tutorial is a sub-page of the title, not a separate screen: it borrows the
+  -- same glass and returns to the menu. (admin's terminal already guards on
+  -- tutorial_open, so the debug console stays out of the way while it is up.)
+  self.tutorial_open  = false
+  self.tutorial_page  = 1
+  self.tutorial_t     = 0
+  self.tutorial_phase = 'idle'
+  self.tutorial_anim  = 0
 end
 
 
@@ -440,6 +463,14 @@ end
 
 function BallPit:on_enter()
   self:reset_run()
+  -- Boot: the backglass is up. The run is built so the title's rule has a real
+  -- paddle to aim at, but nothing may spawn into it and the paddle itself stays
+  -- hidden until the rule lands on its spot (see finish_title).
+  if self.title_open then
+    self.t:cancel('spawn_swarm')
+    self.t:cancel('spawn_brick')
+    if self.paddle then self.paddle.hidden = true end
+  end
   -- Pick a random music track on loop. The list is auto-discovered from
   -- assets/music/ at boot (see main.lua). If the folder is empty, songs
   -- will be empty and the music channel stays silent — gameplay is
@@ -1139,6 +1170,27 @@ function BallPit:update(dt)
     return
   end
 
+  -- Title: the arena is BUILT but wholly frozen behind the backglass -- self.t
+  -- is not ticked either, so no wave timer, powerup pity or spawn can fire into
+  -- the world the rule is about to drop into. Handled ahead of everything else
+  -- for exactly that reason.
+  if self.title_open then
+    if input.escape.pressed then
+      self.settings_open = not self.settings_open
+      ui_switch1:play{volume = 0.3}
+    end
+    if self.settings_open then self:update_settings(dt) return end
+    if self.tutorial_open then
+      self:update_tutorial(dt)
+      self.ui:update(dt)
+      return
+    end
+    self:update_title(dt)
+    self.ui:update(dt)
+    return
+  end
+
+
   -- Page transitions run ahead of every early return below: a restart's gate
   -- has to keep animating after game_over has already been cleared, and the
   -- reset itself happens on the frame the shutters are shut (paddles.lua).
@@ -1326,6 +1378,585 @@ function BallPit:update(dt)
 end
 
 
+-- ----- Title screen ---------------------------------------------------------
+--
+-- A pinball BACKGLASS: a solid panel behind a printed bezel, a symmetrical
+-- sunburst crest, the marquee, and a rule under it. One ink colour in two
+-- tints -- signwriting, not a colour wheel -- and nothing glows or drifts.
+--
+-- The rule under the title is the piece that matters: on start it does not fade
+-- out, it SHRINKS AND DROPS INTO THE PADDLE. The arena behind the glass is
+-- already built (on_enter), with the real paddle hidden, so the rule can be
+-- aimed at that paddle's exact spawn point and width. It lands, the run is
+-- rebuilt, and the paddle that appears is the rule -- same place, same size.
+local TITLE_TEXT    = 'BALL PIT X'
+local TITLE_STAGGER = 0.055
+local TITLE_DROP    = 0.34
+local TITLE_SETTLE  = TITLE_STAGGER*(#TITLE_TEXT - 1) + TITLE_DROP
+local TITLE_SCALE   = 2.0
+local TITLE_Y       = 0.285      -- fractions of screen height
+local RULE_Y        = 0.365
+local RULE_HALF     = 96         -- rule half-width at rest
+local LAUNCH_DUR    = 1.05       -- rule -> paddle
+
+-- The whole screen is these five values. Deep panel, a slightly lifted inlay,
+-- gold ink with a bronze tint for the quiet strokes, and a warm off-white for
+-- text that has to be read rather than admired.
+local GLASS_DEEP   = Color(0.055, 0.045, 0.085, 1)
+local GLASS_PANEL  = Color(0.086, 0.072, 0.125, 1)
+local INK_GOLD     = Color(0.93, 0.78, 0.38, 1)
+local INK_BRONZE   = Color(0.55, 0.42, 0.22, 1)
+local INK_PALE     = Color(0.88, 0.85, 0.79, 1)
+local INK_GOLD_DIM = Color(0.72, 0.60, 0.30, 1)
+
+
+-- The two plates under the rule. Geometry FIRST, read by both the hit test and
+-- the draw, so a plate can never be painted somewhere it cannot be clicked.
+function BallPit:title_buttons()
+  return {
+    {id = 'play',     label = 'PLAY',     x = gw/2, y = gh*0.455, w = 132, h = 24},
+    {id = 'tutorial', label = 'TUTORIAL', x = gw/2, y = gh*0.520, w = 132, h = 24},
+  }
+end
+
+
+function BallPit:title_button_under_mouse()
+  for i, b in ipairs(self:title_buttons()) do
+    if mouse.x >= b.x - b.w/2 and mouse.x <= b.x + b.w/2
+    and mouse.y >= b.y - b.h/2 and mouse.y <= b.y + b.h/2 then return b, i end
+  end
+  return nil
+end
+
+
+function BallPit:title_select(delta)
+  local n = #self:title_buttons()
+  local s = ((self.title_selected or 1) - 1 + delta) % n + 1
+  if s ~= self.title_selected then
+    self.title_selected = s
+    ui_switch1:play{volume = 0.25}
+  end
+end
+
+
+function BallPit:title_activate()
+  local b = self:title_buttons()[self.title_selected or 1]
+  if not b then return end
+  if b.id == 'play' then
+    self:start_title_launch()
+  else
+    self.tutorial_open  = true
+    self.tutorial_page  = 1
+    self.tutorial_t     = 0
+    self.tutorial_phase = 'in'
+    self.tutorial_anim  = 0
+    ui_switch1:play{volume = 0.3}
+  end
+end
+
+
+function BallPit:update_title(dt)
+  self.title_t = (self.title_t or 0) + dt
+
+  if self.title_phase == 'launch' then
+    self.launch_t = (self.launch_t or 0) + dt
+    if self.launch_t >= LAUNCH_DUR then self:finish_title() end
+    return
+  end
+
+  -- Hover picks; W/S and the arrows move; SPACE / ENTER commit. A click only
+  -- counts ON a plate -- a stray click in the margin used to start the run,
+  -- which is not what a menu with two choices on it should do.
+  local hovered, idx = self:title_button_under_mouse()
+  if hovered and idx ~= self.title_selected then
+    self.title_selected = idx
+    ui_switch1:play{volume = 0.25}
+  end
+  if input.move_up.pressed   or input.aim_left.pressed  then self:title_select(-1) end
+  if input.move_down.pressed or input.aim_right.pressed then self:title_select(1)  end
+  if input.confirm.pressed or input.launch.pressed
+  or (input.click.pressed and hovered) then
+    self:title_activate()
+  end
+end
+
+
+-- Begin the transformation. Everything the rule needs to become is read off the
+-- REAL paddle: on_enter built the run before the glass went up and the title
+-- branch freezes it, so that paddle is sitting untouched at its spawn point --
+-- which is exactly where the rule has to end up for the hand-off to read as one
+-- object rather than a swap.
+function BallPit:start_title_launch()
+  if self.title_phase == 'launch' then return end
+  self.title_phase = 'launch'
+  self.launch_t    = 0
+  local p = self.paddle
+  self.launch_to_x = (p and p.x) or gw/2
+  self.launch_to_y = (p and p.y) or (self.y2 - 14)
+  self.launch_to_w = (p and p.w) or 36
+  self.launch_to_h = (p and p.h) or 4
+  mine1:play{volume = 0.45, pitch = 0.72}
+end
+
+
+-- The rule has landed. Rebuild the run so play starts clean; the fresh paddle
+-- spawns at the point the rule just came to rest on, at the width it just
+-- shrank to, so the glass lifting reveals the same object that fell.
+function BallPit:finish_title()
+  self.title_open  = false
+  self.title_phase = 'idle'
+  self:reset_run()
+  -- Struck AFTER the rebuild, so it survives into the first frame of play.
+  local p = self.paddle
+  if p then
+    TelegraphRing{group = self.effects, x = p.x, y = p.y, radius = 44,
+                  color = INK_GOLD, duration = 0.30}
+    spawn_burst(self.effects, p.x, p.y, INK_GOLD, 14, 70, 190)
+  end
+  spawn1:play{volume = 0.45}
+  camera:shake(3, 0.18, 90)
+end
+
+
+-- Rule geometry for the current frame: where it is, how wide, how thick. At
+-- rest it is the keyline under the title; mid-launch it is on its way to being
+-- the paddle. One function so the drawn rule and the landing point can never
+-- disagree.
+function BallPit:title_rule_pose()
+  local cx, cy = gw/2, gh*RULE_Y
+  local half, th = RULE_HALF, 2
+  if self.title_phase ~= 'launch' then return cx, cy, half, th, 0 end
+  -- Held briefly, then eased in and out of the drop: it leaves reluctantly and
+  -- arrives softly, which is what makes it read as being placed rather than
+  -- dropped.
+  local k = math.clamp(((self.launch_t or 0) - 0.14)/0.74, 0, 1)
+  local e = (k < 0.5) and (2*k*k) or (1 - ((-2*k + 2)^2)/2)
+  local to_half = (self.launch_to_w or 36)/2
+  local to_th   = (self.launch_to_h or 4)
+  -- Squash on arrival: a hair wider and flatter as it seats, settling back.
+  local land = math.clamp((k - 0.86)/0.14, 0, 1)
+  local sq   = math.sin(land*math.pi)*0.18
+  return cx  + ((self.launch_to_x or cx) - cx)*e,
+         cy  + ((self.launch_to_y or cy) - cy)*e,
+         (half + (to_half - half)*e)*(1 + sq),
+         (th   + (to_th   - th)*e)*(1 - sq*0.5),
+         k
+end
+
+
+function BallPit:draw_title()
+  local t = self.title_t or 0
+  local launching = (self.title_phase == 'launch')
+  local k = launching and math.clamp((self.launch_t or 0)/LAUNCH_DUR, 0, 1) or 0
+  -- The glass itself lifts over the back half of the launch, so the arena is
+  -- already showing by the time the rule seats into it.
+  local glass = launching and (1 - math.clamp((k - 0.55)/0.42, 0, 1)) or 1
+  -- Everything printed on the glass goes first and fast -- the rule is the only
+  -- thing that survives the transition, so nothing else may compete with it.
+  local ink = launching and (1 - math.clamp(k/0.34, 0, 1)) or 1
+
+  -- ---- the panel -----------------------------------------------------------
+  if glass > 0.001 then
+    graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil,
+                       Color(GLASS_DEEP.r, GLASS_DEEP.g, GLASS_DEEP.b, glass))
+    -- Inlay: a slightly lifted field inside the bezel. Flat fill, no gradient,
+    -- no light -- the depth comes from the keylines, the way a printed glass
+    -- gets it.
+    local m = 16
+    graphics.rectangle(gw/2, gh/2, gw - m*2, gh - m*2, 3, 3,
+                       Color(GLASS_PANEL.r, GLASS_PANEL.g, GLASS_PANEL.b, glass))
+  end
+
+  if ink > 0.001 then
+    local function gold(a)   return Color(INK_GOLD.r,   INK_GOLD.g,   INK_GOLD.b,   a*ink) end
+    local function bronze(a) return Color(INK_BRONZE.r, INK_BRONZE.g, INK_BRONZE.b, a*ink) end
+    local function pale(a)   return Color(INK_PALE.r,   INK_PALE.g,   INK_PALE.b,   a*ink) end
+
+    -- ---- bezel: double keyline with deco corner brackets --------------------
+    local m = 16
+    graphics.rectangle(gw/2, gh/2, gw - m*2,     gh - m*2,     3, 3, gold(0.55), 1)
+    graphics.rectangle(gw/2, gh/2, gw - m*2 - 6, gh - m*2 - 6, 2, 2, bronze(0.75), 1)
+    local bx1, by1 = m + 3, m + 3
+    local bx2, by2 = gw - m - 3, gh - m - 3
+    for _, c in ipairs({{bx1, by1, 1, 1}, {bx2, by1, -1, 1},
+                        {bx1, by2, 1, -1}, {bx2, by2, -1, -1}}) do
+      local x, y, sx, sy = c[1], c[2], c[3], c[4]
+      graphics.line(x, y + sy*14, x + sx*14, y + sy*14, gold(0.8), 1)
+      graphics.line(x + sx*14, y, x + sx*14, y + sy*14, gold(0.8), 1)
+      graphics.rectangle(x + sx*5, y + sy*5, 3, 3, nil, nil, gold(0.9))
+    end
+
+    -- ---- crest: a static sunburst behind the marquee ------------------------
+    local cx, cy = gw/2, gh*TITLE_Y
+    for i = -7, 7 do
+      local a  = -math.pi/2 + i*0.135
+      local r1 = 54 + (math.abs(i) % 2)*10
+      local r2 = r1 + 30 - math.abs(i)*1.6
+      graphics.line(cx + math.cos(a)*r1, cy + math.sin(a)*r1,
+                    cx + math.cos(a)*r2, cy + math.sin(a)*r2,
+                    bronze(0.5 - math.abs(i)*0.03), 1)
+    end
+    graphics.arc('open', cx, cy, 50, math.pi*1.12, math.pi*1.88, gold(0.45), 1)
+    graphics.arc('open', cx, cy, 46, math.pi*1.12, math.pi*1.88, bronze(0.7), 1)
+
+    -- ---- the marquee: one ink, letters set one at a time ---------------------
+    local n, widths, total = #TITLE_TEXT, {}, 0
+    for i = 1, n do
+      widths[i] = fat_font:get_text_width(TITLE_TEXT:sub(i, i))
+      total     = total + widths[i]
+    end
+    local x = gw/2 - (total*TITLE_SCALE)/2
+    for i = 1, n do
+      local ch = TITLE_TEXT:sub(i, i)
+      local lk = math.clamp((t - (i - 1)*TITLE_STAGGER)/TITLE_DROP, 0, 1)
+      if lk > 0 and ch ~= ' ' then
+        local e = 1 - (1 - lk)*(1 - lk)*(1 - lk)
+        local y = gh*TITLE_Y - 46*(1 - e)
+        -- Struck twice: a bronze plate offset down-right, gold face over it.
+        -- Reads as embossed signwriting without a single glow.
+        graphics.print(ch, fat_font, x + 2, y + 2, 0, TITLE_SCALE, TITLE_SCALE, 0, 0, bronze(0.9*lk))
+        graphics.print(ch, fat_font, x,     y,     0, TITLE_SCALE, TITLE_SCALE, 0, 0, gold(lk))
+      end
+      x = x + widths[i]*TITLE_SCALE
+    end
+
+    -- ---- the menu plates ----------------------------------------------------
+    local pk = math.clamp((t - TITLE_SETTLE)/0.45, 0, 1)
+    if pk > 0 then
+      for i, b in ipairs(self:title_buttons()) do
+        local on = (i == (self.title_selected or 1))
+        -- The selected plate is filled and gold-edged; the other is a bronze
+        -- keyline. Selection is a change of WEIGHT, not of colour, so the
+        -- scheme stays one scheme.
+        if on then
+          graphics.rectangle(b.x, b.y, b.w, b.h, 2, 2, gold(0.16))
+          -- Deco pointers either side, the way a backglass marks its live line.
+          for _, s in ipairs({-1, 1}) do
+            local dx = b.x + s*(b.w/2 + 9)
+            graphics.polygon({dx - s*4, b.y - 4, dx + s*3, b.y, dx - s*4, b.y + 4}, gold(0.9*pk))
+          end
+        end
+        graphics.rectangle(b.x, b.y, b.w, b.h, 2, 2, on and gold(0.95*pk) or bronze(0.9*pk), 1)
+        graphics.print_centered(b.label, pixul_font, b.x, b.y, 0, 1, 1, 0, 0,
+                                on and gold(pk) or pale(pk*0.7))
+      end
+      graphics.print_centered('ESC   SETTINGS',
+                              pixul_font, gw/2, gh*0.895, 0, 1, 1, 0, 0, bronze(pk*0.9))
+      -- Footer rule, so the panel is closed at the bottom the way it is at the top.
+      graphics.line(gw/2 - 88, gh*0.925, gw/2 + 88, gh*0.925, bronze(pk*0.6), 1)
+    end
+  end
+
+  -- ---- the rule ------------------------------------------------------------
+  -- Drawn last and never faded: it is the one element that leaves the glass and
+  -- becomes part of the game.
+  local rx, ry, rhalf, rth = self:title_rule_pose()
+  local settle = math.clamp((t - TITLE_SETTLE + 0.2)/0.4, 0, 1)
+  if settle > 0 then
+    local w = rhalf*2*(launching and 1 or settle)
+    -- Explicit inks, not the ink() helpers above: those live inside the
+    -- glass-fade block and are scoped to it, and the rule must NOT fade with
+    -- the rest of the print -- it is the one element that leaves the glass.
+    graphics.rectangle(rx, ry + 1, w, rth, 1, 1, INK_BRONZE)
+    graphics.rectangle(rx, ry,     w, rth, 1, 1, INK_GOLD)
+    -- Deco caps: small diamonds at each end while it is still a keyline. They
+    -- retract as it becomes a paddle, so nothing ornamental survives into play.
+    local caps = launching and (1 - math.clamp(((self.launch_t or 0) - 0.14)/0.4, 0, 1)) or 1
+    if caps > 0.01 then
+      for _, s in ipairs({-1, 1}) do
+        local dx = rx + s*(rhalf + 7)
+        graphics.polygon({dx, ry - 4, dx + 4, ry, dx, ry + 4, dx - 4, ry},
+                         Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, caps))
+      end
+    end
+  end
+end
+
+
+-- ----- Tutorial ---------------------------------------------------------
+--
+-- Opened from the title's TUTORIAL button. A prototype reference for the whole
+-- game, written as PAGES OF ROWS rather than prose: every entry is a short
+-- label and the one line that explains it, so a player can find the thing they
+-- are looking for by scanning instead of reading. Navigated with the PREV /
+-- BACK / NEXT buttons, the arrow or A/D keys, or the mouse.
+--
+-- Content is deliberately exhaustive -- controls, every enemy family, every
+-- powerup tier, the combo ladder, the boss, the loadouts -- because the point
+-- of the prototype is to find out which of it a player actually needs.
+local TUTORIAL_PAGES = {
+  {title = 'CONTROLS', rows = {
+    {'A / D',      'move the paddle left and right'},
+    {'W / S',      'lift and lower it inside the dodge band'},
+    {'LEFT/RIGHT', 'aim a ball that is stuck to the paddle'},
+    {'SPACE',      'launch a stuck ball -- hold to see the aim line'},
+    {'E',          'the signature power of your paddle loadout'},
+    {'MOUSE 1',    'confirm menu choices'},
+    {'ENTER',      'confirm a draft card'},
+    {'R',          'restart the run from the game-over screen'},
+    {'ESC',        'settings (window size)'},
+  }},
+
+  {title = 'THE LINE', rows = {
+    {'RED DOTS',   'the defense line above your paddle'},
+    {'A BREACH',   'is a block crossing it -- that costs you HP'},
+    {'THE COST',   'scales with how big the swarm was'},
+    {'RETALIATION','a breach sets off a shockwave in return'},
+    {'IT SWEEPS',  'up the arena, damaging and shoving every swarm'},
+    {'SO',         'losing a heart also buys you room'},
+  }},
+
+  {title = 'XP & LEVELS', rows = {
+    {'ORBS',       'every block killed drops XP'},
+    {'MAGNET',     'orbs near the paddle are pulled in'},
+    {'MISSED',     'orbs fall past you and are gone'},
+    {'A LEVEL',    'opens the three-card draft'},
+    {'THE CURVE',  'each level costs more than the last'},
+    {'COMBO',      'a hot meter makes every orb worth more'},
+  }},
+
+  {title = 'COMBO METER', rows = {
+    {'POINTS',     'from chaining block hits without missing'},
+    {'RANKS',      'D, C, B, A, S, SS, SSS, FRENZY'},
+    {'IT PAYS',    'faster balls and richer XP -- not raw damage'},
+    {'IT BLEEDS',  'idle time drains a fraction of what you hold'},
+    {'SO',         'a hot meter costs more attention than a cold one'},
+    {'DROPPING',   'a ball into the pit takes a heavy cut'},
+  }},
+
+  {title = 'POWERUPS (1/2)', rows = {
+    {'THEY DROP',  'on a timer and at the end of every wave'},
+    {'TIER 1',     'catch it with the paddle -- instant effect'},
+    {'TIER 2',     'DEFLECT it with the paddle to arm it, then catch'},
+    {'HEAL',       'restores hearts'},
+    {'WIDE',       'a bigger paddle -- and shots pass through you'},
+    {'BIG BALL',   'oversized, heavier-hitting balls'},
+  }},
+
+  {title = 'POWERUPS (2/2)', rows = {
+    {'MULTI BALL', 'more balls in play at once'},
+    {'PIERCE',     'balls punch through instead of bouncing off'},
+    {'FIRE TRAIL', 'balls leave burning ground behind them'},
+    {'FREEZE',     'the whole arena stops for a few seconds'},
+    {'WATER WAVE', 'a surge that shoves every swarm back up'},
+    {'FLOOR',      'a temporary floor -- no ball can fall out'},
+    {'LEVEL ORB',  'levels several random balls at once'},
+  }},
+
+  {title = 'ENEMIES (1/2)', rows = {
+    {'SEEKER',     'the basic block -- drifts and breaches'},
+    {'TANK',       'slow, very high HP'},
+    {'BOOSTER',    'speeds up its whole row'},
+    {'EXPLODER',   'chain-detonates its neighbours on death'},
+    {'HEADBUTTER', 'lunges down the screen in bursts'},
+    {'FORCER',     'shoves your balls away from it'},
+    {'RANDOMIZER', 'scrambles the direction of what it touches'},
+  }},
+
+  {title = 'ENEMIES (2/2)', rows = {
+    {'SHOOTER',    'plain aimed shots'},
+    {'SNIPER',     'a single fast, long-range shot'},
+    {'SPREADER',   'a fan of shots at once'},
+    {'BURSTER',    'a rapid string of them'},
+    {'ARC LOBBER', 'a shot that curves down onto you'},
+    {'SPIRALER',   'a rotating spray'},
+    {'CRITTERS',   'small enemies that walk down at the paddle'},
+  }},
+
+  {title = 'WAVES & BOSS', rows = {
+    {'WAVES',      'each one is longer, wider and denser'},
+    {'WAVE 10',    'THE PRISM CORE -- the boss'},
+    {'PHASES',     'three, each faster and with new attacks'},
+    {'ITS SHOTS',  'some are unbreakable -- those cannot be parried'},
+    {'ON DEATH',   'three paddle levels and five ball levels'},
+    {'WAVE 11+',   'the hardest tier, forever'},
+  }},
+
+  {title = 'LOADOUTS', rows = {
+    {'PADDLES',    'thirteen of them, each rewriting a core verb'},
+    {'STATS',      'size, speed, damage, XP rate all differ'},
+    {'SIGNATURE',  'each has one power, usually on E'},
+    {'AEGIS',      'raise a shield -- parried shots fly back at them'},
+    {'PINBALL',    'two flippers instead of a bar'},
+    {'PHANTOM',    'drop an anchor, blink back to it'},
+    {'UNLOCK',     'them in the shop after a run'},
+  }},
+}
+
+
+-- Buttons are geometry FIRST: hit-testing and drawing both read this, so a
+-- button can never be drawn somewhere it cannot be clicked.
+function BallPit:tutorial_buttons()
+  local y = gh*0.885
+  return {
+    {id = 'prev',  label = '<  PREV', x = gw*0.23, y = y, w = 92, h = 22},
+    {id = 'close', label = 'BACK',    x = gw*0.50, y = y, w = 82, h = 22},
+    {id = 'next',  label = 'NEXT  >', x = gw*0.77, y = y, w = 92, h = 22},
+  }
+end
+
+
+function BallPit:tutorial_button_under_mouse()
+  for _, b in ipairs(self:tutorial_buttons()) do
+    if mouse.x >= b.x - b.w/2 and mouse.x <= b.x + b.w/2
+    and mouse.y >= b.y - b.h/2 and mouse.y <= b.y + b.h/2 then return b end
+  end
+  return nil
+end
+
+
+function BallPit:tutorial_go(delta)
+  local n = #TUTORIAL_PAGES
+  local p = math.clamp((self.tutorial_page or 1) + delta, 1, n)
+  if p ~= self.tutorial_page then
+    self.tutorial_page = p
+    self.tutorial_t    = 0     -- restart the row stagger: a turn SETS a page
+    ui_switch1:play{volume = 0.3}
+  end
+end
+
+
+-- Enter / exit timing. The panel does not appear and disappear -- it is racked
+-- in and pulled out, which is what stops it reading as a dialog box dropped on
+-- top of the machine.
+local TUT_IN  = 0.26
+local TUT_OUT = 0.20
+
+
+-- 0 -> 1 racking in, 1 while it is up, 1 -> 0 pulling out. Note it reaches
+-- EXACTLY 1 at rest, so the drawn buttons and the hit test agree while the
+-- page is actually interactive (input is ignored during both transitions).
+function BallPit:tutorial_anim_k()
+  local a = self.tutorial_anim or 0
+  if self.tutorial_phase == 'in' then
+    local p = math.clamp(a/TUT_IN, 0, 1)
+    return 1 - (1 - p)*(1 - p)*(1 - p)
+  elseif self.tutorial_phase == 'out' then
+    local p = math.clamp(a/TUT_OUT, 0, 1)
+    return 1 - p*p
+  end
+  return 1
+end
+
+
+function BallPit:close_tutorial()
+  if self.tutorial_phase == 'out' then return end
+  self.tutorial_phase = 'out'
+  self.tutorial_anim  = 0
+  ui_switch1:play{volume = 0.3}
+end
+
+
+function BallPit:update_tutorial(dt)
+  self.tutorial_t    = (self.tutorial_t or 0) + dt
+  self.tutorial_anim = (self.tutorial_anim or 0) + dt
+
+  -- Input is deliberately dead through both transitions: the panel is moving,
+  -- so what is under the cursor is not what will be under it a frame later.
+  if self.tutorial_phase == 'in' then
+    if self.tutorial_anim >= TUT_IN then
+      self.tutorial_phase, self.tutorial_anim = 'idle', 0
+    end
+    return
+  elseif self.tutorial_phase == 'out' then
+    if self.tutorial_anim >= TUT_OUT then
+      self.tutorial_open  = false
+      self.tutorial_phase = 'idle'
+    end
+    return
+  end
+
+  local hovered = self:tutorial_button_under_mouse()
+  self.tutorial_hover = hovered and hovered.id or nil
+  if hovered and input.click.pressed then
+    if     hovered.id == 'prev'  then self:tutorial_go(-1)
+    elseif hovered.id == 'next'  then self:tutorial_go(1)
+    else   self:close_tutorial() end
+    return
+  end
+
+  if input.move_left.pressed  or input.aim_left.pressed  then self:tutorial_go(-1) end
+  if input.move_right.pressed or input.aim_right.pressed then self:tutorial_go(1)  end
+  -- SPACE / ENTER page forward, and close out of the last page, so the whole
+  -- thing can be read on one key without ever reaching for the mouse.
+  if input.launch.pressed or input.confirm.pressed then
+    if (self.tutorial_page or 1) >= #TUTORIAL_PAGES then
+      self:close_tutorial()
+    else
+      self:tutorial_go(1)
+    end
+  end
+end
+
+
+function BallPit:draw_tutorial()
+  local page = TUTORIAL_PAGES[self.tutorial_page or 1]
+  if not page then return end
+  local t = self.tutorial_t or 0
+
+  -- Racked in / pulled out (see tutorial_anim_k). The ground is faded but NOT
+  -- scaled -- scaling a full-screen fill would open a gap at the edges and show
+  -- the arena through it. Everything printed on the panel is scaled about the
+  -- centre instead, and the alpha multiplier carries the fade through every
+  -- layer below without threading it into each colour by hand.
+  local k = self:tutorial_anim_k()
+  if k <= 0.005 then return end
+  graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil,
+                     Color(GLASS_DEEP.r, GLASS_DEEP.g, GLASS_DEEP.b, k))
+  local prev_alpha = graphics.alpha_mult
+  graphics.alpha_mult = prev_alpha*k
+  local s = 0.90 + 0.10*k
+  graphics.push(gw/2, gh/2, 0, s, s)
+
+  local m = 16
+  graphics.rectangle(gw/2, gh/2, gw - m*2,     gh - m*2,     3, 3, GLASS_PANEL)
+  graphics.rectangle(gw/2, gh/2, gw - m*2,     gh - m*2,     3, 3, INK_GOLD_DIM, 1)
+  graphics.rectangle(gw/2, gh/2, gw - m*2 - 6, gh - m*2 - 6, 2, 2, INK_BRONZE, 1)
+
+  -- Header: page title over a rule, with the page count opposite.
+  graphics.print_centered(page.title, fat_font, gw/2, gh*0.105, 0, 1.25, 1.25, 0, 0, INK_GOLD)
+  graphics.line(gw*0.14, gh*0.145, gw*0.86, gh*0.145, INK_BRONZE, 1)
+  graphics.print_centered(string.format('%d / %d', self.tutorial_page or 1, #TUTORIAL_PAGES),
+                          pixul_font, gw/2, gh*0.165, 0, 1, 1, 0, 0, INK_BRONZE)
+
+  -- Rows: label column in gold, explanation in pale. Two columns, never a
+  -- paragraph -- the whole point is that it can be scanned.
+  local y = gh*0.225
+  for i, row in ipairs(page.rows) do
+    -- Rows fade up in sequence, so a page turn reads as a page being SET.
+    local k = math.clamp((t - (i - 1)*0.035)/0.18, 0, 1)
+    if k > 0 then
+      graphics.print(row[1], pixul_font, gw*0.10, y, 0, 1, 1, 0, 0,
+                     Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, k))
+      graphics.print(row[2], pixul_font, gw*0.36, y, 0, 1, 1, 0, 0,
+                     Color(INK_PALE.r, INK_PALE.g, INK_PALE.b, k*0.92))
+    end
+    y = y + gh*0.052
+  end
+
+  -- Buttons. Disabled ends are drawn dimmed rather than hidden, so the shape
+  -- of the row never moves as you page through.
+  local n = #TUTORIAL_PAGES
+  for _, b in ipairs(self:tutorial_buttons()) do
+    local dead = (b.id == 'prev' and (self.tutorial_page or 1) <= 1)
+              or (b.id == 'next' and (self.tutorial_page or 1) >= n)
+    local hot  = (self.tutorial_hover == b.id) and not dead
+    local edge = dead and INK_BRONZE or (hot and INK_GOLD or INK_GOLD_DIM)
+    local face = dead and Color(INK_BRONZE.r, INK_BRONZE.g, INK_BRONZE.b, 0.55)
+                       or (hot and INK_GOLD or INK_PALE)
+    if hot then
+      graphics.rectangle(b.x, b.y, b.w, b.h, 2, 2,
+                         Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, 0.14))
+    end
+    graphics.rectangle(b.x, b.y, b.w, b.h, 2, 2, edge, 1)
+    graphics.print_centered(b.label, pixul_font, b.x, b.y, 0, 1, 1, 0, 0, face)
+  end
+
+  graphics.pop()
+  graphics.alpha_mult = prev_alpha
+end
+
+
 function BallPit:draw()
   self.floor:draw()
   self.main:draw()
@@ -1351,6 +1982,9 @@ function BallPit:draw()
 
   if self.upgrade_pending then self:draw_upgrade() end
   if self.game_over then self:draw_game_over() end
+  if self.title_open then
+    if self.tutorial_open then self:draw_tutorial() else self:draw_title() end
+  end
   if self.settings_open then self:draw_settings() end
   -- The transition shutters close over whatever is on screen, including live
   -- play (that is what a restart parts them onto) -- but under the terminal
