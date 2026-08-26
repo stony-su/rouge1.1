@@ -251,6 +251,12 @@ function Brick:hold_fire()
   local arena = main.current
   if not arena or not arena.paddle then return false end
   if arena.frozen then return true end
+  -- Blank lockout: the player just took a hit and the blank swept the field.
+  -- Nothing fires for the lockout so the wave that hit you can't instantly
+  -- refill the space it cleared (see BallPit.fire_lock_t / the blank trigger
+  -- in enemies.lua). This is the single gate every projectile cast runs
+  -- through, so one check covers all of them.
+  if (arena.fire_lock_t or 0) > 0 then return true end
   -- Global live-bullet cap: a packed late-wave field can hold dozens of
   -- ranged bricks, so once this many enemy shots are in flight every further
   -- cast holds fire until some despawn — the screen stays readable no matter

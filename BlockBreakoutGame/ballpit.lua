@@ -551,6 +551,11 @@ function BallPit:reset_run()
   -- level spam), tunable via the paddle's balance master file.
   self.xp_to_next    = (pdef.xp_mode == 'flat') and PADDLES.XP_FLAT or BAL('globals.xp_base', 8)
   self.wave          = 1
+  -- Blank lockout clock. Set when the player eats a shot (see the blank in
+  -- enemies.lua) and ticked down in update; while it is above zero no brick
+  -- will fire (Brick:hold_fire), so the ranks can't immediately refill the
+  -- space the blank just cleared.
+  self.fire_lock_t   = 0
   self.wave_time     = 0
   self.boss          = nil
   self.boss_defeated = false
@@ -1102,6 +1107,7 @@ function BallPit:update(dt)
 
   self.run_time  = self.run_time + dt
   self.wave_time = self.wave_time + dt
+  if (self.fire_lock_t or 0) > 0 then self.fire_lock_t = self.fire_lock_t - dt end
 
   -- Terrorist loadout: passive XP gain over time. Gains a percentage of the
   -- current level's XP requirement per second, scaled to level up every ~6.5 seconds

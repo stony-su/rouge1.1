@@ -1758,6 +1758,247 @@ function BreachShockwave:draw()
 end
 
 
+-- BlankWave: the Enter the Gungeon style BLANK the paddle lets off when an
+-- enemy shot lands on it. A repulsion front expands from the paddle across the
+-- WHOLE arena, shoving every enemy shot it passes outward and burning it out;
+-- behind it the enemy ranks are locked out of firing for a beat
+-- (BallPit.fire_lock_t -> Brick:hold_fire).
+--
+-- Applied progressively as the front arrives, not all at once, so the clear is
+-- something you watch sweep the screen rather than bullets blinking out on the
+-- frame you were hit. The drawn ring is the honest edge of the effect at every
+-- moment, so there is no hidden radius to learn.
+--
+-- Reflected shots are spared -- they're the player's now -- and so are
+-- unbreakable boss bullets, which no other defensive interaction stops either.
+BlankWave = Object:extend()
+BlankWave:implement(GameObject)
+function BlankWave:init(args)
+  self:init_game_object(args)
+  self.radius  = self.radius or gw
+  self.dur     = self.dur or 0.34
+  self.fade    = self.fade or 0.20
+  self.color   = self.color or blue[0]
+  self.push    = self.push or 300
+  self.elapsed = 0
+  self.rs      = 0
+  self.alpha   = 1
+  self.phase   = 'sweep'
+  self.hit     = {}
+  -- Boisterous on purpose: this is the beat where a run stops being lost, and
+  -- it should land like it. Three layers -- the whoomph, the push, and a crack
+  -- over the top of them.
+  explosion1:play{volume = 0.55, pitch = 0.60}
+  force1:play{volume = 0.50, pitch = 0.90}
+  self.t:after(0.07, function() thunder1:play{volume = 0.35, pitch = 1.10} end)
+  camera:shake(7, 0.40, 60)
+end
+
+function BlankWave:update(dt)
+  self:update_game_object(dt)
+  self.elapsed = self.elapsed + dt
+  if self.phase == 'sweep' then
+    local p = math.clamp(self.elapsed/self.dur, 0, 1)
+    self.rs = self.radius*(1 - (1 - p)*(1 - p)*(1 - p))   -- fast out, settling
+    self:sweep()
+    if p >= 1 then self.phase, self.elapsed = 'fade', 0 end
+  else
+    local p    = math.clamp(self.elapsed/self.fade, 0, 1)
+    self.alpha = 1 - p
+    self.rs    = self.rs + 90*dt                          -- keeps coasting as it thins
+    if p >= 1 then self.dead = true end
+  end
+end
+
+function BlankWave:sweep()
+  local arena = main.current
+  if not (arena and arena.main) then return end
+  for _, o in ipairs(arena.main.objects) do
+    if o.is and o:is(EnemyProjectile) and not self.hit[o.id]
+    and not o.dead and not o.expiring and not o.reflected and not o.unbreakable then
+      local d = math.distance(self.x, self.y, o.x, o.y)
+      if d <= self.rs then
+        self.hit[o.id] = true
+        -- Outward normal from the paddle; a shot sitting exactly on it has no
+        -- meaningful direction, so give that one a random heading rather than
+        -- letting atan2(0,0) decide. Shoved and then BURNT OUT (not deleted),
+        -- so the clear is legible as a push rather than a disappearance.
+        local a = (d > 0.5) and math.atan2(o.y - self.y, o.x - self.x)
+                             or random:float(0, 2*math.pi)
+        o:set_velocity(math.cos(a)*self.push, math.sin(a)*self.push)
+        o:begin_despawn(0.24)
+        spawn_burst(arena.effects, o.x, o.y, o.color, 4, 80, 160)
+      end
+    end
+  end
+end
+
+function BlankWave:draw()
+  local a = self.alpha or 1
+  if a <= 0.01 or self.rs < 1 then return end
+  local c = self.color
+  -- Soft interior wash, so the swept space reads as cleared rather than empty.
+  graphics.circle(self.x, self.y, self.rs, Color(c.r, c.g, c.b, 0.05*a))
+  -- The front: a heavy leading ring with a white inner edge riding just inside
+  -- it and a dimmer echo behind, so the wave has thickness and direction.
+  graphics.circle(self.x, self.y, self.rs,     Color(c.r, c.g, c.b, 0.55*a), 4)
+  if self.rs > 4 then
+    graphics.circle(self.x, self.y, self.rs - 3, Color(1, 1, 1, 0.75*a), 2)
+  end
+  if self.rs > 10 then
+    graphics.circle(self.x, self.y, self.rs - 9, Color(c.r, c.g, c.b, 0.25*a), 2)
+  end
+end
+
+
+-- BossDeath: the Prism Core coming apart. Three staged beats instead of one
+-- burst, because the boss is the run's set-piece and a lone spawn_burst read
+-- exactly like a brick popping:
+--   1. IMPLODE  -- the rings contract and sparks are dragged inward: a held
+--                  beat that says something is about to happen
+--   2. DETONATE -- the 12-gon breaks into its OWN twelve segments, which fly
+--                  out tumbling under a stack of staggered shockwave rings
+--   3. EMBERS   -- the debris coasts and fades after the noise has stopped
+-- It takes over the core's silhouette at the same position, so the boss comes
+-- apart rather than vanishing and being replaced by particles. Deliberately no
+-- full-screen flash: the spectacle belongs in the arena, not painted over it.
+BossDeath = Object:extend()
+BossDeath:implement(GameObject)
+function BossDeath:init(args)
+  self:init_game_object(args)
+  self.color   = self.color or red[0]
+  self.r_outer = self.r_outer or 28
+  self.r_inner = self.r_inner or 14
+  self.implode = self.implode or 0.42
+  self.debris  = self.debris or 1.05
+  self.elapsed = 0
+  self.phase   = 'implode'
+  self.rot     = 0
+  self.core    = 0        -- white core swelling as the rings collapse onto it
+  -- One shard per side of the outer ring, each with its own heading, spin and
+  -- speed, so the ring comes APART into the shape it was rather than
+  -- dissolving into generic sparks.
+  self.shards = {}
+  for i = 0, 11 do
+    local a = i*(2*math.pi/12) + math.pi/12
+    self.shards[#self.shards+1] = {
+      a = a, r = 0, rot = a, fade = 1,
+      spin = random:float(-10, 10),
+      sp   = random:float(110, 260),
+      len  = random:float(0.7, 1.25),
+    }
+  end
+  force1:play{volume = 0.45, pitch = 0.55}     -- the suck-in
+  camera:shake(2, self.implode, 40)            -- a low rumble under the hold
+end
+
+function BossDeath:update(dt)
+  self:update_game_object(dt)
+  self.elapsed = self.elapsed + dt
+  self.rot = self.rot + dt*((self.phase == 'implode') and 9 or 2)
+
+  if self.phase == 'implode' then
+    local p = math.clamp(self.elapsed/self.implode, 0, 1)
+    self.core = p*p
+    -- Sparks dragged INWARD -- the read that separates an implosion from a
+    -- circle that is merely getting smaller.
+    if random:bool(60) then
+      local a  = random:float(0, 2*math.pi)
+      local rr = self.r_outer*random:float(1.6, 3.2)
+      HitParticle{group = main.current.effects,
+                  x = self.x + math.cos(a)*rr, y = self.y + math.sin(a)*rr,
+                  color = self.color, v = random:float(160, 300),
+                  r = a + math.pi, w = random:float(1, 2.4),
+                  duration = random:float(0.12, 0.26)}
+    end
+    if p >= 1 then self:detonate() end
+
+  else
+    local p = math.clamp(self.elapsed/self.debris, 0, 1)
+    for _, s in ipairs(self.shards) do
+      s.r    = s.r + s.sp*dt
+      s.sp   = s.sp*(1 - 1.4*dt)          -- drag, so shards settle rather than streak off
+      s.rot  = s.rot + s.spin*dt
+      s.fade = math.clamp(1 - p/s.len, 0, 1)
+    end
+    if p >= 1 then self.dead = true end
+  end
+end
+
+function BossDeath:detonate()
+  self.phase, self.elapsed = 'debris', 0
+  local arena = main.current
+  if not arena then return end
+  -- Sound stack: a deep blast, a crack over the top of it, then the carcass
+  -- settling a beat later. Deliberately NOT routed through enemy_fx_sound --
+  -- this is the run's payoff, not ambient enemy noise.
+  explosion1:play{volume = 0.75, pitch = 0.50}
+  thunder1:play{volume = 0.50, pitch = 0.75}
+  self.t:after(0.09, function() explosion1:play{volume = 0.45, pitch = 0.90} end)
+  self.t:after(0.26, function() enemy_die1:play{volume = 0.50, pitch = 0.45} end)
+  camera:shake(9, 0.55, 70)
+  -- Three shockwave rings on a stagger, so the blast has depth instead of being
+  -- one expanding circle.
+  TelegraphRing{group = arena.effects, x = self.x, y = self.y,
+                radius = self.r_outer*5.5, color = fg[5], duration = 0.40}
+  self.t:after(0.06, function()
+    TelegraphRing{group = arena.effects, x = self.x, y = self.y,
+                  radius = self.r_outer*8, color = self.color, duration = 0.55}
+  end)
+  self.t:after(0.16, function()
+    TelegraphRing{group = arena.effects, x = self.x, y = self.y,
+                  radius = self.r_outer*11, color = self.color, duration = 0.70}
+  end)
+  spawn_burst(arena.effects, self.x, self.y, self.color, 46, 90, 300)
+  spawn_burst(arena.effects, self.x, self.y, fg[5],      20, 70, 230)
+  for _ = 1, 14 do
+    SmokePuff{group = arena.effects, x = self.x + random:float(-10, 10),
+              y = self.y + random:float(-10, 10),
+              color = Color(0.22, 0.20, 0.24, 1), rs = random:float(3, 7), alpha = 0.5,
+              vx = random:float(-60, 60), vy = random:float(-60, 40),
+              duration = random:float(0.5, 1.0)}
+  end
+end
+
+function BossDeath:draw()
+  local c = self.color
+  if self.phase == 'implode' then
+    local p  = math.clamp(self.elapsed/self.implode, 0, 1)
+    local sc = 1 - p*0.62                     -- the rings collapsing inward
+    local a  = math.clamp(0.5 + 0.5*p, 0, 1)
+    local vo = {}
+    for i = 0, 11 do
+      local ang = self.rot + i*(2*math.pi/12)
+      vo[#vo+1] = self.x + math.cos(ang)*self.r_outer*sc
+      vo[#vo+1] = self.y + math.sin(ang)*self.r_outer*sc
+    end
+    graphics.polygon(vo, Color(c.r, c.g, c.b, a), 2)
+    local vi = {}
+    for i = 0, 5 do
+      local ang = -self.rot*1.6 + i*(2*math.pi/6)
+      vi[#vi+1] = self.x + math.cos(ang)*self.r_inner*sc
+      vi[#vi+1] = self.y + math.sin(ang)*self.r_inner*sc
+    end
+    graphics.polygon(vi, Color(c.r, c.g, c.b, a), 1.5)
+    -- The core going critical under the collapsing shell.
+    graphics.circle(self.x, self.y, 3 + self.core*self.r_inner,
+                    Color(1, 1, 1, math.clamp(0.35 + 0.6*self.core, 0, 1)))
+  else
+    -- Each shard is one SIDE of the old 12-gon: a short bar, tumbling outward.
+    local half = self.r_outer*math.sin(math.pi/12)
+    for _, s in ipairs(self.shards) do
+      if s.fade > 0.01 then
+        local sx = self.x + math.cos(s.a)*s.r
+        local sy = self.y + math.sin(s.a)*s.r
+        local dx, dy = math.cos(s.rot)*half, math.sin(s.rot)*half
+        graphics.line(sx - dx, sy - dy, sx + dx, sy + dy, Color(c.r, c.g, c.b, s.fade), 2.5)
+        graphics.line(sx - dx, sy - dy, sx + dx, sy + dy, Color(1, 1, 1, s.fade*0.4), 1)
+      end
+    end
+  end
+end
+
+
 -- CleaveArea: the swordsman's Cleave, ported from SNKRX's Area (player.lua).
 -- A rotated square that hits everything inside ONCE at spawn — total damage
 -- grows +15% per target hit (the Cleave), doubled at level 3 (SNKRX's

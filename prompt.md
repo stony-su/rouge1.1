@@ -5,8 +5,6 @@ are you able to create chiptune music for the game or should I look online
 give one of my friends for playtesting
 
 hard
-create spawn out animations for the enemy projectiles 
-create a better boss destruction animation and sound effect, and also make it give 3 level ups to the paddle and 5 random levelups to balls
 create a player death animation and sound effect, allow with a transition animation to the Game over Screen
 create a start page 
 add pinball bumpers that spawn in during the boss phase periodicly to help balls his the boss. make sure that they spawn outside of the boss path. add a set of spawning, hit, and despawn animations as well as anything else for the pinball bumpers
@@ -21,4 +19,5 @@ add pinball bumpers that spawn in during the boss phase periodicly to help balls
 
 
 add spawn out animations for anything that spawns out 
- 
+for all paddles, widden them by 2x and make them transparent except for the core of the paddle. enemy projectiles will pass through the transparent sections, and only deal damage if they hit the "core" of the paddle
+--> 

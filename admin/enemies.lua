@@ -135,6 +135,16 @@ local PARRY_MAX_HP_FRAC = 0.75
 -- this number is the number of things the shot actually hits.
 local PARRY_PIERCE_TARGETS = 5
 
+-- Extra margin past the canvas edge before a shot is culled. Enemy fire is
+-- filtered out of colliding with the arena walls (see the fixture mask in init),
+-- so a shot that reaches the left, right or bottom edge flies straight THROUGH
+-- it and out across the margin the HUD sits in. Culling on the ARENA bounds made
+-- it wink out the instant it touched a wall the player could watch it cross;
+-- culling on the CANVAS instead means a shot only disappears once it is
+-- genuinely out of sight. The pad keeps the cull just past the edge so nothing
+-- pops while a pixel of it is still on screen.
+local OFF_SCREEN_PAD = 6
+
 
 -- Slow downward projectile fired by shooter bricks. Hits the paddle.
 EnemyProjectile = Object:extend()
@@ -204,8 +214,10 @@ function EnemyProjectile:init(args)
   self.hfx:add('hit', 1)
   -- Muzzle spawn-out: the shot swells from a hot point to full size as it
   -- clears the shooter, the mirror of the burn-out below, so a bullet grows out
-  -- of an enemy instead of popping into existence in mid-air.
-  self.spawn_dur = self.spawn_dur or 0.08
+  -- of an enemy instead of popping into existence in mid-air. Lengthened from
+  -- 0.08s and started from a much smaller seed -- at 0.3 scale over 5 frames the
+  -- growth was there but too slight to read as anything.
+  self.spawn_dur = self.spawn_dur or 0.12
   self.spawn_t   = 0
 
   -- Enemy shots phase through hero balls: drop the 'ball' category from this
@@ -322,6 +334,31 @@ function EnemyProjectile:reflected_target()
 end
 
 
+-- The BLANK. A shot landing on the paddle sets off an Enter the Gungeon style
+-- blank: a repulsion front sweeps out from the PADDLE across the whole arena,
+-- clearing enemy fire as it passes (see BlankWave in effects.lua), and the enemy
+-- ranks are locked out of firing for BLANK_LOCK seconds behind it -- otherwise
+-- the same shooters simply refill the space the blank just made.
+--
+-- Bullet-hell fire arrives in CLUSTERS and the paddle is a 4px bar, so without
+-- this one mistake routinely cost three or four hearts in a row before the
+-- player could move. The blank turns one hit into one hit and hands back a clean
+-- screen to recover on.
+--
+-- Radius is the arena's full WIDTH, taken from the paddle at the bottom, which
+-- reaches all but the very top corners of the playfield -- so in practice it
+-- clears the screen.
+local BLANK_LOCK = 1.0
+
+local function trigger_blank()
+  local arena = main.current
+  if not (arena and arena.paddle) then return end
+  arena.fire_lock_t = math.max(arena.fire_lock_t or 0, BLANK_LOCK)
+  BlankWave{group = arena.effects, x = arena.paddle.x, y = arena.paddle.y,
+            radius = arena.x2 - arena.x1, color = blue[0]}
+end
+
+
 function EnemyProjectile:update(dt)
   self:update_game_object(dt)
   local arena = main.current
@@ -370,10 +407,15 @@ function EnemyProjectile:update(dt)
     end
   end
 
-  -- Off-arena cleanup. Original only killed on the bottom edge — angled
-  -- bullet-hell shots can also exit sideways or off the top.
-  if self.y > arena.y2 + 8 or self.y < arena.y1 - 8 then self.dead = true end
-  if self.x < arena.x1 - 8 or self.x > arena.x2 + 8 then self.dead = true end
+  -- Off-SCREEN cleanup (see OFF_SCREEN_PAD). Measured against the canvas, not
+  -- the arena, so a shot leaves through the wall and keeps going until it is
+  -- actually out of sight. All four edges, not just the three solid ones: the
+  -- rule is "the player can no longer see it", and that reads the same whichever
+  -- way the shot left.
+  local pad = self.r_size + OFF_SCREEN_PAD
+  if self.x < -pad or self.x > gw + pad or self.y < -pad or self.y > gh + pad then
+    self.dead = true
+  end
   -- Paddle hit. Swept vertical test over the segment the bullet travelled this
   -- frame, instead of the old "anywhere below paddle.y - 4" column — that acted
   -- like an infinitely tall hitbox under the paddle, so lifting the paddle in
@@ -408,6 +450,8 @@ function EnemyProjectile:update(dt)
       end
       hit2:play{volume = 0.4, pitch = random:float(1.0, 1.1)}
       enemy_shake(2, 0.15, 90)
+      -- Blank: sweep the screen and lock the ranks out (see trigger_blank).
+      trigger_blank()
       Flash{group = arena.effects, x = gw/2, y = gh/2, color = red_transparent_weak, duration = 0.08}
       if arena.player_hp <= 0 then arena:trigger_game_over() end
       self.dead = true
@@ -568,7 +612,7 @@ function EnemyProjectile:draw()
   local sk     = self:spawn_k()
   local scaled = sk < 1
   if scaled then
-    local ss = 0.3 + 0.7*sk
+    local ss = 0.12 + 0.88*sk
     graphics.push(self.x, self.y, 0, ss, ss)
   end
 
@@ -592,9 +636,18 @@ function EnemyProjectile:draw()
   if self.reflected then
     graphics.circle(self.x, self.y, self.r_size + 1.5, Color(1, 0.90, 0.50, 0.4), 1)
   end
-  -- Release the muzzle scale before the burn-out ring, which is a full-size
-  -- dissipation effect and must not be shrunk with the body.
+  -- Release the muzzle scale before the flare and the burn-out ring, both of
+  -- which are full-size effects and must not be shrunk with the body.
   if scaled then graphics.pop() end
+
+  -- Muzzle flare: a hot bloom that collapses as the shot reaches full size. The
+  -- scale alone is legible only if you are already looking at that spot; the
+  -- flare is what makes a shot being FIRED catch the eye across the arena.
+  if sk < 1 then
+    local wh = 1 - sk
+    graphics.circle(self.x, self.y, self.r_size*(1 + 2.6*wh), Color(1, 0.72, 0.45, 0.40*wh))
+    graphics.circle(self.x, self.y, self.r_size*(0.5 + 1.1*wh), Color(1, 0.95, 0.85, 0.55*wh))
+  end
 
   -- Burn-out ring: pushes outward off the shot as it fades, so the shot reads
   -- as dissipating rather than simply getting dimmer. Drawn at full strength
@@ -1678,17 +1731,34 @@ function Boss:take_damage(amount, color, no_flash, source)
 end
 
 
+-- Boss payout. Held back until the destruction has played out (see BossDeath),
+-- so the drafts don't open over the explosion. The three paddle levels arrive
+-- as three drafts in sequence: BallPit:level_up queues them through
+-- pending_levelups, so calling it three times in a row is safe. The ball levels
+-- go through apply_level_random, which caps itself at however many balls can
+-- still take one, so it never promises more than it delivers.
+local BOSS_PADDLE_LEVELS = 3
+local BOSS_BALL_LEVELS   = 5
+local BOSS_REWARD_DELAY  = 1.1
+
+
 function Boss:die()
   local arena = main.current
   -- Tell the arena XP/score systems we died, same hook as bricks use.
   arena:on_brick_killed(self)
 
-  -- Big celebratory effects.
-  spawn_burst(arena.effects, self.x, self.y, self.color, 60, 80, 280)
-  spawn_burst(arena.effects, self.x, self.y, fg[5],      24, 60, 220)
-  Flash{group = arena.effects, x = gw/2, y = gh/2, color = white_transparent_weak, duration = 0.25}
-  explosion1:play{volume = 0.7, pitch = 0.7}
-  enemy_die1:play{volume = 0.6, pitch = 0.6}
+  -- Destruction: a staged implode -> detonate -> embers sequence that takes over
+  -- the core's own silhouette (BossDeath, effects.lua), carrying its own layered
+  -- sound stack. Replaces the single burst + white screen flash this used to be.
+  BossDeath{group = arena.effects, x = self.x, y = self.y, color = self.color,
+            r_outer = self.r_outer, r_inner = self.r_inner}
+
+  -- The payout (see BOSS_PADDLE_LEVELS above).
+  arena.t:after(BOSS_REWARD_DELAY, function()
+    if not (arena.main and arena.main.world) then return end
+    if arena.apply_level_random then arena:apply_level_random(BOSS_BALL_LEVELS) end
+    for _ = 1, BOSS_PADDLE_LEVELS do arena:level_up() end
+  end)
 
   -- Big XP drop so the player gets a meaningful payoff and likely level-up.
   local x, y, v = self.x, self.y, self.xp_value
