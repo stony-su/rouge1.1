@@ -32,7 +32,8 @@ There are **two parallel copies** of the game. Every gameplay change must be app
   that can spawn powerups / force state.
 
 Both working copies are **LF on disk**; git's `autocrlf` writes CRLF on checkout, so an in-place
-edit does not have to preserve carriage returns (verified 2026-08-26 — `tr -cd '' | wc -c`
+edit does not have to preserve carriage returns (verified 2026-08-26 — `tr -cd '
+' | wc -c`
 returns 0 for both builds).
 
 Many files are *near*-identical between the two copies (modulo line endings), so the same Edit
@@ -123,7 +124,8 @@ after the boss; no save/meta-progression yet.
 | Boss HP / phases / attacks | `enemies.lua` `Boss` |
 | Powerup kinds + feel | `powerup.lua` `Powerup.KINDS`, init / deflect |
 | Paddle size / dodge band / bounce angle | `paddle.lua` |
-| Title screen facade / record stele | `ballpit.lua` — the `-- ----- The facade` block |
+| Title screen backglass (marquee, chase, reel, lanes) | `ballpit.lua` — the `-- ----- Title screen` block |
+| Pinball cabinet hardware (bulb/panel/rail/bumper/target/reel) | `paddles.lua` — `cab_*`, exported as `PADDLES.cab` |
 
 (See `GAME_CODE_SUMMARY.txt` §10 for the full index.)
 
@@ -213,6 +215,20 @@ the *player* instead. Cite the SNKRX `player.lua` line in a comment when you por
   range via `math.distance`. Useful arena helpers: `get_nearest_brick_within`,
   `get_random_brick_within`, `has_brick_within`, `get_bricks_within`, `breach_line_y` (the red
   defense line — paddle side below, enemy side above), `heal_hearts(n)`, `arena.paddle`.
+
+## The cabinet look
+
+The title screen, the run report and the shop are all one pinball machine, drawn from ONE set of
+hardware helpers: `cab_bulb` / `cab_panel` / `cab_rail` / `cab_bumper` / `cab_target` / `cab_reel`,
+defined as file-locals in `paddles.lua` and re-exported as `PADDLES.cab` so `ballpit.lua` (required
+first, so it cannot see those locals) can build the title from them. Restyle a part there and it
+restyles everywhere — add new hardware to that table rather than redrawing it per page.
+
+Two gotchas those helpers carry:
+- They bake their own hairline/screw alphas, so they **cannot be faded by colour alone**. The title
+  screen fades by drawing a cabinet-coloured rect back over the page (see the end of `draw_title`).
+- `fat_font` sits high in its box: through `print_centered` the ink runs `y - 17s .. y + 2s`, so the
+  draw y that actually centres a glyph is `7.5s` BELOW the target (`fat_baseline` in `ballpit.lua`).
 
 ## Paddle loadouts
 
