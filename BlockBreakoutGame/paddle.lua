@@ -25,6 +25,25 @@ Paddle:implement(Physics)
 local DODGE_BAND_UP   = 120
 local DODGE_BAND_DOWN = 2
 
+-- Aegis dome deploy / dissipate.
+--   BRACE_DEPLOY_DUR   the dome punches OUT of the paddle face over this long,
+--                      easing to a stop, so it reads as being pushed out rather
+--                      than popping into existence already at full size
+--   BRACE_FADE_DUR     how long it dissolves for once the window closes
+--   BRACE_FADE_DRIFT   extra px it keeps drifting outward while dissolving
+--   BRACE_SHOVE_*      the deploy shove: the expanding dome physically clears
+--                      enemy shots out of the volume it is growing into (see
+--                      Paddle:brace_shove). REACH is measured up from the rim,
+--                      FAN is how far the push angles toward the rim at the
+--                      dome's edges, SPEED the floor it throws them at.
+local BRACE_DEPLOY_DUR   = 0.14
+local BRACE_FADE_DUR     = 0.28
+local BRACE_FADE_DRIFT   = 6
+local BRACE_SHOVE_REACH  = 34
+local BRACE_SHOVE_MARGIN = 10
+local BRACE_SHOVE_FAN    = 0.9
+local BRACE_SHOVE_SPEED  = 260
+
 function Paddle:init(args)
   self:init_game_object(args)
   self.w        = self.w or 36          -- was 56 — shrunk for bullet-hell pressure
@@ -47,6 +66,17 @@ function Paddle:init(args)
   self.brace_t      = 0
   self.brace_lock_t = 0
   self.greater      = false
+  -- Dome animation clocks: deploy counts UP from the raise (the push-out), fade
+  -- counts DOWN from the close (the dissipate). fade_greater remembers which
+  -- tier of dome it was, since `greater` is cleared the instant the window shuts.
+  self.brace_deploy_t     = 0
+  self.brace_fade_t       = 0
+  self.brace_fade_greater = false
+
+  -- Phased (the wide powerup): damage-immune and drawn at a ghost alpha. Set
+  -- by BallPit:apply_paddle_width_buff; read by BallPit:damage_player (which
+  -- every damage channel routes through) and by Paddle:draw below.
+  self.phased       = false
 
   if self.flippers then
     local sig          = self.flipper_sig or {}
@@ -233,10 +263,23 @@ function Paddle:update(dt)
   -- Aegis shield: tick the raised window down; when it closes the shield
   -- drops into its recharge cooldown — hit or not — so raising it is a real
   -- commitment, not something to mash.
+  -- The dissipate clock runs independently of the brace/lock branches below, so
+  -- the dome keeps dissolving while the re-arm bar is already refilling.
+  if (self.brace_fade_t or 0) > 0 then self.brace_fade_t = self.brace_fade_t - dt end
+
   if (self.brace_t or 0) > 0 then
     self.brace_t = self.brace_t - dt
+    -- Push-out: while the dome is still expanding it shoves enemy shots out of
+    -- the space it is claiming (see brace_shove).
+    if (self.brace_deploy_t or 0) < BRACE_DEPLOY_DUR then
+      self.brace_deploy_t = (self.brace_deploy_t or 0) + dt
+      self:brace_shove(BRACE_SHOVE_REACH*self:brace_deploy_k())
+    end
     if self.brace_t <= 0 then
       self.brace_lock_t = self.brace_lockout or 2.5
+      -- Hand the dome over to the dissipate animation, remembering its tier.
+      self.brace_fade_t       = BRACE_FADE_DUR
+      self.brace_fade_greater = self.greater or false
       if self.greater then
         -- A Greater dome goes out with a bang instead of a click.
         self.greater = false
@@ -316,6 +359,49 @@ end
 -- charged and piercing (on_ball_bounce), bullets flip gold and fly back
 -- (EnemyProjectile:reflect). When the window closes the shield recharges for
 -- parry_lockout seconds; ignored while already raised or recharging.
+-- Eased deploy progress: 0 = flush with the paddle face, 1 = full standoff.
+-- Cubic ease-out, so the dome snaps out and settles -- that deceleration is
+-- what sells "pushed out" rather than "grown". Reads 1 once the deploy is done.
+function Paddle:brace_deploy_k()
+  local d = math.clamp((self.brace_deploy_t or 0)/BRACE_DEPLOY_DUR, 0, 1)
+  return 1 - (1 - d)*(1 - d)*(1 - d)
+end
+
+
+-- The deploy shove. While the dome is punching out of the paddle face it
+-- physically clears the volume it is expanding into: every enemy shot inside
+-- the swept band is thrown outward along the dome's normal -- straight up over
+-- the boss, fanning toward the rim at the edges.
+--
+-- This is deliberately NOT a parry. Turning a shot is the braced window's job
+-- and pays combo + bulwark; this only stops a bullet that was already sitting
+-- on the paddle when you braced from sliding through the animation. Reflected
+-- shots are skipped -- those are ours now.
+function Paddle:brace_shove(reach)
+  local arena = main.current
+  if not (arena and arena.main) then return end
+  local half = self.w/2 + BRACE_SHOVE_MARGIN
+  local ry   = self.y - self.h/2
+  for _, o in ipairs(arena.main.objects) do
+    if o.is and o:is(EnemyProjectile) and not o.dead and not o.reflected then
+      local dx = o.x - self.x
+      if math.abs(dx) <= half and o.y <= ry + self.h and o.y >= ry - reach then
+        local a      = -math.pi/2 + (dx/half)*BRACE_SHOVE_FAN
+        local vx, vy = o:get_velocity()
+        local sp     = math.max(math.sqrt(vx*vx + vy*vy), BRACE_SHOVE_SPEED)
+        o:set_velocity(math.cos(a)*sp, math.sin(a)*sp)
+        -- One burst per shot, not per frame -- the shove re-runs every frame of
+        -- the deploy, and a per-frame burst would bury the arena in sparks.
+        if not o.shoved then
+          o.shoved = true
+          spawn_burst(arena.effects, o.x, o.y, Color(0.55, 0.80, 1, 1), 3, 60, 120)
+        end
+      end
+    end
+  end
+end
+
+
 function Paddle:start_brace()
   if (self.brace_t or 0) > 0 or (self.brace_lock_t or 0) > 0 then return end
   local arena = main.current
@@ -336,12 +422,35 @@ function Paddle:start_brace()
     buff1:play{volume = 0.5, pitch = 0.9}
     camera:shake(2, 0.15, 90)
   end
-  self.brace_t = self.brace_window
-  pop1:play{volume = 0.3, pitch = 0.8}
+  self.brace_t        = self.brace_window
+  self.brace_deploy_t = 0     -- restart the push-out animation
+  self.brace_fade_t   = 0     -- and cancel any dissipation still running
+  -- Raise cue: a metallic brace (the shield coming up) layered with the shove
+  -- of the dome punching out. Two layers because the raise is a committed,
+  -- locked-out action -- it has to be unmistakable over a busy field.
+  mine1:play{volume = 0.45, pitch = 0.80}
+  force1:play{volume = 0.30, pitch = 1.15}
 end
 
 
+-- Ghost alpha while phased (the wide powerup). Applied through the graphics
+-- module's GLOBAL alpha multiplier rather than by threading an alpha into
+-- body_color, because the paddle is ten different skins that each paint in
+-- their own palette (bronze, gold, blood, ice, ...) and most of them mix in
+-- fixed fg/bg tones -- only a global multiplier fades all of them at once.
+-- Multiplied into whatever is already set, and restored on the same path.
+local PHASED_ALPHA = 0.35
+
 function Paddle:draw()
+  if not self.phased then return self:draw_body() end
+  local prev = graphics.alpha_mult
+  graphics.alpha_mult = prev*PHASED_ALPHA
+  self:draw_body()
+  graphics.alpha_mult = prev
+end
+
+
+function Paddle:draw_body()
   local s = self.hfx.hit.x
   local body_color = self.hfx.hit.f and fg[0] or self.color
 
@@ -476,21 +585,38 @@ function Paddle:draw_aegis_paddle(s, color)
   -- layered strokes (soft glow, body, bright inner edge) so it reads as an
   -- energy barrier, dimming as the window runs out. A GREATER dome trades
   -- the blue for gold and swells wider and taller.
-  if braced then
-    local g    = self.greater
-    local half = w/2 + (g and 14 or 8)
-    local sag  = g and 22 or 8                    -- crest height over the arc's endpoints
-    local R    = (half*half + sag*sag)/(2*sag)    -- circle through crest + endpoints
-    local cy   = self.y - h/2 - 4 - sag + R       -- its center sits far below the crest
-    local th   = math.asin(half/R)
+  -- Drawn while braced AND through the dissipate tail, so closing the window
+  -- dissolves the dome instead of blinking it out.
+  local fk = math.clamp((self.brace_fade_t or 0)/BRACE_FADE_DUR, 0, 1)
+  if braced or fk > 0 then
+    local g = (braced and self.greater) or ((not braced) and self.brace_fade_greater)
+    -- dk drives EVERY dimension, so at dk=0 the dome is a flat sliver lying on
+    -- the rim and at dk=1 it is the full standoff arc -- it grows out OF the
+    -- paddle face rather than appearing above it. Held at 1 through the fade.
+    local dk = braced and self:brace_deploy_k() or 1
+    -- A dissipating dome drifts a little further out as it goes, so it peels
+    -- off the paddle instead of collapsing back into it.
+    local drift  = braced and 0 or (1 - fk)*BRACE_FADE_DRIFT
+    local a_mult = braced and 1 or fk
+    -- Brief overbright at the instant of deploy: the punch, not a screen flash.
+    local pop    = braced and (1 - dk)*0.45 or 0
+    local function al(v) return math.clamp(v*a_mult, 0, 1) end
+
+    local half  = (w/2 + (g and 14 or 8))*(0.35 + 0.65*dk)
+    local sag   = math.max((g and 22 or 8)*dk, 0.5)  -- 0 sag would divide by zero below
+    local stand = (g and 6 or 4)*dk + drift          -- gap from the rim to the arc's ends
+    local R     = (half*half + sag*sag)/(2*sag)      -- circle through crest + endpoints
+    local cy    = self.y - h/2 - stand - sag + R     -- its center sits far below the crest
+    local th    = math.asin(math.clamp(half/R, -1, 1))
     local a1, a2 = -math.pi/2 - th, -math.pi/2 + th
-    local cA = g and Color(1, 0.80, 0.30, 0.12 + 0.20*k) or Color(0.45, 0.75, 1, 0.10 + 0.18*k)
-    local cB = g and Color(1, 0.85, 0.35, 0.35 + 0.45*k) or Color(0.55, 0.80, 1, 0.30 + 0.45*k)
-    local cC = g and Color(1, 0.95, 0.70, 0.30 + 0.35*k) or Color(0.85, 0.95, 1, 0.25 + 0.35*k)
+    local cA = g and Color(1, 0.80, 0.30, al(0.12 + 0.20*k + pop)) or Color(0.45, 0.75, 1, al(0.10 + 0.18*k + pop))
+    local cB = g and Color(1, 0.85, 0.35, al(0.35 + 0.45*k + pop)) or Color(0.55, 0.80, 1, al(0.30 + 0.45*k + pop))
+    local cC = g and Color(1, 0.95, 0.70, al(0.30 + 0.35*k + pop)) or Color(0.85, 0.95, 1, al(0.25 + 0.35*k + pop))
     graphics.arc('open', self.x, cy, R + 2.5, a1, a2, cA, g and 7 or 5)
     graphics.arc('open', self.x, cy, R,       a1, a2, cB, g and 3 or 2)
     graphics.arc('open', self.x, cy, R - 1.5, a1, a2, cC, 1)
-  elseif locked then
+  end
+  if locked then
     -- Re-arm readout: refills left-to-right across the recharge.
     local rk = 1 - math.clamp(self.brace_lock_t/(self.brace_lockout or 2.5), 0, 1)
     if rk > 0 then

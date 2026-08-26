@@ -14,6 +14,12 @@ Projectile:implement(Physics)
 function Projectile:init(args)
   self:init_game_object(args)
   self.dmg      = self.dmg or 8
+  -- Percent-of-max-HP damage. When > 0 the shot ignores its flat dmg on any
+  -- enemy that tracks a max_hp and takes that fraction of it instead (engineer
+  -- turret bolts 33%, archer bolts 100%), so a single shot stays meaningful
+  -- against late-wave bricks whose HP scales with the wave. Enemies with no
+  -- max_hp (EnemyCritter) fall back to the flat dmg. See Projectile:damage_to.
+  self.max_hp_frac = self.max_hp_frac or 0
   self.speed    = self.speed or 220
   self.pierce   = self.pierce or 0
   self.ricochet = self.ricochet or 0
@@ -247,12 +253,23 @@ function Projectile:draw_spellblade_shard()
 end
 
 
+-- Damage this projectile deals to `target`: a fraction of the target's MAX HP
+-- when max_hp_frac is set and the target tracks one, otherwise the flat dmg.
+-- (Brick and Boss both carry max_hp; EnemyCritter doesn't, so it takes flat dmg.)
+function Projectile:damage_to(target)
+  if self.max_hp_frac > 0 and target.max_hp then
+    return target.max_hp*self.max_hp_frac
+  end
+  return self.dmg
+end
+
+
 function Projectile:on_hit_brick(brick)
   -- Cannonball: ignore the single target -- detonate into a splash that covers it.
   if self.type == 'cannonball' then self:cannon_explode(); return end
   if self.hits[brick.id] then return end
   self.hits[brick.id] = true
-  brick:take_damage(self.dmg, self.color)
+  brick:take_damage(self:damage_to(brick), self.color)
 
   -- Assassin on-hit: the struck brick starts bleeding, and a crit sprays extra
   -- particles. bleed is the TOTAL over bleed_dur, so pass it through as dps.

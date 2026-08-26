@@ -125,11 +125,13 @@ local HERO_STATS = {
   -- ----- Engineer "Builder" (SNKRX engineer port; behavior = 'turret_drop') -----
   -- SNKRX player.lua:409 / Turret:3196 -- every cd seconds the engineer DEPLOYS a
   -- turret at its own position. Each turret aims at the nearest brick and fires a
-  -- BURST of burst_count shots, persisting for `lifetime` then folding up. Level 3
+  -- BURST of burst_count shots, each dealing turret_hp_frac of the target's MAX HP
+  -- (see Projectile.max_hp_frac), persisting for `lifetime` then folding up. Turret
+  -- fire rate also scales with the player's level (see AllyTurret). Level 3
   -- ("Upgrade!!!") drops lvl3_count turrets per deploy and UPGRADES them all (+50%
   -- damage & fire rate). The engineer ball is a steady fabricator drone: medium
   -- speed, mildly dampened, hovering on a gentle bob (skin = 'engineer').
-  engineer    = {r = 6, base_speed = 150, dmg = 8, color = 'orange', behavior = 'turret_drop', cd = 8, lifetime = 16, turret_cd = 3.0, burst_count = 3, burst_gap = 0.12, turret_range = 256, turret_mult = 2.0, shot_speed = 220, lvl3_count = 2, skin = 'engineer'},
+  engineer    = {r = 6, base_speed = 150, dmg = 8, color = 'orange', behavior = 'turret_drop', cd = 8, lifetime = 16, turret_cd = 3.0, burst_count = 5, burst_gap = 0.12, turret_range = 256, turret_mult = 2.0, turret_hp_frac = 0.33, shot_speed = 220, lvl3_count = 2, skin = 'engineer'},
 
   -- ----- Force area (behavior = 'force_area') -----
   -- ----- Psykino "Magnetic Force" (SNKRX psykino port; behavior = 'force_pull') -----
@@ -1537,7 +1539,7 @@ BEHAVIORS.turret_drop = function(self, s)
       AllyTurret{group = arena.effects, x = px, y = py, color = self.color,
                  lifetime = s.lifetime, burst_cd = s.turret_cd, burst_count = s.burst_count,
                  burst_gap = s.burst_gap, range = s.turret_range, dmg = tdmg,
-                 shot_speed = s.shot_speed, upgraded = lvl3}
+                 max_hp_frac = s.turret_hp_frac, shot_speed = s.shot_speed, upgraded = lvl3}
     end
     -- Deploy juice: a fabrication recoil + a spray of welding sparks.
     self.spring:pull(0.4)
@@ -2000,6 +2002,9 @@ function BallHero:shoot_bolt(s)
     speed = s.speed or 380, range = s.range, color = self.color,
     proj_scale = s.proj_scale or 1.6,
     pierce = 1000, ricochet = (self.level >= 3) and 3 or 0, wall_stick = true,
+    -- The bolt deals 100% of each target's MAX HP, so it deletes everything it
+    -- skewers no matter how the wave has scaled enemy HP (Projectile.max_hp_frac).
+    max_hp_frac = 1.0,
   })
   archer1:play{pitch = random:float(0.95, 1.05), volume = 0.35}
 end

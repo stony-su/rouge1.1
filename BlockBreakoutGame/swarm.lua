@@ -20,6 +20,14 @@ Swarm:implement(GameObject)
 local DRIFT_SPEED_MULT = 0.5
 
 
+-- Guaranteed vertical corridor. Every swarm gets a channel this many columns
+-- wide (rolled per swarm) cleared through its FULL height -- the classic
+-- breakout chimney -- so a formation can never roll as an unbroken slab and
+-- there is always a lane a ball can punch straight up through.
+local CORRIDOR_MIN_COLS = 1
+local CORRIDOR_MAX_COLS = 2
+
+
 -- Shape catalogue. Each entry lists {col, row} cell offsets relative to its
 -- own top-left and a `weight` controlling how often the placer picks it from
 -- among the shapes that fit at a given grid spot. 1×1 is overwhelmingly
@@ -83,6 +91,25 @@ function Swarm.generate_cells(rows_count, max_cols, density, spacing_x, spacing_
   -- with a cell it already claimed.
   local occupied = {}
   for r = 0, rows_count - 1 do occupied[r] = {} end
+
+  -- Carve the guaranteed vertical corridor BEFORE anything is placed, by
+  -- claiming its columns in the occupancy grid: `fits` then refuses to bridge
+  -- it and the placer skips those cells outright. Doing it up front rather
+  -- than deleting cells afterwards matters because a shape is a single brick --
+  -- post-hoc carving would strand 2x2s and tetris pieces with half a footprint
+  -- missing. Width is clamped so at least one column of bricks always survives
+  -- (max_cols bottoms out at 2, see the spawner).
+  local corr_w = math.min(random:int(CORRIDOR_MIN_COLS, CORRIDOR_MAX_COLS), max_cols - 1)
+  if corr_w > 0 then
+    -- Keep the channel off the outer edge when there is room for it, so it
+    -- reads as a gap THROUGH the wall rather than just a narrower wall.
+    local lo, hi = 0, max_cols - corr_w
+    if max_cols >= corr_w + 3 then lo, hi = 1, max_cols - corr_w - 1 end
+    local corr_c = random:int(lo, hi)
+    for r = 0, rows_count - 1 do
+      for c = corr_c, corr_c + corr_w - 1 do occupied[r][c] = true end
+    end
+  end
 
   local function fits(shape, col, row)
     for _, c in ipairs(shape.cells) do

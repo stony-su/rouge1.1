@@ -115,6 +115,15 @@ function EnemyCritter:apply_slow() end
 function EnemyCritter:apply_burn() end
 
 
+-- Fraction of a BRICK's max HP a parried (reflected) shot deals when it lands.
+-- Percent-of-max-HP rather than the flat reflect_dmg so turning a bullet stays
+-- decisive however far the wave has scaled brick HP -- the parry is a committed,
+-- locked-out read and it should be worth the commitment. The BOSS is
+-- deliberately excluded: it is not a "block", and 75% of a boss bar per parried
+-- shot would end wave 10 in two. It keeps the flat reflect payload.
+local PARRY_MAX_HP_FRAC = 0.75
+
+
 -- Slow downward projectile fired by shooter bricks. Hits the paddle.
 EnemyProjectile = Object:extend()
 EnemyProjectile:implement(GameObject)
@@ -312,7 +321,10 @@ function EnemyProjectile:update(dt)
       local gmult = (arena.paddle.greater and (sigt.greater_reflect_mult or 2)) or 1
       self:reflect((sigt.reflect_dmg or 60)*gmult)
       spawn_burst(arena.effects, self.x, self.y, self.color, 8, 90, 170)
-      buff1:play{volume = 0.35, pitch = random:float(1.25, 1.4)}
+      -- Parry cue: a metallic ting off the shield face, with the old magical
+      -- shimmer kept underneath and pulled back so the ting carries.
+      mine1:play{volume = 0.35, pitch = random:float(1.50, 1.70)}
+      buff1:play{volume = 0.22, pitch = random:float(1.25, 1.4)}
       if arena.add_combo_points then
         arena:add_combo_points(sigt.parry_combo or 25)
       end
@@ -322,7 +334,7 @@ function EnemyProjectile:update(dt)
       -- Vampire bar takes the equivalent of self.dmg hearts.
       arena:damage_player(self.dmg)
       hit2:play{volume = 0.4, pitch = random:float(1.0, 1.1)}
-      camera:shake(2, 0.15, 90)
+      enemy_shake(2, 0.15, 90)
       Flash{group = arena.effects, x = gw/2, y = gh/2, color = red_transparent_weak, duration = 0.08}
       if arena.player_hp <= 0 then arena:trigger_game_over() end
       self.dead = true
@@ -342,7 +354,8 @@ function EnemyProjectile:update(dt)
         local sigt = arena.run_mods.sig or {}
         self:reflect((sigt.reflect_dmg or 60)*(sigt.greater_reflect_mult or 2))
         spawn_burst(arena.effects, self.x, self.y, self.color, 6, 80, 150)
-        buff1:play{volume = 0.25, pitch = random:float(1.3, 1.45)}
+        mine1:play{volume = 0.22, pitch = random:float(1.55, 1.75)}
+        buff1:play{volume = 0.16, pitch = random:float(1.3, 1.45)}
         break
       end
     end
@@ -360,7 +373,11 @@ function EnemyProjectile:update(dt)
       hit = arena.boss
     end
     if hit then
-      hit:take_damage(self.dmg, self.color)
+      -- 75% of the brick's MAX HP (see PARRY_MAX_HP_FRAC). The boss is not a
+      -- block, so it keeps the flat reflect payload.
+      local pdmg = (hit.is and hit:is(Brick) and hit.max_hp)
+                   and hit.max_hp*PARRY_MAX_HP_FRAC or self.dmg
+      hit:take_damage(pdmg, self.color)
       spawn_burst(arena.effects, self.x, self.y, self.color, 8, 80, 160)
       pop1:play{volume = 0.3, pitch = random:float(1.2, 1.35)}
       self.dead = true
@@ -964,6 +981,18 @@ local BOSS_PHASE_COLORS = {
 }
 
 
+-- Motion-trail tuning. The boss samples its own position every TRAIL_SAMPLE
+-- seconds and keeps TRAIL_LEN samples (see Boss:update). The ribbon is drawn
+-- from every sample; the body aftershadows from every TRAIL_GHOST_STRIDE-th
+-- one. TRAIL_FULL_SPEED is the speed (px/s) at which the trail reaches full
+-- strength -- below it the whole effect fades out proportionally, so a boss
+-- easing through the slow part of a curve doesn't sit in a static smear.
+local TRAIL_SAMPLE       = 0.02
+local TRAIL_LEN          = 16
+local TRAIL_GHOST_STRIDE = 4
+local TRAIL_FULL_SPEED   = 150
+
+
 function Boss:init(args)
   self:init_game_object(args)
   self.r_outer = 28
@@ -983,6 +1012,17 @@ function Boss:init(args)
   self.inner_rot  = 0
   self.spawn_t    = 0
   self.intro_done = false
+
+  -- Motion trail + aftershadow state. path_trail is a short position history
+  -- (newest first) holding both rotations, so an echo of the body can be redrawn
+  -- exactly as it looked at that instant. trail_k tracks how fast the boss is
+  -- actually moving and scales the whole effect, so the smear only appears when
+  -- there is real motion to smear (see Boss:update / Boss:draw_trail).
+  self.path_trail = {}
+  self.trail_t    = 0
+  self.trail_k    = 0
+  self.prev_x     = self.x
+  self.prev_y     = self.y
 
   -- Status-effect compatibility with hero abilities. Same shape as Brick.
   self.slow_factor = 1
@@ -1108,7 +1148,7 @@ function Boss:attack_spiral()
   local arena = main.current
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 22,
                 color = self.color, duration = 0.25}
-  shoot1:play{volume = 0.3, pitch = 0.85}
+  enemy_shot_sound(0.3, 0.85)
   local base = random:float(0, 2*math.pi)
   local dir  = random:bool(50) and 1 or -1
   for i = 0, 15 do
@@ -1129,7 +1169,7 @@ function Boss:attack_spiral_double()
   local arena = main.current
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 26,
                 color = self.color, duration = 0.3}
-  shoot1:play{volume = 0.32, pitch = 0.78}
+  enemy_shot_sound(0.32, 0.78)
   local base = random:float(0, 2*math.pi)
   for i = 0, 17 do
     self.t:after(i*0.08, function()
@@ -1149,7 +1189,7 @@ function Boss:attack_flower()
   local arms  = (self.phase >= 3) and 5 or 4
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = 24,
                 color = self.color, duration = 0.3}
-  shoot1:play{volume = 0.3, pitch = 1.0}
+  enemy_shot_sound(0.3, 1.0)
   local base = random:float(0, 2*math.pi)
   local dir  = random:bool(50) and 1 or -1
   for i = 0, 13 do
@@ -1174,7 +1214,7 @@ function Boss:attack_shotgun()
                 color = self.color, duration = 0.4}
   self.t:after(0.4, function()
     if not (arena.main and arena.main.world and not self.dead) then return end
-    shoot1:play{volume = 0.32, pitch = 0.95}
+    enemy_shot_sound(0.32, 0.95)
     local base = math.atan2(arena.paddle.y - self.y, arena.paddle.x - self.x)
     for _, off in ipairs({-0.32, -0.16, 0, 0.16, 0.32}) do
       -- Boss shotgun: fast 5-shot fan. Faster than the ring blast so the aimed
@@ -1196,7 +1236,7 @@ function Boss:attack_snipe()
   for shot = 0, 2 do
     self.t:after(0.45 + shot*0.13, function()
       if not (arena.main and arena.main.world and not self.dead) then return end
-      shoot1:play{volume = 0.3, pitch = 1.15}
+      enemy_shot_sound(0.3, 1.15)
       local a = math.atan2(arena.paddle.y - self.y, arena.paddle.x - self.x)
       self:fire{kind = 'dart', angle = a, speed = 150, dmg = 2, r_size = 3.4, life = 5}
     end)
@@ -1214,7 +1254,7 @@ function Boss:attack_ring()
                 color = self.color, duration = 0.6}
   self.t:after(0.6, function()
     if not (arena.main and arena.main.world and not self.dead) then return end
-    shoot1:play{volume = 0.4, pitch = 0.8}
+    enemy_shot_sound(0.4, 0.8)
     explosion1:play{volume = 0.25, pitch = 1.3}
     Flash{group = arena.effects, x = gw/2, y = gh/2,
           color = Color(self.color.r, self.color.g, self.color.b, 0.25), duration = 0.1}
@@ -1261,7 +1301,7 @@ function Boss:attack_wall()
   end
   self.t:after(0.7, function()
     if not (arena.main and arena.main.world and not self.dead) then return end
-    shoot1:play{volume = 0.4, pitch = 0.7}
+    enemy_shot_sound(0.4, 0.7)
     for i = 0, n - 1 do
       if not is_gap(i) then
         local px = math.lerp(i/(n - 1), x1, x2)
@@ -1282,7 +1322,7 @@ function Boss:attack_homing()
                 color = self.color, duration = 0.4}
   self.t:after(0.4, function()
     if not (arena.main and arena.main.world and not self.dead) then return end
-    shoot1:play{volume = 0.3, pitch = 0.9}
+    enemy_shot_sound(0.3, 0.9)
     for _, off in ipairs({-0.5, 0, 0.5}) do
       self:fire{kind = 'comet', angle = math.pi/2 + off, speed = 60, r_size = 3.4,
                 life = 7, homing = true, homing_turn = 0.55}
@@ -1482,6 +1522,25 @@ function Boss:update(dt)
   -- Frame-rate-independent ease, clamped so a frame spike can't overshoot.
   local k = math.min(1, self.move_ease * speed_factor * dt)
   self:set_position(self.x + (tx - self.x)*k, self.y + (ty - self.y)*k)
+
+  -- ---- Motion trail ------------------------------------------------------
+  -- Measured speed (not the target's) drives the trail's strength, smoothed so
+  -- the per-frame ease jitter can't make it flicker. Sampling runs on its own
+  -- fixed clock rather than per frame, so the ribbon's spacing is a function of
+  -- how far the boss travelled, not of the frame rate.
+  local moved = math.distance(self.prev_x, self.prev_y, self.x, self.y)
+  local sp    = (dt > 0) and (moved/dt) or 0
+  self.prev_x, self.prev_y = self.x, self.y
+  local want_k = math.clamp(sp/TRAIL_FULL_SPEED, 0, 1)
+  self.trail_k = self.trail_k + (want_k - self.trail_k)*math.min(1, dt*6)
+
+  self.trail_t = self.trail_t + dt
+  if self.trail_t >= TRAIL_SAMPLE then
+    self.trail_t = 0
+    table.insert(self.path_trail, 1,
+                 {x = self.x, y = self.y, o = self.outer_rot, i = self.inner_rot})
+    if #self.path_trail > TRAIL_LEN then table.remove(self.path_trail) end
+  end
 end
 
 
@@ -1554,10 +1613,61 @@ function Boss:apply_curse(color, mult, duration)
 end
 
 
+-- Motion trail + aftershadow, drawn UNDER the body from the position history
+-- update samples. Two layers off the one buffer:
+--   * the ribbon -- a soft core-colored disc at every sample, tapering in radius
+--     and alpha toward the tail, so the curve the boss is tracing reads as a
+--     streak instead of a jump between frames;
+--   * the aftershadow -- every TRAIL_GHOST_STRIDE-th sample also re-draws the
+--     12-gon ring and inner hexagon as dim outlines at THAT frame's rotations,
+--     so the shape itself echoes behind the boss rather than just a blur.
+-- Both are scaled by trail_k, so a slow boss barely smudges and a phase-3 boss
+-- (1.6x movement) drags a full comet. Deliberately uses self.color rather than
+-- the hit-flash color, so the trail doesn't strobe white on every ball contact.
+function Boss:draw_trail()
+  local k = self.trail_k or 0
+  if k <= 0.02 then return end
+  local col = self.color
+  local n   = #self.path_trail
+  for i = 1, n do
+    local p    = self.path_trail[i]
+    local fade = 1 - (i - 1)/n            -- 1 at the head, ~0 at the tail
+
+    -- Ribbon: a soft disc shrinking toward the tail.
+    graphics.circle(p.x, p.y, self.r_inner*0.55*fade,
+                    Color(col.r, col.g, col.b, 0.22*fade*fade*k))
+
+    -- Aftershadow: a dim echo of the whole body every few samples. Skipped at
+    -- i == 1, which sits under the real body and would only thicken its outline.
+    if i > 1 and i % TRAIL_GHOST_STRIDE == 0 then
+      local ga = 0.24*fade*k
+      local gs = 0.72 + 0.28*fade        -- older echoes shrink as they dissipate
+      local vo = {}
+      for j = 0, 11 do
+        local a = p.o + j*(2*math.pi/12)
+        vo[#vo+1] = p.x + math.cos(a)*self.r_outer*gs
+        vo[#vo+1] = p.y + math.sin(a)*self.r_outer*gs
+      end
+      graphics.polygon(vo, Color(col.r, col.g, col.b, ga), 1)
+      local vi = {}
+      for j = 0, 5 do
+        local a = p.i + j*(2*math.pi/6)
+        vi[#vi+1] = p.x + math.cos(a)*self.r_inner*gs
+        vi[#vi+1] = p.y + math.sin(a)*self.r_inner*gs
+      end
+      graphics.polygon(vi, Color(col.r, col.g, col.b, ga*0.7), 1)
+    end
+  end
+end
+
+
 function Boss:draw()
   local s    = self.hfx.hit.x or 1
   local col  = self.hfx.hit.f and fg[0] or self.color
   local dark = Color(col.r*0.45, col.g*0.45, col.b*0.45, 1)
+
+  -- Trail + aftershadow first, so every echo sits behind the solid body.
+  self:draw_trail()
 
   -- Outer 12-sided ring, drawn as a polygon outline.
   local verts_out = {}

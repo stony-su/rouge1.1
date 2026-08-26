@@ -361,7 +361,10 @@ function VoidPool:pool_tick()
       end
     end
   end
-  if hit_any then self.hit_pulse = 1; dot1:play{volume = 0.2, pitch = random:float(0.85, 1.05)} end
+  -- No per-tick sound. The pool ticks 4x a second for its whole 11-15s life, so
+  -- the swoosh fired near-continuously with nothing on screen to explain it; the
+  -- drop cast (ball_hero.lua death_pool) still plays -- that one has a cause.
+  if hit_any then self.hit_pulse = 1 end
 end
 function VoidPool:pool_shoot()
   local arena = main.current
@@ -753,16 +756,27 @@ end
 -- deploys with a pop, persists for `lifetime`, then folds up in a spark puff. Level
 -- 3 ("Upgrade!!!") turrets (upgraded) fire faster, hit harder (baked into dmg) and
 -- wear a twin barrel + a "+" mark.
+-- Turret fire rate scales with the PLAYER's level (the "Lv N" beside the paddle,
+-- BallPit.level): every level past the first shortens the burst cooldown by
+-- TURRET_LEVEL_RATE, capped at TURRET_LEVEL_RATE_MAX, so a turret deployed deep
+-- into a run chatters instead of plinking at its wave-1 cadence.
+local TURRET_LEVEL_RATE     = 0.08
+local TURRET_LEVEL_RATE_MAX = 3.0
+
 AllyTurret = Object:extend()
 AllyTurret:implement(GameObject)
 function AllyTurret:init(args)
   self:init_game_object(args)
   self.lifetime    = self.lifetime or 16
   self.burst_cd    = self.burst_cd or 3.0
-  self.burst_count = self.burst_count or 3
+  self.burst_count = self.burst_count or 5
   self.burst_gap   = self.burst_gap or 0.12
   self.range       = self.range or 256
   self.dmg         = self.dmg or 8
+  -- Turret bolts deal a FRACTION OF THE TARGET'S MAX HP rather than flat damage
+  -- (see Projectile.max_hp_frac), so one burst stays meaningful against fat
+  -- late-wave bricks. Enemies with no max_hp (critters) fall back to self.dmg.
+  self.max_hp_frac = self.max_hp_frac or 0.33
   self.shot_speed  = self.shot_speed or 220
   self.color       = self.color or orange[0]
   self.upgraded    = self.upgraded or false
@@ -772,8 +786,12 @@ function AllyTurret:init(args)
   self.deploy_t    = 1              -- deploy pop (eases 1 -> 0)
   self.born_at     = love.timer.getTime()
   self.t:after(self.lifetime, function() self:expire() end)
-  -- Upgraded turrets fire 50% faster (SNKRX "Upgrade!!!" attack-speed boost).
-  self.t:every(self.burst_cd/(self.upgraded and 1.5 or 1), function() self:fire_burst() end)
+  -- Upgraded turrets fire 50% faster (SNKRX "Upgrade!!!" attack-speed boost), on
+  -- top of the player-level fire-rate scaling (see TURRET_LEVEL_RATE above).
+  local plvl = (main.current and main.current.level) or 1
+  local rate = math.min(1 + TURRET_LEVEL_RATE*(plvl - 1), TURRET_LEVEL_RATE_MAX)
+             * (self.upgraded and 1.5 or 1)
+  self.t:every(self.burst_cd/rate, function() self:fire_burst() end)
   spawn1:play{volume = 0.25, pitch = random:float(1.05, 1.2)}
 end
 function AllyTurret:update(dt)
@@ -806,7 +824,8 @@ function AllyTurret:fire_burst()
       self.flash_t = 0.1
       local mx, my = self.x + math.cos(r)*bl, self.y + math.sin(r)*bl
       Projectile{group = arena.main, x = mx, y = my, r = r, type = 'arrow', source = 'engineer',
-                 dmg = self.dmg, speed = self.shot_speed, color = self.color, pierce = 1}
+                 dmg = self.dmg, max_hp_frac = self.max_hp_frac,
+                 speed = self.shot_speed, color = self.color, pierce = 1}
       spawn_burst(arena.effects, mx, my, self.color, 2, 40, 90)
       shoot1:play{volume = 0.12, pitch = random:float(1.0, 1.15)}
     end)
@@ -1635,6 +1654,139 @@ function spawn_bounce_sparks(group, x, y, normal_angle, color)
       r = (normal_angle or 0) + random:float(-0.5, 0.5),
       v = random:float(60, 120),
     }
+  end
+end
+
+
+-- BreachShockwave: the retaliation blast a SWARM BREACH sets off (see
+-- BallPit:on_row_breached). A repulsion front spanning the arena sweeps UP from
+-- the breach line; every swarm it reaches loses hp_frac of each brick's MAX HP
+-- and is physically shoved back up the screen.
+--
+-- The hit is applied progressively, as the front arrives at each swarm, rather
+-- than all at once at the moment of the breach -- so the mechanic and the visual
+-- are the same event: you watch the blast reach a formation and see that
+-- formation buckle. The shove pairs a y_top move (real ground gained) with a
+-- spring kick (the recoil), which is WaterWave's proven way to displace a swarm:
+-- the spring alone always snaps back to where it started and would buy the
+-- player nothing.
+BreachShockwave = Object:extend()
+BreachShockwave:implement(GameObject)
+function BreachShockwave:init(args)
+  self:init_game_object(args)
+  self.x1      = self.x1 or 0
+  self.x2      = self.x2 or gw
+  self.y_start = self.y_start or gh
+  self.y_end   = self.y_end or 0
+  self.dur     = self.dur or 0.45      -- sweep time, breach line -> arena top
+  self.fade    = self.fade or 0.22
+  self.color   = self.color or red[0]
+  self.hp_frac = self.hp_frac or 0.5
+  self.shove   = self.shove or 56      -- px of ground the swarm actually loses
+  self.kick    = self.kick or 160      -- spring impulse layered on for the recoil
+  self.phase   = 'sweep'
+  self.elapsed = 0
+  self.front_y = self.y_start
+  self.alpha   = 1
+  self.hit     = {}
+  -- Fixed streak seeds (see draw): jittered once here rather than per frame, so
+  -- the push lines read as one field being dragged upward instead of noise.
+  self.streaks = {}
+  for i = 1, 14 do
+    self.streaks[i] = {t = (i - 0.5)/14, len = random:float(0.5, 1.0)}
+  end
+end
+
+function BreachShockwave:update(dt)
+  self:update_game_object(dt)
+  self.elapsed = self.elapsed + dt
+  if self.phase == 'sweep' then
+    local p     = math.clamp(self.elapsed/self.dur, 0, 1)
+    local eased = 1 - (1 - p)*(1 - p)*(1 - p)   -- fast out of the paddle, settling
+    self.front_y = self.y_start + (self.y_end - self.y_start)*eased
+    self:hit_swarms()
+    if p >= 1 then self.phase, self.elapsed = 'fade', 0 end
+  else
+    local p      = math.clamp(self.elapsed/self.fade, 0, 1)
+    self.alpha   = 1 - p
+    self.front_y = self.front_y - 40*dt          -- keeps coasting as it dissolves
+    if p >= 1 then self.dead = true end
+  end
+end
+
+function BreachShockwave:hit_swarms()
+  local arena = main.current
+  if not (arena and arena.swarms) then return end
+  for _, sw in ipairs(arena.swarms.objects) do
+    if sw and not sw.dead and not self.hit[sw.id] then
+      -- The front has reached this swarm once it clears the swarm's LOWEST live
+      -- brick. bottom_y accounts for multi-cell shapes (the body sits at the
+      -- shape centroid, so a 3-tall brick extends well past its dy).
+      local lowest, live = -1e9, false
+      for _, cell in ipairs(sw.cells or {}) do
+        if cell.brick and not cell.brick.dead then
+          local by = cell.brick:bottom_y()
+          if by > lowest then lowest = by end
+          live = true
+        end
+      end
+      if live and self.front_y <= lowest + 6 then
+        self.hit[sw.id] = true
+        -- Shove: y_top is the swarm's real descent, so moving it is the part the
+        -- player keeps. Clamped to the arena top so a formation can't be pushed
+        -- off the map and out of reach of the balls.
+        sw.y_top = math.max(arena.y1 + 8, sw.y_top - self.shove)
+        if sw.apply_knockback then sw:apply_knockback(self.kick, -math.pi/2) end
+        -- ...and the damage: a flat fraction of each brick's own MAX HP, so it
+        -- stays meaningful however far the wave has scaled brick health.
+        for _, cell in ipairs(sw.cells or {}) do
+          local b = cell.brick
+          if b and not b.dead and b.max_hp then
+            b:take_damage(b.max_hp*self.hp_frac, self.color)
+            HitParticle{group = arena.effects, x = b.x, y = b.y, color = fg[5],
+                        v = random:float(70, 140),
+                        r = -math.pi/2 + random:float(-0.5, 0.5),
+                        w = random:float(1, 2), duration = random:float(0.2, 0.4)}
+          end
+        end
+        spawn_burst(arena.effects, sw.x_center, lowest, self.color, 10, 90, 180)
+        pop1:play{volume = 0.22, pitch = random:float(0.6, 0.75)}
+      end
+    end
+  end
+end
+
+function BreachShockwave:draw()
+  local a = self.alpha or 1
+  if a <= 0.01 then return end
+  local c      = self.color
+  local w, cx  = self.x2 - self.x1, (self.x1 + self.x2)/2
+  local y      = self.front_y
+
+  -- Push streaks trailing BELOW the front: short lines being dragged up with
+  -- it. This is what makes the front read as a FORCE rather than a decorative
+  -- line -- the direction of travel is legible in a single frame.
+  for _, s in ipairs(self.streaks) do
+    local sx = self.x1 + s.t*w
+    local L  = (10 + 16*s.len)*a
+    graphics.line(sx, y + 3, sx, y + 3 + L,      Color(c.r, c.g, c.b, 0.30*a), 1.5)
+    graphics.line(sx, y + 3, sx, y + 3 + L*0.45, Color(1, 1, 1, 0.22*a), 1)
+  end
+
+  -- Soft pressure glow packed under the front.
+  graphics.rectangle(cx, y + 7, w, 14, nil, nil, Color(c.r, c.g, c.b, 0.14*a))
+
+  -- The front itself: a bright leading edge carrying a shallow travelling
+  -- ripple, so it looks like a shockwave rather than a moving ruler.
+  local segs = 32
+  local px, py = self.x1, y
+  for i = 1, segs do
+    local t  = i/segs
+    local x  = self.x1 + t*w
+    local yy = y + math.sin(t*math.pi*4 + self.elapsed*18)*1.8
+    graphics.line(px, py, x, yy, Color(c.r, c.g, c.b, 0.85*a), 2.5)
+    graphics.line(px, py - 1.5, x, yy - 1.5, Color(1, 1, 1, 0.70*a), 1)
+    px, py = x, yy
   end
 end
 

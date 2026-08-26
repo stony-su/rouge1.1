@@ -1,6 +1,10 @@
 -- XP gem dropped when a brick is destroyed. Drifts down slowly and is sucked
 -- toward the paddle once it gets close (vampire-survivors pickup feel).
 
+-- Downward acceleration applied to a free-falling orb (px/s2). Shared by the
+-- pop-out window and the out-of-magnet-range branch in :update.
+local XP_GRAVITY = 55
+
 XpOrb = Object:extend()
 XpOrb:implement(GameObject)
 XpOrb:implement(Physics)
@@ -25,9 +29,10 @@ function XpOrb:init(args)
   self.color  = Color(mute(ramp[0].r), mute(ramp[0].g), mute(ramp[0].b), 0.4)
   self.r_size = self.value >= 5 and 1.8 or (self.value >= 2 and 1.4 or 1.1)
   -- Magnet range — the paddle pulls in any orb within this radius. Widened
-  -- over time (64 -> 88 -> 130) so the paddle vacuums up a whole column of
-  -- falling XP without having to pass directly under each orb.
-  self.magnet_range = 130
+  -- over time (64 -> 88 -> 130 -> 200) so the paddle vacuums up a whole column
+  -- of falling XP without having to pass directly under each orb. Applies to
+  -- every paddle; the terrorist loadout below still overrides it to field-wide.
+  self.magnet_range = 200
   -- Terrorist paddle: auto-collect — every orb magnets in from anywhere on the
   -- field so the player never chases XP (leveling, which auto-arms balls, is the
   -- whole loop). A field-spanning range means the magnet branch always wins.
@@ -68,7 +73,7 @@ function XpOrb:update(dt)
   if self.magnet_delay > 0 then
     self.magnet_delay = self.magnet_delay - dt
     local vx, vy = self:get_velocity()
-    self:set_velocity(vx, vy + 95*dt)
+    self:set_velocity(vx, vy + XP_GRAVITY*dt)
 
   elseif d < self.magnet_range then
     -- In magnet range: hard snap toward the paddle (vampire-survivors-style
@@ -79,13 +84,14 @@ function XpOrb:update(dt)
     self:set_velocity(math.cos(ang)*pull, math.sin(ang)*pull)
 
   else
-    -- Out of magnet range: gentle gravity. Lowered from 160 px/s² so orbs
-    -- drift down noticeably more slowly, but still well clear of the original
-    -- 30 px/s² that let them stall at the damping-imposed ~15 px/s terminal
-    -- velocity. Missed orbs keep falling through the bottom and despawn within
-    -- the life timer rather than hanging in mid-air — a real pickup penalty.
+    -- Out of magnet range: gentle gravity. Lowered again (160 -> 95 -> 55 px/s²)
+    -- so orbs drift down noticeably more slowly and the widened magnet has time
+    -- to catch them, but still well clear of the original 30 px/s² that let
+    -- them stall at the damping-imposed ~15 px/s terminal velocity. Missed orbs
+    -- keep falling through the bottom and despawn within the life timer rather
+    -- than hanging in mid-air — a real pickup penalty.
     local vx, vy = self:get_velocity()
-    self:set_velocity(vx, vy + 95*dt)
+    self:set_velocity(vx, vy + XP_GRAVITY*dt)
   end
 
   if d < 8 then

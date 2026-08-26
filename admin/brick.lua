@@ -296,7 +296,7 @@ function Brick:cast_headbutt()
   -- Tell: short downward flick-ticks for the lunge, plus the existing jolt.
   spawn_flicks(fx, self.x, self.y + self.h/2, orange[0],
                {math.pi/2 - 0.2, math.pi/2, math.pi/2 + 0.2}, {dist = 9})
-  camera:shake(2, 0.12, 90)
+  enemy_shake(2, 0.12, 90)
   self.swarm:apply_knockback(40, math.pi/2)
 end
 
@@ -305,7 +305,7 @@ end
 function Brick:cast_shoot()
   if self.dead or self:hold_fire() then return end
   spawn_flicks(main.current.effects, self.x, self.y + 6, self.color, {math.pi/2}, {dist = 7, len = 4})
-  shoot1:play{volume = 0.18, pitch = random:float(0.95, 1.05)}
+  enemy_shot_sound(0.18, random:float(0.95, 1.05))
   local x, y = self.x, self.y + 6
   local arena = main.current
   arena.t:after(0, function()
@@ -330,7 +330,7 @@ function Brick:cast_sniper()
   local sx, sy = self.x, self.y + 6
   arena.t:after(0.3, function()
     if arena.main and arena.main.world and not self.dead then
-      shoot1:play{volume = 0.22, pitch = random:float(0.85, 0.95)}
+      enemy_shot_sound(0.22, random:float(0.85, 0.95))
       local angle = math.atan2(arena.paddle.y - sy, arena.paddle.x - sx)
       -- Sniper: very fast, snap-shot aimed dart. Top of the speed tier.
       EnemyProjectile{group = arena.main, x = sx, y = sy, color = red[0],
@@ -346,7 +346,7 @@ function Brick:cast_spread()
   local arena = main.current
   spawn_flicks(arena.effects, self.x, self.y + 6, self.color,
                {math.pi/2 - 0.35, math.pi/2, math.pi/2 + 0.35}, {dist = 8})
-  shoot1:play{volume = 0.2, pitch = random:float(1.0, 1.1)}
+  enemy_shot_sound(0.2, random:float(1.0, 1.1))
   local sx, sy = self.x, self.y + 6
   local base   = math.pi/2
   arena.t:after(0, function()
@@ -371,7 +371,7 @@ function Brick:cast_spiral()
   local dirs = {}
   for i = 0, 5 do dirs[#dirs + 1] = i*(math.pi/3) + (self._spiral_phase or 0) end
   spawn_flicks(arena.effects, self.x, self.y, self.color, dirs, {dist = 9})
-  shoot1:play{volume = 0.22, pitch = random:float(0.9, 1.0)}
+  enemy_shot_sound(0.22, random:float(0.9, 1.0))
   self._spiral_phase = (self._spiral_phase or 0) + 0.4
   local phase = self._spiral_phase
   local sx, sy = self.x, self.y
@@ -402,7 +402,7 @@ function Brick:cast_burst()
   for i = 0, 2 do
     arena.t:after(i*0.12, function()
       if arena.main and arena.main.world and not self.dead then
-        shoot1:play{volume = 0.16, pitch = random:float(1.05, 1.2)}
+        enemy_shot_sound(0.16, random:float(1.05, 1.2))
         -- Burster: very fast triple bolt. Quick enough that the second and
         -- third shots can punish a player who only dodged the first.
         EnemyProjectile{group = arena.main, x = sx, y = self.y + 6,
@@ -427,7 +427,7 @@ function Brick:cast_arc_lob()
   -- Block-side tell: a single flick toward the lob's heading.
   local aim = math.atan2(ly - (self.y + 6), lx - self.x)
   spawn_flicks(arena.effects, self.x, self.y + 6, yellow[0], {aim}, {dist = 9})
-  shoot1:play{volume = 0.2, pitch = random:float(0.7, 0.8)}
+  enemy_shot_sound(0.2, random:float(0.7, 0.8))
   local sx, sy = self.x, self.y + 6
   arena.t:after(0, function()
     if arena.main and arena.main.world then
@@ -455,7 +455,7 @@ function Brick:cast_force_push()
   for i = 0, 5 do dirs[#dirs + 1] = i*(math.pi/3) end
   spawn_flicks(fx, self.x, self.y, yellow[0], dirs, {dist = 14, len = 5})
   force1:play{volume = 0.35, pitch = random:float(0.95, 1.05)}
-  camera:shake(3, 0.18, 80)
+  enemy_shake(3, 0.18, 80)
   local arena = main.current
   for _, hero in ipairs(arena.heroes) do
     if hero and not hero.dead and not hero.returning and hero.body then
@@ -1117,7 +1117,7 @@ function Brick:cast_explode_on_death()
   local frac   = BAL('enemies.volatile_death_frac', 0.4)
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = radius, color = blue[0], duration = 0.25}
   explosion1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
-  camera:shake(2, 0.15, 90)
+  enemy_shake(2, 0.15, 90)
   for _, o in ipairs(arena.main.objects) do
     if o:is(Brick) and not o.dead and o.id ~= self.id then
       if math.distance(self.x, self.y, o.x, o.y) <= radius then

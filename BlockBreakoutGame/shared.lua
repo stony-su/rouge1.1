@@ -11,6 +11,39 @@ function ColorRamp:init(color, step)
 end
 
 
+-- ----- Enemy feedback knobs -------------------------------------------------
+--
+-- Enemy feedback is qualitatively different from the player's: it is CONSTANT
+-- and it comes from many bodies at once -- a late wave can field a dozen
+-- shooters plus a headbutting rank -- so per-event juice tuned at the strength
+-- the player's one-at-a-time abilities use stacks into a permanent tremor and a
+-- wall of noise instead of reading as individual impacts. The player's own hits
+-- deliberately keep their full punch; that is the payoff.
+--
+-- Both helpers take each call site's ORIGINAL, unscaled values, so the relative
+-- weight and character of every enemy event stays intact (a sniper's crack still
+-- differs from a lobber's thump) and the numbers still document intent. Tune the
+-- four constants to move all enemy shake / all enemy fire together.
+
+ENEMY_SHAKE_MULT      = 0.5    -- amplitude scale
+ENEMY_SHAKE_DUR_MULT  = 0.75   -- duration scale (a long weak shake is a tremor)
+ENEMY_SHOT_VOL_MULT   = 0.45   -- quieter
+ENEMY_SHOT_PITCH_MULT = 0.78   -- and pitched down, which is what reads as muted
+
+-- Screen shake from an enemy source: their bullets landing, their casts, their
+-- death effects.
+function enemy_shake(amount, duration, frequency)
+  camera:shake((amount or 2)*ENEMY_SHAKE_MULT,
+               (duration or 0.2)*ENEMY_SHAKE_DUR_MULT, frequency)
+end
+
+-- Enemy weapon fire (bricks and the boss alike).
+function enemy_shot_sound(volume, pitch)
+  shoot1:play{volume = (volume or 0.2)*ENEMY_SHOT_VOL_MULT,
+              pitch  = (pitch  or 1.0)*ENEMY_SHOT_PITCH_MULT}
+end
+
+
 -- Initializes color palette, fonts and canvases used across BallPitX.
 function shared_init()
   local palette = {

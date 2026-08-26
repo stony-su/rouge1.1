@@ -232,6 +232,12 @@ end
 -- and the normal heart counter share one code path. 1 heart = 20 bar units.
 
 function BallPit:damage_player(hearts)
+  -- Phased (the wide powerup): the paddle is intangible for the buff's
+  -- duration. Every damage channel routes through here, so this one early-out
+  -- covers swarm breaches, critter contact and enemy fire alike. Deliberately
+  -- NOT applied to the Vampire signature's self-drain (ballpit.lua), which is
+  -- that loadout's own running cost rather than damage taken.
+  if self.paddle and self.paddle.phased then return end
   local amount = hearts or 1
   -- Greater Aegis: while the gold dome is up the player takes greater_dr of
   -- all damage. This is what HALF-hearts exist for — a 1-dmg bullet through

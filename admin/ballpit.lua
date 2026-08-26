@@ -32,10 +32,19 @@ BallPit:implement(GameObject)
 --      base mix at a small weight. The one introduced on the current wave gets
 --      a brief spotlight weight so the player notices it; older ones settle to
 --      a low maintenance weight.
-local RANGED_ORDER      = {'shooter', 'sniper', 'spreader', 'burster', 'arc_lobber', 'spiraler'}
-local RANGED_INTRO_WAVE = 3   -- the first ranged variant unlocks on this wave
-local RANGED_NEW_WEIGHT = 2   -- weight for the variant introduced this wave (was 3; thinned again)
-local RANGED_OLD_WEIGHT = 0.8 -- weight for each ranged variant unlocked earlier (was 1.2; thinned again)
+--   3. Late-wave taper -- swarms keep growing wider/denser past wave 15 while the
+--      ranged SHARE of the mix was flat, so the absolute number of shooters on
+--      screen kept climbing until the arena was a bullet blanket. From
+--      RANGED_TAPER_WAVE on, every ranged weight is thinned by RANGED_TAPER_STEP
+--      per wave (never below RANGED_TAPER_FLOOR of its base), so their share
+--      shrinks as the swarms grow and the shooter count flattens out.
+local RANGED_ORDER       = {'shooter', 'sniper', 'spreader', 'burster', 'arc_lobber', 'spiraler'}
+local RANGED_INTRO_WAVE  = 3    -- the first ranged variant unlocks on this wave
+local RANGED_NEW_WEIGHT  = 2    -- weight for the variant introduced this wave (was 3; thinned again)
+local RANGED_OLD_WEIGHT  = 0.8  -- weight for each ranged variant unlocked earlier (was 1.2; thinned again)
+local RANGED_TAPER_WAVE  = 15   -- ranged weights start thinning from this wave on
+local RANGED_TAPER_STEP  = 0.08 -- fraction of the base weight shaved off per wave past it
+local RANGED_TAPER_FLOOR = 0.4  -- floor: never thin below this fraction of the base weight
 
 
 -- Appends the ranged variants unlocked by `wave` to `mix` (one new type per
@@ -45,9 +54,15 @@ local RANGED_OLD_WEIGHT = 0.8 -- weight for each ranged variant unlocked earlier
 local function append_ranged(mix, wave)
   local new_idx  = wave - RANGED_INTRO_WAVE + 1      -- index introduced this wave
   local unlocked = math.clamp(new_idx, 0, #RANGED_ORDER)
+  -- Late-wave taper (see above): shrink the ranged share as the swarms grow, so
+  -- the shooter COUNT stops scaling with the wave past RANGED_TAPER_WAVE.
+  local taper = 1
+  if wave > RANGED_TAPER_WAVE then
+    taper = math.clamp(1 - RANGED_TAPER_STEP*(wave - RANGED_TAPER_WAVE), RANGED_TAPER_FLOOR, 1)
+  end
   for i = 1, unlocked do
     local w = (i == new_idx) and RANGED_NEW_WEIGHT or RANGED_OLD_WEIGHT
-    table.insert(mix, {RANGED_ORDER[i], w})
+    table.insert(mix, {RANGED_ORDER[i], w*taper})
   end
 end
 
@@ -68,7 +83,6 @@ local function wave_config(wave)
       width_fraction_min = 0, width_fraction_max = 0,
       swarm_density      = 0,
       drift_speed        = 0,
-      min_swarm_gap      = 0,
       mix                = {},
     }
   end
@@ -119,10 +133,8 @@ local function wave_config(wave)
     -- 228px playfield) so a taller map doesn't silently make swarms slower
     -- to reach the paddle. Keeps wave pressure consistent across resolutions.
     drift_speed        = (5 + 0.25*wave)*0.5*((gh - 42)/228),
-    -- Vertical breathing room required between a new swarm and any existing
-    -- swarm. Starts at 30px (about 2 brick-rows of clear space) and shrinks
-    -- to 0 by wave 15, so late-game swarms can stack with no clearance.
-    min_swarm_gap      = math.max(0, 30 - 2*wave),
+    -- (Vertical breathing room between swarms is no longer a per-wave constant.
+    -- It is rolled fresh for every spawn -- see SWARM_GAP_MIN_ROWS below.)
     mix                = mix,
   }
 end
@@ -903,6 +915,14 @@ end
 -- test is just an equality check.
 local CELL_W, CELL_H = 22, 14
 
+-- Vertical breathing room a NEW swarm demands from every swarm already on the
+-- field, in brick ROWS, rolled fresh for each spawn (see the spawner below).
+-- Replaces a wave-scaled constant that decayed to 0 by wave 15 and let late
+-- swarms stack flush into one unbroken wall; a per-swarm 0-3 row roll keeps a
+-- readable seam without making the spacing uniform.
+local SWARM_GAP_MIN_ROWS = 0
+local SWARM_GAP_MAX_ROWS = 3
+
 
 function BallPit:arena_center_x()
   return (self.x1 + self.x2)/2
@@ -1040,10 +1060,15 @@ function BallPit:spawn_swarm(force)
   local layout = Swarm.generate_cells(rows_count, max_cols, cfg.swarm_density, CELL_W, CELL_H)
   local y_top  = self.y1 + 8
 
+  -- Vertical clearance this swarm demands from the ones already on the field.
+  -- Rolled once per spawn rather than per anchor attempt, so all 8 tries below
+  -- are judged against the same requirement (see SWARM_GAP_MIN_ROWS).
+  local min_gap = random:int(SWARM_GAP_MIN_ROWS, SWARM_GAP_MAX_ROWS)*CELL_H
+
   local x_center
   for attempt = 1, 8 do
     x_center = self:snap_to_grid_x(self:pick_swarm_anchor(width_fraction))
-    if force or self:can_place_layout(x_center, y_top, layout, cfg.min_swarm_gap) then
+    if force or self:can_place_layout(x_center, y_top, layout, min_gap) then
       Swarm{
         group          = self.swarms,
         x_center       = x_center,
@@ -2364,6 +2389,16 @@ end
 
 -- Used when a whole Swarm reaches the paddle. HP loss scales with brick
 -- count but is capped so a wide swarm doesn't insta-kill.
+-- Breach retaliation. Taking HP from a swarm sets off a repulsion blast at the
+-- breach line (BreachShockwave, effects.lua): every swarm it sweeps over loses
+-- BREACH_NOVA_HP_FRAC of each brick's MAX HP and is shoved BREACH_SHOVE_DIST back
+-- up the screen. Losing hearts is the worst thing that happens in a run, so a
+-- breach buys a genuine reset -- the field comes off you and you get a window to
+-- recover -- instead of one breach compounding straight into the next.
+local BREACH_NOVA_HP_FRAC = 0.5
+local BREACH_SHOVE_DIST   = 4*CELL_H   -- four brick rows of ground given back
+
+
 function BallPit:on_row_breached(swarm, brick_count)
   local dmg = math.min(3, 1 + math.floor(brick_count/4))
   if not self.god then
@@ -2373,6 +2408,17 @@ function BallPit:on_row_breached(swarm, brick_count)
   Flash{group = self.effects, x = gw/2, y = gh/2, color = red_transparent_weak, duration = 0.12}
   camera:shake(6 + brick_count*0.4, 0.4, 80)
   self.paddle.hfx:use('hit', 0.4, 200, 10)
+  -- The retaliation blast (see BREACH_NOVA_HP_FRAC above). Spawned from the
+  -- breach line so it reads as coming off the paddle, and it applies its damage
+  -- + shove progressively as it sweeps, not instantly here.
+  BreachShockwave{
+    group   = self.effects,
+    x1      = self.x1, x2 = self.x2,
+    y_start = self:breach_line_y(), y_end = self.y1,
+    color   = red[0],
+    hp_frac = BREACH_NOVA_HP_FRAC,
+    shove   = BREACH_SHOVE_DIST,
+  }
   -- Burst at each surviving brick for a meaty visual. Swarms store bricks
   -- under .cells (each cell = {brick, dx, dy}) plus a single shared offset.
   for _, cell in ipairs(swarm.cells or {}) do
@@ -3177,6 +3223,7 @@ function BallPit:fire_projectile_at_nearest(hero, opts)
         chain_dmg_ramp = opts.chain_dmg_ramp,
         wall_stick = opts.wall_stick,
         proj_scale = opts.proj_scale,
+        max_hp_frac = opts.max_hp_frac,
         color  = color,
         source = opts.source or hero.character,
       }
@@ -3514,12 +3561,16 @@ function BallPit:apply_paddle_width_buff()
   -- would flatten into a plain rectangle — rescale the whole rig instead.
   if p.flippers then
     self:add_or_extend_buff('wide_paddle', 15,
-      function() p:build_flipper_rig(1.6) end,
-      function() p:build_flipper_rig(1) end)
+      function() p:build_flipper_rig(1.6); p.phased = true  end,
+      function() p:build_flipper_rig(1);   p.phased = false end)
     return
   end
   self:add_or_extend_buff('wide_paddle', 15,
     function()
+      -- Phased: for the buff's duration the paddle is intangible to DAMAGE
+      -- (see BallPit:damage_player) and draws at a ghost alpha to show it.
+      -- Balls still bounce off it normally -- only the HP channel is off.
+      p.phased  = true
       p._orig_w = p._orig_w or p.w        -- stash once, restore to the original
       p.w = p._orig_w * 1.6
       rebuild_rect_body(p, p.w, p.h, 'kinematic', 'paddle')
@@ -3527,6 +3578,7 @@ function BallPit:apply_paddle_width_buff()
       p.t:after(0, function() if p.body then p.body:setFixedRotation(true) end end)
     end,
     function()
+      p.phased = false
       if p._orig_w then
         p.w = p._orig_w
         rebuild_rect_body(p, p.w, p.h, 'kinematic', 'paddle')
