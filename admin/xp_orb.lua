@@ -5,6 +5,11 @@
 -- pop-out window and the out-of-magnet-range branch in :update.
 local XP_GRAVITY = 55
 
+-- Spawn-out: an orb swells to size as it ejects from the brick rather than
+-- appearing at full size, which pairs with the scatter velocity below so a
+-- kill visibly THROWS its XP instead of stamping it into the world.
+local XP_SPAWN_DUR = 0.12
+
 XpOrb = Object:extend()
 XpOrb:implement(GameObject)
 XpOrb:implement(Physics)
@@ -57,12 +62,22 @@ function XpOrb:init(args)
 
   self:set_velocity(random:float(-30, 30), random:float(-20, -50))
 
+  self.spawn_t = 0
+
   self.t:after(self.life, function() self.dead = true end)
+end
+
+
+-- 0 -> 1 as the orb pops out, eased.
+function XpOrb:spawn_k()
+  local p = math.clamp((self.spawn_t or 0)/XP_SPAWN_DUR, 0, 1)
+  return 1 - (1 - p)*(1 - p)*(1 - p)
 end
 
 
 function XpOrb:update(dt)
   self:update_game_object(dt)
+  if (self.spawn_t or 0) < XP_SPAWN_DUR then self.spawn_t = (self.spawn_t or 0) + dt end
 
   local arena = main.current
   local px, py = arena.paddle.x, arena.paddle.y
@@ -111,5 +126,5 @@ function XpOrb:draw()
   local s = self.spring.x
   -- Single soft dot: no dark outline ring or bright specular pip, so clustered
   -- orbs blend into a faint scatter instead of a wall of beads.
-  graphics.circle(self.x, self.y, self.r_size*s, self.color)
+  graphics.circle(self.x, self.y, self.r_size*s*self:spawn_k(), self.color)
 end

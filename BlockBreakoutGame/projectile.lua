@@ -6,6 +6,14 @@
 -- the physics matrix, so update() bounces the bolt off the arena bounds while
 -- it has ricochet charges left and otherwise thunks it in as a WallArrow.
 
+-- Spawn-out / burn-out timing. Every bolt grows out of its muzzle over
+-- SPAWN_DUR and, once it is spent, shrinks and fades over DESPAWN_DUR instead
+-- of blinking off in a single frame -- a bolt vanishing mid-air reads as a
+-- rendering glitch rather than "that one is done". Both are per-shot
+-- overridable (the engineer's turret asks for a slower muzzle).
+local PROJECTILE_SPAWN_DUR   = 0.07
+local PROJECTILE_DESPAWN_DUR = 0.13
+
 Projectile = Object:extend()
 Projectile:implement(GameObject)
 Projectile:implement(Physics)
@@ -20,12 +28,11 @@ function Projectile:init(args)
   -- against late-wave bricks whose HP scales with the wave. Enemies with no
   -- max_hp (EnemyCritter) fall back to the flat dmg. See Projectile:damage_to.
   self.max_hp_frac = self.max_hp_frac or 0
-  -- Muzzle spawn-out. When spawn_dur > 0 the bolt is born SHORT and white-hot
-  -- and stretches to full length over that window under a shrinking muzzle
-  -- flare, so it reads as being fired out of a barrel rather than appearing
-  -- mid-air already at size. Opt-in per shot (the engineer's turret uses it);
-  -- 0 means the projectile draws at full size from frame one, as before.
-  self.spawn_dur = self.spawn_dur or 0
+  -- Muzzle spawn-out: the bolt is born SHORT and white-hot and stretches to
+  -- full length over spawn_dur under a shrinking muzzle flare, so it reads as
+  -- being fired out of a barrel rather than appearing mid-air already at size.
+  -- On for every shot now; pass spawn_dur = 0 to opt a particular one out.
+  self.spawn_dur = self.spawn_dur or PROJECTILE_SPAWN_DUR
   self.spawn_t   = 0
   self.speed    = self.speed or 220
   self.pierce   = self.pierce or 0
@@ -83,6 +90,18 @@ function Projectile:init(args)
   -- actually catches more -- it isn't just a bigger sprite on the same dot.
   self:set_as_circle(2*self.proj_scale, 'dynamic', 'projectile')
   self.body:setBullet(true)
+  -- SENSOR, not a solid body. projectile:brick is the only physical pair a shot
+  -- has left (ball/paddle/wall/xp/powerup are all disabled in reset_run), and
+  -- leaving it solid meant every "pierce" ALSO took the solver's bounce impulse
+  -- off the brick -- bricks are kinematic (infinite mass) and both sides carry
+  -- restitution 1, so a bolt deflected hard off the very thing it was supposed
+  -- to punch through. As a sensor the contact still reports (the engine routes
+  -- sensor contacts to on_trigger_enter instead of on_collision_enter, see
+  -- Group:set_as_physics_world) but Box2D applies no response, so the shot holds
+  -- its line. Set on the MAIN fixture so it keeps the 'projectile' category and
+  -- mask; the engine's own sensor fixture would default to category 1 ('paddle')
+  -- and be filtered out by the brick.
+  self.fixture:setSensor(true)
   self:set_fixed_rotation(false)
   self:set_restitution(1)
   self:set_friction(0)
@@ -102,10 +121,12 @@ function Projectile:init(args)
       self.t:tween(self.fade_dur, self, {fade = 0}, math.linear, function() self.dead = true end)
     end)
   else
-    self.t:after(self.life, function() self.dead = true end)
+    self.t:after(self.life, function() self:begin_despawn() end)
   end
 
-  self.on_collision_enter = function(p, other, contact)
+  -- Sensor contact (see setSensor above). Fires once per begin-overlap, which
+  -- is what a piercing shot wants: one hit per brick as it passes through.
+  self.on_trigger_enter = function(p, other, contact)
     if other and other.tag == 'brick' then
       p:on_hit_brick(other)
     end
@@ -122,9 +143,43 @@ function Projectile:spawn_k()
 end
 
 
+-- Burn-out. A bolt that ran out of life, spent its last pierce, or found no
+-- ricochet target used to blink off in one frame, which reads as a glitch
+-- rather than "that one is spent". It now leaves the FIGHT at once while
+-- coasting on its last heading for despawn_dur, shrinking and fading out.
+--
+-- The body is deliberately NOT deactivated: on_hit_brick runs inside a Box2D
+-- collision callback, where the world is locked and setActive would throw. The
+-- fight logic is gated instead -- update bails below, and on_hit_brick carries
+-- its own `expiring` guard. Idempotent: the life timer, on_hit_brick and a
+-- stray caller can all reach it.
+function Projectile:begin_despawn(dur)
+  if self.expiring or self.dead then return end
+  self.expiring    = true
+  self.despawn_dur = dur or PROJECTILE_DESPAWN_DUR
+  self.despawn_t   = self.despawn_dur
+end
+
+
+-- 1 in normal flight, 1 -> 0 across the burn-out.
+function Projectile:despawn_factor()
+  if not (self.expiring and self.despawn_dur) then return 1 end
+  return math.clamp(self.despawn_t/self.despawn_dur, 0, 1)
+end
+
+
 function Projectile:update(dt)
   self:update_game_object(dt)
   if self.spawn_t < self.spawn_dur then self.spawn_t = self.spawn_t + dt end
+
+  -- Burning out: still coasting, still drawing, but out of the fight. Every
+  -- branch below is flight/hit logic, so bail here rather than guarding each
+  -- of them and hoping none is missed.
+  if self.expiring then
+    self.despawn_t = self.despawn_t - dt
+    if self.despawn_t <= 0 then self.dead = true end
+    return
+  end
   -- Keep angle aligned with motion.
   local vx, vy = self:get_velocity()
   if vx ~= 0 or vy ~= 0 then self:set_angle(math.atan2(vy, vx)) end
@@ -226,30 +281,33 @@ function Projectile:draw()
     self:draw_cannonball()
     return
   end
+  -- Fully burnt out: nothing left to draw (and a zero-size rectangle is not
+  -- worth handing to the renderer).
+  if self:despawn_factor() <= 0.02 then return end
   local r = self:get_angle() or 0
   graphics.push(self.x, self.y, r)
+    -- One pair of factors drives both ends of the bolt's life: k grows it out
+    -- of the muzzle, f shrinks and fades it away when it is spent. Length
+    -- carries both, so the shot stretches out of the barrel and retracts as it
+    -- burns out rather than popping in and out at full size.
+    local ps = self.proj_scale
+    local k  = self:spawn_k()
+    local f  = self:despawn_factor()
+    local wh = 1 - k                      -- white-hot for the instant it fires
+    local c  = self.color
+    local col = Color(c.r + (1 - c.r)*wh*0.85,
+                      c.g + (1 - c.g)*wh*0.85,
+                      c.b + (1 - c.b)*wh*0.85, f)
+    local L  = (0.35 + 0.65*k)*f
+    -- Muzzle flare, shrinking away as the bolt reaches full size.
+    if wh > 0.02 then
+      graphics.circle(self.x, self.y, (2 + 5*wh)*ps, Color(1, 0.92, 0.6, 0.5*wh))
+    end
     if self.type == 'arrow' then
-      local ps = self.proj_scale
-      local k  = self:spawn_k()
-      if k < 1 then
-        -- Being fired: the bolt is still stretching to length and runs white-hot
-        -- for the instant it leaves the barrel, under a muzzle flare that
-        -- shrinks away as the bolt reaches full size.
-        local c  = self.color
-        local wh = 1 - k
-        local col = Color(c.r + (1 - c.r)*wh*0.85,
-                          c.g + (1 - c.g)*wh*0.85,
-                          c.b + (1 - c.b)*wh*0.85, 1)
-        local L  = (0.35 + 0.65*k)*ps
-        graphics.circle(self.x, self.y, (2 + 5*wh)*ps, Color(1, 0.92, 0.6, 0.5*wh))
-        graphics.rectangle(self.x, self.y, 8*L, 2*ps, nil, nil, col)
-        graphics.triangle(self.x + 4*L, self.y, 3*ps, 3*ps, col)
-      else
-        graphics.rectangle(self.x, self.y, 8*ps, 2*ps, nil, nil, self.color)
-        graphics.triangle(self.x + 4*ps, self.y, 3*ps, 3*ps, self.color)
-      end
+      graphics.rectangle(self.x, self.y, 8*ps*L, 2*ps*f, nil, nil, col)
+      graphics.triangle(self.x + 4*ps*L, self.y, 3*ps*f, 3*ps*f, col)
     else
-      graphics.rectangle(self.x, self.y, 6, 2, nil, nil, self.color)
+      graphics.rectangle(self.x, self.y, 6*L, 2*f, nil, nil, col)
     end
   graphics.pop()
 end
@@ -298,6 +356,9 @@ end
 
 
 function Projectile:on_hit_brick(brick)
+  -- Already burning out: out of the fight, but the body still lives (see
+  -- begin_despawn), so the collision callback can still fire. Ignore it.
+  if self.expiring then return end
   -- Cannonball: ignore the single target -- detonate into a splash that covers it.
   if self.type == 'cannonball' then self:cannon_explode(); return end
   if self.hits[brick.id] then return end
@@ -369,12 +430,12 @@ function Projectile:on_hit_brick(brick)
       local ang = math.atan2(nearest.y - self.y, nearest.x - self.x)
       self:set_velocity(math.cos(ang)*self.speed, math.sin(ang)*self.speed)
     else
-      self.dead = true
+      self:begin_despawn()
     end
     return
   end
 
-  self.dead = true
+  self:begin_despawn()
 end
 
 

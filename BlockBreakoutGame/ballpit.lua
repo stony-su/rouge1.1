@@ -35,14 +35,16 @@ BallPit:implement(GameObject)
 --   3. Late-wave taper -- swarms keep growing wider/denser past wave 15 while the
 --      ranged SHARE of the mix was flat, so the absolute number of shooters on
 --      screen kept climbing until the arena was a bullet blanket. From
---      RANGED_TAPER_WAVE on, every ranged weight is thinned by RANGED_TAPER_STEP
---      per wave (never below RANGED_TAPER_FLOOR of its base), so their share
+--      RANGED_TAPER_WAVE on -- the boss wave, after which every ranged variant
+--      has long been unlocked and swarms are near their size cap -- every ranged
+--      weight is thinned by RANGED_TAPER_STEP per wave (never below
+--      RANGED_TAPER_FLOOR of its base), so their share
 --      shrinks as the swarms grow and the shooter count flattens out.
 local RANGED_ORDER       = {'shooter', 'sniper', 'spreader', 'burster', 'arc_lobber', 'spiraler'}
 local RANGED_INTRO_WAVE  = 3    -- the first ranged variant unlocks on this wave
 local RANGED_NEW_WEIGHT  = 2    -- weight for the variant introduced this wave (was 3; thinned again)
 local RANGED_OLD_WEIGHT  = 0.8  -- weight for each ranged variant unlocked earlier (was 1.2; thinned again)
-local RANGED_TAPER_WAVE  = 15   -- ranged weights start thinning from this wave on
+local RANGED_TAPER_WAVE  = 10   -- ranged weights start thinning from this wave on (was 15)
 local RANGED_TAPER_STEP  = 0.08 -- fraction of the base weight shaved off per wave past it
 local RANGED_TAPER_FLOOR = 0.4  -- floor: never thin below this fraction of the base weight
 

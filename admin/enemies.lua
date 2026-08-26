@@ -128,6 +128,13 @@ function EnemyCritter:apply_burn() end
 -- shot would end wave 10 in two. It keeps the flat reflect payload.
 local PARRY_MAX_HP_FRAC = 0.75
 
+-- How many enemies a turned (parried) shot punches through before it burns out.
+-- A parry used to burst on the first thing it reached; skewering a line of them
+-- is what makes reading the shield worth the locked-out commitment. Counted in
+-- TARGETS directly (unlike Projectile.pierce, which counts pass-throughs), so
+-- this number is the number of things the shot actually hits.
+local PARRY_PIERCE_TARGETS = 5
+
 
 -- Slow downward projectile fired by shooter bricks. Hits the paddle.
 EnemyProjectile = Object:extend()
@@ -195,6 +202,11 @@ function EnemyProjectile:init(args)
   self:set_mass(0.2)
   self:set_velocity(math.cos(self.angle)*self.speed, math.sin(self.angle)*self.speed)
   self.hfx:add('hit', 1)
+  -- Muzzle spawn-out: the shot swells from a hot point to full size as it
+  -- clears the shooter, the mirror of the burn-out below, so a bullet grows out
+  -- of an enemy instead of popping into existence in mid-air.
+  self.spawn_dur = self.spawn_dur or 0.08
+  self.spawn_t   = 0
 
   -- Enemy shots phase through hero balls: drop the 'ball' category from this
   -- fixture's collide mask so balls pass through without a bounce, a collision
@@ -242,6 +254,14 @@ function EnemyProjectile:begin_despawn(dur)
 end
 
 
+-- 0 -> 1 as the shot clears the muzzle, eased.
+function EnemyProjectile:spawn_k()
+  if (self.spawn_dur or 0) <= 0 then return 1 end
+  local p = math.clamp((self.spawn_t or 0)/self.spawn_dur, 0, 1)
+  return 1 - (1 - p)*(1 - p)*(1 - p)
+end
+
+
 -- 1 in normal flight, 1 -> 0 across the burn-out.
 function EnemyProjectile:despawn_factor()
   if not (self.expiring and self.despawn_dur) then return 1 end
@@ -285,14 +305,15 @@ end
 function EnemyProjectile:reflected_target()
   local arena = main.current
   if not (arena and arena.main) then return nil end
-  local r = self.r_size
+  local r    = self.r_size
+  local hits = self.hits or {}
   for _, o in ipairs(arena.main.objects) do
-    if o.is and o:is(Brick) and not o.dead then
+    if o.is and o:is(Brick) and not o.dead and not hits[o.id] then
       if math.abs(self.x - o.x) <= (o.w or 18)/2 + r
       and math.abs(self.y - o.y) <= (o.h or 10)/2 + r then return o end
     end
   end
-  if arena.boss and not arena.boss.dead
+  if arena.boss and not arena.boss.dead and not hits[arena.boss.id]
   and math.distance(self.x, self.y, arena.boss.x, arena.boss.y)
       < r + (arena.boss.r_outer or 14) then
     return arena.boss
@@ -304,6 +325,9 @@ end
 function EnemyProjectile:update(dt)
   self:update_game_object(dt)
   local arena = main.current
+  if (self.spawn_t or 0) < (self.spawn_dur or 0) then
+    self.spawn_t = (self.spawn_t or 0) + dt
+  end
 
   -- Burning out: still drifting, still drawing, but out of the fight. Every
   -- branch below this point is fight logic, so bail here rather than adding a
@@ -410,11 +434,12 @@ function EnemyProjectile:update(dt)
     end
   end
 
-  -- Reflected (parried) bullet: it fights for the player now — burst on the
-  -- first brick it reaches. Manual proximity test because enemy shots never
-  -- collide with bricks at the Box2D level (they'd die at the muzzle
-  -- otherwise). Falls back to the boss so a parry still lands something
-  -- during the fight's breakable-bullet phases.
+  -- Reflected (parried) bullet: it fights for the player now — it SKEWERS up to
+  -- PARRY_PIERCE_TARGETS enemies, spending one charge each, and burns out when
+  -- they run out. Manual proximity test because enemy shots never collide with
+  -- bricks at the Box2D level (they'd die at the muzzle otherwise). Falls back
+  -- to the boss so a parry still lands something during the fight's
+  -- breakable-bullet phases.
   if self.reflected and not self.dead then
     local hit = self:reflected_target()
     if hit then
@@ -422,10 +447,16 @@ function EnemyProjectile:update(dt)
       -- block, so it keeps the flat reflect payload.
       local pdmg = (hit.is and hit:is(Brick) and hit.max_hp)
                    and hit.max_hp*PARRY_MAX_HP_FRAC or self.dmg
+      if hit.id then self.hits[hit.id] = true end
       hit:take_damage(pdmg, self.color, nil, 'parry')
-      spawn_burst(arena.effects, self.x, self.y, self.color, 8, 80, 160)
-      pop1:play{volume = 0.3, pitch = random:float(1.2, 1.35)}
-      self.dead = true
+      -- Spend a charge. The LAST hit gets the full burst + pop; the
+      -- pass-throughs are deliberately lighter, because five shots' worth of
+      -- full-strength feedback in half a second is a mess.
+      self.pierce_left = (self.pierce_left or 1) - 1
+      local spent = self.pierce_left <= 0
+      spawn_burst(arena.effects, self.x, self.y, self.color, spent and 8 or 5, 80, 160)
+      pop1:play{volume = spent and 0.3 or 0.18, pitch = random:float(1.2, 1.35)}
+      if spent then self:begin_despawn(0.12) end
     end
   end
 
@@ -451,6 +482,11 @@ function EnemyProjectile:reflect(dmg)
   self.reflected   = true
   self.color       = Color(1, 0.84, 0.25, 1)
   self.dmg         = dmg or 60
+  -- A turned shot SKEWERS (see PARRY_PIERCE_TARGETS). `hits` stops it spending
+  -- a charge twice on the same enemy across the several frames it spends
+  -- overlapping one -- without it a single fat brick would eat the whole shot.
+  self.pierce_left = PARRY_PIERCE_TARGETS
+  self.hits        = {}
   self.speed       = math.max((self.speed or 60)*1.5, 300)
   -- Fresh, harder tracking window than any enemy seeker gets: the return
   -- trip is a reward, it should feel like it wants to land.
@@ -526,6 +562,15 @@ function EnemyProjectile:draw()
   -- passing a colour in -- see graphics.alpha_mult.
   local f = self:despawn_factor()
   if f < 1 then graphics.alpha_mult = f end
+  -- Muzzle spawn-out, scaled about the shot's own position so every shape, the
+  -- glow and the armour layer below all come along for free rather than each
+  -- needing its own factor threaded through.
+  local sk     = self:spawn_k()
+  local scaled = sk < 1
+  if scaled then
+    local ss = 0.3 + 0.7*sk
+    graphics.push(self.x, self.y, 0, ss, ss)
+  end
 
   self:draw_glow()
   if     self.kind == 'dart'     then self:draw_dart()
@@ -547,6 +592,9 @@ function EnemyProjectile:draw()
   if self.reflected then
     graphics.circle(self.x, self.y, self.r_size + 1.5, Color(1, 0.90, 0.50, 0.4), 1)
   end
+  -- Release the muzzle scale before the burn-out ring, which is a full-size
+  -- dissipation effect and must not be shrunk with the body.
+  if scaled then graphics.pop() end
 
   -- Burn-out ring: pushes outward off the shot as it fades, so the shot reads
   -- as dissipating rather than simply getting dimmer. Drawn at full strength
@@ -1027,14 +1075,24 @@ local BOSS_PHASE_COLORS = {
 
 
 -- Motion-trail tuning. The boss samples its own position every TRAIL_SAMPLE
--- seconds and keeps TRAIL_LEN samples (see Boss:update). The ribbon is drawn
--- from every sample; the body aftershadows from every TRAIL_GHOST_STRIDE-th
--- one. TRAIL_FULL_SPEED is the speed (px/s) at which the trail reaches full
--- strength -- below it the whole effect fades out proportionally, so a boss
--- easing through the slow part of a curve doesn't sit in a static smear.
+-- seconds (see Boss:update), keeping TRAIL_LEN_MAX of them. The ribbon is drawn
+-- from every sample it walks; the body aftershadows from every
+-- TRAIL_GHOST_STRIDE-th one.
+--
+-- Length is PER PHASE. The buffer always holds the phase-3 maximum and the draw
+-- walks only as far into it as the current phase earns, so both the ribbon and
+-- the ghosts lengthen at every transition -- and because the stride is fixed,
+-- the ghost COUNT grows with them (4 -> 6 -> 7). Escalation is then legible in
+-- how the boss MOVES, not only in the phase colour shift, which matters most in
+-- phase 3 where it is also moving 1.6x faster.
+--
+-- TRAIL_FULL_SPEED is the speed (px/s) at which the trail reaches full strength
+-- -- below it the whole effect fades out proportionally, so a boss easing
+-- through the slow part of a curve doesn't sit in a static smear.
 local TRAIL_SAMPLE       = 0.02
-local TRAIL_LEN          = 16
-local TRAIL_GHOST_STRIDE = 4
+local TRAIL_LEN_BY_PHASE = {22, 30, 38}
+local TRAIL_LEN_MAX      = 38
+local TRAIL_GHOST_STRIDE = 5
 local TRAIL_FULL_SPEED   = 150
 
 
@@ -1584,7 +1642,7 @@ function Boss:update(dt)
     self.trail_t = 0
     table.insert(self.path_trail, 1,
                  {x = self.x, y = self.y, o = self.outer_rot, i = self.inner_rot})
-    if #self.path_trail > TRAIL_LEN then table.remove(self.path_trail) end
+    if #self.path_trail > TRAIL_LEN_MAX then table.remove(self.path_trail) end
   end
 end
 
@@ -1678,7 +1736,12 @@ function Boss:draw_trail()
   local k = self.trail_k or 0
   if k <= 0.02 then return end
   local col = self.color
-  local n   = #self.path_trail
+  -- Phase length (see TRAIL_LEN_BY_PHASE): the buffer holds the phase-3
+  -- maximum, but the draw only walks as far back as this phase has earned.
+  -- Deriving `fade` from this n rather than the buffer size is what keeps the
+  -- taper landing on zero at the tail at every length.
+  local want = TRAIL_LEN_BY_PHASE[math.clamp(self.phase or 1, 1, #TRAIL_LEN_BY_PHASE)]
+  local n    = math.min(#self.path_trail, want or TRAIL_LEN_MAX)
   for i = 1, n do
     local p    = self.path_trail[i]
     local fade = 1 - (i - 1)/n            -- 1 at the head, ~0 at the tail

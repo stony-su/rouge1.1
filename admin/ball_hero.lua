@@ -46,12 +46,13 @@ local HERO_STATS = {
   vagrant     = {r = 6, base_speed = 160, dmg = 8,  color = 'fg',     behavior = 'shoot_arrow', range = 96,  cd = 0.5,  speed = 220},
 
   -- ----- Crossbow bolt (SNKRX archer port; behavior = 'crossbow') -----
-  -- Every 2s, a bolt at the CLOSEST brick in the 160px sensor with infinite
-  -- pierce — it skewers the whole lane and only stops at a wall, sticking in
-  -- as a WallArrow. Level 3: the bolt ricochets off the side/top walls 3
-  -- times first. skin draws the ball as a tower base with a compact
-  -- swiveling crossbow turret mounted on top.
-  archer      = {r = 5.5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'crossbow', range = 160, cd = 2.0,  speed = 380, proj_scale = 1.6, skin = 'crossbow'},
+  -- Every 2s, a bolt at the CLOSEST brick in the 160px sensor. It SKEWERS up to
+  -- pierce_targets enemies (was effectively infinite — pierce 1000 — so it took
+  -- a whole lane), then burns out; a bolt that runs out of targets first still
+  -- reaches a wall and sticks in as a WallArrow. Level 3: the bolt ricochets off
+  -- the side/top walls 3 times first. skin draws the ball as a tower base with a
+  -- compact swiveling crossbow turret mounted on top.
+  archer      = {r = 5.5, base_speed = 175, dmg = 10, color = 'green',  behavior = 'crossbow', range = 160, cd = 2.0,  speed = 380, proj_scale = 1.6, pierce_targets = 5, skin = 'crossbow'},
 
   -- ----- Chain knife (SNKRX scout port; behavior = 'chain_knife') -----
   -- The knife CHAINS: on each hit it leaps to a random nearby brick it
@@ -2004,7 +2005,11 @@ function BallHero:shoot_bolt(s)
     type = 'arrow', dmg = self:current_dmg()*BAL('globals.projectile_dmg_mult', PROJECTILE_DMG_MULT),
     speed = s.speed or 380, range = s.range, color = self.color,
     proj_scale = s.proj_scale or 1.6,
-    pierce = 1000, ricochet = (self.level >= 3) and 3 or 0, wall_stick = true,
+    -- Projectile.pierce counts PASS-THROUGHS, not targets: a bolt spends one
+    -- charge per enemy it punches through and burns out on the one after, so
+    -- N targets is pierce = N - 1.
+    pierce = (s.pierce_targets or 5) - 1,
+    ricochet = (self.level >= 3) and 3 or 0, wall_stick = true,
     -- The bolt deals 100% of each target's MAX HP, so it deletes everything it
     -- skewers no matter how the wave has scaled enemy HP (Projectile.max_hp_frac).
     max_hp_frac = 1.0,

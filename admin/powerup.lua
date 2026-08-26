@@ -66,6 +66,7 @@ function Powerup:init(args)
   self.glyph  = def.glyph
   self.label  = def.label
   self.r_size = self.tier == 2 and 5 or 4
+  self.spawn_t = 0        -- muzzle-style spawn-out, see Powerup:spawn_k / :draw
   self.life   = 16
   self.armed  = false               -- tier-2 only; flips true once it has been bounced enough
   self.cant_catch = 0               -- cooldown so the same contact doesn't count twice
@@ -113,6 +114,9 @@ end
 
 function Powerup:update(dt)
   self:update_game_object(dt)
+  -- Ticked before the early-out below so the drop still swells to size on a
+  -- frame where the arena or paddle isn't up yet.
+  self.spawn_t = (self.spawn_t or 0) + dt
 
   local arena = main.current
   if not arena or not arena.paddle then return end
@@ -513,7 +517,29 @@ ICONS.floor = function(self, s, now)
 end
 
 
+-- Spawn-out: a drop swells up to size over POWERUP_SPAWN_DUR instead of
+-- appearing whole, so it reads as being ejected by the kill that dropped it.
+-- Wrapped around the whole draw (rather than threaded through every kind's
+-- own shapes) because a powerup is a dozen layers -- halo, ring, body, glyph,
+-- ripples -- and only a transform catches all of them.
+local POWERUP_SPAWN_DUR = 0.16
+
+function Powerup:spawn_k()
+  local p = math.clamp((self.spawn_t or 0)/POWERUP_SPAWN_DUR, 0, 1)
+  return 1 - (1 - p)*(1 - p)*(1 - p)
+end
+
+
 function Powerup:draw()
+  local k = self:spawn_k()
+  if k >= 1 then return self:draw_body() end
+  graphics.push(self.x, self.y, 0, k, k)
+  self:draw_body()
+  graphics.pop()
+end
+
+
+function Powerup:draw_body()
   self.spring:pull(0)
   if self.kind == 'level_random' then return self:draw_level_rune() end
   local s   = self.spring.x
