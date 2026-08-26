@@ -18,6 +18,5 @@ add pinball bumpers that spawn in during the boss phase periodicly to help balls
 
 
 
-add spawn out animations for anything that spawns out 
 for all paddles, widden them by 2x and make them transparent except for the core of the paddle. enemy projectiles will pass through the transparent sections, and only deal damage if they hit the "core" of the paddle
 --> 

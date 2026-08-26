@@ -2225,6 +2225,10 @@ function BallPit:tick_page_gate(dt)
     if g.kind == 'restart' then
       self:reset_run()
       spawn1:play{volume = 0.45}
+    elseif g.kind == 'death' then
+      -- End of the death sequence: swap to the run report behind the cover.
+      self:finish_game_over()
+      confirm1:play{volume = 0.28, pitch = 0.7}
     else
       self.go_screen = g.kind
       if g.kind == 'shop' then

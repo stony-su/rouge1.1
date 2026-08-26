@@ -274,6 +274,21 @@ function BallPit:apply_scale_option(idx)
 end
 
 
+-- Commit the highlighted window-size row. update_settings calls this from BOTH
+-- the mouse-click path and the confirm-key path, but it was never actually
+-- defined -- so choosing any size threw
+--   ballpit.lua: attempt to call method 'activate_settings_selection' (a nil value)
+-- and took the frame down with it.
+--
+-- Applying is idempotent (apply_scale_option no-ops when the chosen scale is
+-- already current), so confirming the row you are already on simply closes the
+-- menu. ESC reopens it if you want to try another size.
+function BallPit:activate_settings_selection()
+  self:apply_scale_option(self.settings_selected)
+  self.settings_open = false
+end
+
+
 function BallPit:settings_option_under_mouse()
   -- Same pitch draw_settings paints with, or the hit boxes creep out from
   -- under the rows they belong to as you go down the list.
@@ -602,6 +617,10 @@ function BallPit:reset_run()
   self.run_time      = 0
   self.paused        = false
   self.game_over     = false
+  -- Death sequence: the beat between the killing blow and the run report.
+  -- See trigger_game_over / update_death.
+  self.dying         = false
+  self.death_t       = 0
   self.upgrade_pending = false
   self.upgrade_choices = nil
   self.upgrade_selected = 1
@@ -1095,6 +1114,17 @@ function BallPit:update(dt)
     -- The game-over overlay doubles as the paddle shop (see paddles.lua).
     self:update_shop(dt)
     if input.restart.pressed then self:begin_page_gate('restart') end
+    return
+  end
+
+  -- Dying: the board is FROZEN (main / swarms deliberately not updated) while
+  -- the wreck animates, so the only thing still moving is the thing that just
+  -- failed. Effects and the UI keep running so the death plays out; the page
+  -- gate is driven above every early return, so its shutters animate too.
+  if self.dying then
+    self:update_death(dt)
+    self.effects:update(dt)
+    self.ui:update(dt)
     return
   end
 
@@ -2731,10 +2761,49 @@ function BallPit:draw_hero_tooltip(hero, total_heroes)
 end
 
 
+-- How long the wreck gets before the shutters start closing on it. Tuned to
+-- land while the debris is still falling rather than after it has settled --
+-- the transition should interrupt the death, not wait politely for it.
+local DEATH_DUR = 1.25
+
+
+-- The killing blow. This no longer jumps straight to the run report: it starts
+-- the DEATH SEQUENCE -- the paddle breaks apart over a frozen board (see the
+-- dying branch in update), and when that has played the page gate closes and
+-- finish_game_over swaps the page behind the shutters.
+--
+-- Idempotent: several damage paths can reach zero HP on the same frame, and
+-- without the guard each would spawn its own wreck and stack its own stinger.
 function BallPit:trigger_game_over()
-  self.game_over = true
+  if self.dying or self.game_over then return end
+  self.dying   = true
+  self.death_t = 0
   self.t:cancel('spawn_brick')
-  Flash{group = self.effects, x = gw/2, y = gh/2, color = Color(0, 0, 0, 0.4), duration = 0.4}
+  local p = self.paddle
+  if p then
+    p.destroyed = true          -- Paddle:draw hands over to the wreck
+    PaddleDeath{group = self.effects, x = p.x, y = p.y, w = p.w, h = p.h,
+                color = p.color or fg[0]}
+  end
+end
+
+
+-- Drive the death beat, then hand off to the shutters. begin_page_gate is
+-- itself guarded against a second call, and 'death' is handled in
+-- tick_page_gate (paddles.lua), which runs finish_game_over at full cover.
+function BallPit:update_death(dt)
+  self.death_t = (self.death_t or 0) + dt
+  if self.death_t >= DEATH_DUR and not self.gate then
+    self:begin_page_gate('death')
+  end
+end
+
+
+-- Swap to the run report. Called from behind the closed shutters, so nothing
+-- here is ever seen to happen.
+function BallPit:finish_game_over()
+  self.dying     = false
+  self.game_over = true
   -- Land on the run-report screen; the shop is one button deeper (paddles.lua).
   self.go_screen   = 'over'
   self.go_selected = 1

@@ -1758,6 +1758,90 @@ function BreachShockwave:draw()
 end
 
 
+-- PaddleDeath: the player's rig coming apart. The paddle is hidden the moment
+-- this spawns (Paddle.destroyed) and this draws its wreckage instead, so the
+-- bar is SEEN to break rather than simply being replaced by particles.
+--
+-- The board is frozen behind it (BallPit's dying branch stops updating main /
+-- swarms), which is the point: everything else in the arena stops dead and the
+-- only thing still moving is the thing that just failed.
+PaddleDeath = Object:extend()
+PaddleDeath:implement(GameObject)
+function PaddleDeath:init(args)
+  self:init_game_object(args)
+  self.w        = self.w or 36
+  self.h        = self.h or 4
+  self.color    = self.color or fg[0]
+  self.duration = self.duration or 1.5
+  self.elapsed  = 0
+  -- Break the bar into segments ALONG ITS LENGTH: each piece keeps the width it
+  -- had, and is thrown outward from the centre in proportion to how far out it
+  -- sat, so the wreck reads as the paddle splitting rather than a generic
+  -- confetti burst.
+  local n = math.max(4, math.floor(self.w/6))
+  self.pieces = {}
+  for i = 1, n do
+    local off = -self.w/2 + (i - 0.5)*(self.w/n)
+    self.pieces[i] = {
+      x  = self.x + off, y = self.y,
+      vx = off*random:float(5, 9) + random:float(-26, 26),
+      vy = random:float(-200, -80),
+      w  = self.w/n, rot = 0,
+      spin = random:float(-10, 10),
+    }
+  end
+
+  local arena = main.current
+  local fx    = arena and arena.effects
+  if fx then
+    TelegraphRing{group = fx, x = self.x, y = self.y, radius = 46, color = red[0], duration = 0.35}
+    TelegraphRing{group = fx, x = self.x, y = self.y, radius = 92, color = red[0], duration = 0.55}
+    spawn_burst(fx, self.x, self.y, self.color, 22, 90, 230)
+    spawn_burst(fx, self.x, self.y, red[0],     14, 70, 190)
+    for _ = 1, 10 do
+      SmokePuff{group = fx, x = self.x + random:float(-14, 14), y = self.y,
+                color = Color(0.20, 0.18, 0.22, 1), rs = random:float(3, 6), alpha = 0.5,
+                vx = random:float(-50, 50), vy = random:float(-70, -10),
+                duration = random:float(0.6, 1.1)}
+    end
+  end
+  -- Death stinger: a deep blast under a hard impact, then the wreck settling.
+  -- Layered and low so it reads as final rather than as one more enemy hit.
+  explosion1:play{volume = 0.65, pitch = 0.42}
+  hit1:play{volume = 0.60, pitch = 0.70}
+  self.t:after(0.12, function() thunder1:play{volume = 0.45, pitch = 0.50} end)
+  self.t:after(0.32, function() enemy_die1:play{volume = 0.45, pitch = 0.35} end)
+  camera:shake(10, 0.6, 60)
+end
+
+function PaddleDeath:update(dt)
+  self:update_game_object(dt)
+  self.elapsed = self.elapsed + dt
+  for _, p in ipairs(self.pieces) do
+    p.vy  = p.vy + 420*dt          -- gravity: the wreck falls into the pit
+    p.x   = p.x + p.vx*dt
+    p.y   = p.y + p.vy*dt
+    p.rot = p.rot + p.spin*dt
+  end
+  if self.elapsed >= self.duration then self.dead = true end
+end
+
+function PaddleDeath:draw()
+  -- Fade over the last third only, so the pieces stay solid while they are
+  -- still visibly tumbling and only thin out once they are on their way down.
+  local p    = math.clamp(self.elapsed/self.duration, 0, 1)
+  local fade = math.clamp((1 - p)/0.34, 0, 1)
+  if fade <= 0.01 then return end
+  local c = self.color
+  for _, pc in ipairs(self.pieces) do
+    graphics.push(pc.x, pc.y, pc.rot)
+      graphics.rectangle(pc.x, pc.y, pc.w, self.h, 1, 1, Color(c.r, c.g, c.b, fade))
+      graphics.rectangle(pc.x, pc.y - self.h/2, pc.w, 1, nil, nil, Color(1, 1, 1, fade*0.7))
+    graphics.pop()
+  end
+end
+
+
 -- BlankWave: the Enter the Gungeon style BLANK the paddle lets off when an
 -- enemy shot lands on it. A repulsion front expands from the paddle across the
 -- WHOLE arena, shoving every enemy shot it passes outward and burning it out;
