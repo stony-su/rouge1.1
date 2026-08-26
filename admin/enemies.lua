@@ -416,7 +416,10 @@ function EnemyProjectile:update(dt)
   -- whole hit test is skipped, so a shot flies straight THROUGH and carries on
   -- instead of striking a paddle that merely happens to take no damage.
   if  not self.reflected and not arena.paddle.phased
-  and math.abs(self.x - arena.paddle.x) < arena.paddle.w/2 + self.r_size
+  -- CORE only: the paddle is wider than its hurtbox now, and the ghosted wings
+  -- let a shot pass straight through (Paddle:core_half). Tested against what is
+  -- actually drawn solid, so the transparency is not decorative.
+  and math.abs(self.x - arena.paddle.x) < arena.paddle:core_half() + self.r_size
   and p_yhi >= arena.paddle.y - arena.paddle.h/2
   and p_ylo <= arena.paddle.y + arena.paddle.h/2 then
     local sig    = arena.run_mods and arena.run_mods.signature

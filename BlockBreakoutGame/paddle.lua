@@ -25,6 +25,37 @@ Paddle:implement(Physics)
 local DODGE_BAND_UP   = 120
 local DODGE_BAND_DOWN = 2
 
+-- ----- Width and the core ---------------------------------------------------
+--
+-- Every paddle is PADDLE_WIDTH_MULT times as wide as its loadout asks for, but
+-- only the middle PADDLE_CORE_FRAC of that span can be hurt. The wings still
+-- bounce balls -- the Box2D body is the full width -- so the paddle catches
+-- across a much wider face while remaining exactly as vulnerable to enemy fire
+-- as it was before. That is the whole trade: reach without safety.
+--
+-- The wings are drawn ghosted and the core solid, because a hitbox the player
+-- cannot see is a hitbox they will blame the game for. Everything that is not
+-- the vulnerable part LOOKS like it is not the vulnerable part -- and the core
+-- is not a generic bar: every loadout draws its own round emblem (see
+-- draw_core), seated on the bar and blended outward with a halo rather than cut
+-- out of it with an outline.
+--
+-- Read by: Paddle:core_half (the enemy-fire test in enemies.lua) and the draw
+-- below. Everything else -- ball bounce angle, powerup catch, arena clamp --
+-- deliberately keeps reading the FULL width, since those are all things the
+-- physical bar really does do across its whole span.
+local PADDLE_WIDTH_MULT = 3     -- was 2; the wings were lengthened another 50%
+local PADDLE_CORE_FRAC  = 0.68  -- of the loadout's BASE width, NOT of the widened
+                                -- span -- so lengthening the wings never enlarges
+                                -- the hurtbox with them. 0.68 of 36 = ~24.5px,
+                                -- exactly the core the x2 build had.
+
+-- The Pinball rig is not part of the wing/core system at all (it has no core,
+-- see core_half), so it keeps the earlier x2 rather than following the wings out
+-- to x3: at triple length its bats would span nearly half the arena.
+local FLIPPER_LEN_MULT  = 2
+local WING_ALPHA        = 0.28  -- how ghosted the untouchable part is
+
 -- Aegis dome deploy / dissipate.
 --   BRACE_DEPLOY_DUR   the dome punches OUT of the paddle face over this long,
 --                      easing to a stop, so it reads as being pushed out rather
@@ -46,7 +77,10 @@ local BRACE_SHOVE_SPEED  = 260
 
 function Paddle:init(args)
   self:init_game_object(args)
-  self.w        = self.w or 36          -- was 56 — shrunk for bullet-hell pressure
+  -- Widened here rather than at the call site so every loadout, the powerup
+  -- that scales it, the arena clamp and the bounce-angle maths all inherit it
+  -- from one place (see PADDLE_WIDTH_MULT).
+  self.w        = (self.w or 36)*PADDLE_WIDTH_MULT   -- base was 56 -> 36, then x2
   self.h        = self.h or 4           -- was 6
   self.speed    = self.speed or 220
   self.aim_mult = self.aim_mult or 1    -- loadout Aim stat: scales the reflection arc
@@ -82,7 +116,9 @@ function Paddle:init(args)
     local sig          = self.flipper_sig or {}
     self.flipper_gap   = self.flipper_gap or 14
     self.flip_window   = self.flip_window or 0.16
-    self.flipper_len   = sig.flipper_len   or 34   -- long real-table bats (was an 18px stub)
+    -- The Pinball rig has no bar to widen, so the multiplier goes into the bat
+    -- length instead; build_flipper_rig then derives self.w from the geometry.
+    self.flipper_len   = (sig.flipper_len or 34)*FLIPPER_LEN_MULT
     self.flipper_thick = sig.flipper_thick or 5
     self.rest_tilt     = sig.rest_tilt     or 0.30 -- resting bats droop toward the drain gap
     self.flip_up       = sig.flip_up       or 0.62 -- how far the tip kicks up on a flip
@@ -451,6 +487,22 @@ end
 -- Multiplied into whatever is already set, and restored on the same path.
 local PHASED_ALPHA = 0.35
 
+-- Half-width of the VULNERABLE core: the only part of the paddle enemy fire can
+-- hit (see the paddle test in EnemyProjectile:update). Everything outside it is
+-- wing -- solid to balls, transparent to bullets.
+--
+-- The Pinball rig is the one exception: its span is a gap between two bats, so
+-- the middle of it is the drain rather than a body, and shrinking the hurtbox to
+-- "the centre" would put it exactly where nothing is. It keeps the full span.
+function Paddle:core_half()
+  if self.flippers then return self.w/2 end
+  -- Measured against the loadout's BASE width -- self.w divided back down by the
+  -- multiplier -- rather than against the widened span. The wings are reach; the
+  -- core is exposure, and the two must be free to move independently.
+  return (self.w/PADDLE_WIDTH_MULT)*PADDLE_CORE_FRAC/2
+end
+
+
 function Paddle:draw()
   -- Destroyed: PaddleDeath is drawing the wreckage now (see BallPit's death
   -- sequence). Stays set until reset_run builds a fresh paddle, so the bar is
@@ -458,13 +510,379 @@ function Paddle:draw()
   -- Hidden: the title screen's rule has not landed on this spot yet, so the
   -- paddle must not be sitting there already (see BallPit:finish_title).
   if self.destroyed or self.hidden then return end
-  if not self.phased then return self:draw_body() end
+
   local prev = graphics.alpha_mult
-  graphics.alpha_mult = prev*PHASED_ALPHA
+  local base = prev*(self.phased and PHASED_ALPHA or 1)
+
+  -- The rig, ghosted: this is the full widened span, and none of it can be hurt
+  -- except the core stamped over it next. Drawn through the alpha multiplier so
+  -- all ten loadout skins fade without any of them threading an alpha through
+  -- their own palette.
+  graphics.alpha_mult = base*WING_ALPHA
   self:draw_body()
+
+  -- The core, solid, at the paddle's own colour. Its half-width is exactly what
+  -- enemies.lua tests against, so what the player sees IS the hurtbox.
+  graphics.alpha_mult = base
+  self:draw_core()
+
   graphics.alpha_mult = prev
 end
 
+
+-- ----- The core --------------------------------------------------------------
+--
+-- The vulnerable middle, and the only solid part of the paddle: a round EMBLEM
+-- seated on the bar, not a slice of the bar with something drawn on it. Each
+-- loadout gets its own, worked in its own idiom -- an aspis face, a blood moon,
+-- a coil seen end-on, a comb rosette. It is the thing the player's eye lives on
+-- for a whole run, so it is drawn as a piece of jewellery rather than a marker.
+--
+-- Two rules keep the divide natural:
+--
+--   * NO dark outline anywhere on the core. A hard black ring would cut the
+--     emblem out of the ghosted rig like a sticker; instead every core opens
+--     with a soft halo (core_halo) whose alpha falls to nothing at its rim, so
+--     the solid centre dissolves outward into the transparent wings.
+--   * SHOULDERS reach further out still at falling alpha, carrying that ramp
+--     along the bar itself.
+--
+-- Detail is deliberately fine -- single-pixel rings, tick marks, filaments. At
+-- this size heavy strokes turn to mud, and the emblem is meant to reward a look
+-- rather than announce itself.
+
+
+-- The soft seat every emblem opens with: three rings of falling alpha stepping
+-- outward past the emblem's radius. This is what replaces the old black
+-- backing -- it separates the core from the ghost behind it by GLOW rather than
+-- by a cut line, so there is no edge to catch on.
+function Paddle:core_halo(c, r)
+  for i = 3, 1, -1 do
+    graphics.circle(self.x, self.y, r + i*2.2, Color(c.r, c.g, c.b, 0.07*(4 - i)))
+  end
+end
+
+
+-- Falloff along the bar, either side of the emblem: three short segments, each
+-- dimmer and further out, so the eye reads a ramp rather than a boundary.
+function Paddle:core_shoulders(c)
+  local hw = self:core_half()
+  for i = 1, 3 do
+    local a  = 0.26 - (i - 1)*0.08
+    local i0 = hw + (i - 1)*4
+    local i1 = hw + i*4
+    graphics.line(self.x - i1, self.y, self.x - i0, self.y, Color(c.r, c.g, c.b, a), 1)
+    graphics.line(self.x + i0, self.y, self.x + i1, self.y, Color(c.r, c.g, c.b, a), 1)
+  end
+end
+
+
+-- Evenly spaced tick marks around a ring -- the filigree most of the emblems
+-- are built from. `n` ticks between radii r1 and r2, offset by `phase`.
+function Paddle:core_ticks(c, r1, r2, n, phase, w)
+  for i = 0, n - 1 do
+    local a = phase + i*(2*math.pi/n)
+    graphics.line(self.x + math.cos(a)*r1, self.y + math.sin(a)*r1,
+                  self.x + math.cos(a)*r2, self.y + math.sin(a)*r2, c, w or 1)
+  end
+end
+
+
+-- A regular polygon as a convex vertex list (graphics.polygon fills convex
+-- only). Used for the hex work in the Hive and Glacier emblems.
+function Paddle:core_ngon(n, r, phase, squash)
+  local v = {}
+  for i = 0, n - 1 do
+    local a = (phase or 0) + i*(2*math.pi/n)
+    v[#v+1] = self.x + math.cos(a)*r
+    v[#v+1] = self.y + math.sin(a)*r*(squash or 1)
+  end
+  return v
+end
+
+
+function Paddle:draw_core()
+  -- The Pinball rig has no core (see core_half): its middle is the drain. Draw
+  -- it solid instead of leaving it ghosted.
+  if self.flippers then self:draw_body() return end
+
+  local s = self.hfx.hit.x
+  local c = self.hfx.hit.f and fg[0] or self.color
+  self:core_shoulders(c)
+  graphics.push(self.x, self.y, 0, s, 1/s)
+    local k = self.paddle_skin
+    if     k == 'aegis'     then self:draw_core_aegis(c)
+    elseif k == 'vampire'   then self:draw_core_vampire(c)
+    elseif k == 'tesla'     then self:draw_core_tesla(c)
+    elseif k == 'glacier'   then self:draw_core_glacier(c)
+    elseif k == 'cannon'    then self:draw_core_cannon(c)
+    elseif k == 'terrorist' then self:draw_core_terrorist(c)
+    elseif k == 'hive'      then self:draw_core_hive(c)
+    elseif k == 'mitosis'   then self:draw_core_mitosis(c)
+    elseif k == 'boomerang' then self:draw_core_boomerang(c)
+    else                         self:draw_core_standard(c) end
+  graphics.pop()
+end
+
+
+-- Standard: a compass rose. Twelve fine ticks with the cardinals struck longer,
+-- a double rim, and a bead at the centre.
+function Paddle:draw_core_standard(c)
+  local r = self:core_half()
+  self:core_halo(c, r)
+  graphics.circle(self.x, self.y, r, Color(c.r*0.30, c.g*0.30, c.b*0.36, 0.92))
+  graphics.circle(self.x, self.y, r, c, 1)
+  graphics.circle(self.x, self.y, r - 2.4, Color(c.r, c.g, c.b, 0.35), 1)
+  self:core_ticks(Color(c.r, c.g, c.b, 0.55), r - 2.2, r - 0.6, 12, 0)
+  self:core_ticks(fg[5], r - 4.2, r - 0.6, 4, 0)
+  graphics.circle(self.x, self.y, r*0.30, c)
+  graphics.circle(self.x, self.y, r*0.14, fg[5])
+end
+
+
+-- Aegis: the face of an aspis seen head on. A bronze field, a riveted rim, a
+-- band of meander ticks, and the omphalos raised at the centre with its glint.
+function Paddle:draw_core_aegis(c)
+  local r    = self:core_half()
+  local gold = Color(0.95, 0.80, 0.34, 1)
+  local brz  = Color(0.55, 0.40, 0.18, 1)
+  self:core_halo(gold, r)
+  graphics.circle(self.x, self.y, r, Color(0.42, 0.30, 0.13, 0.95))
+  graphics.circle(self.x, self.y, r, gold, 1)
+  graphics.circle(self.x, self.y, r - 1.8, brz, 1)
+  -- Rim rivets.
+  for i = 0, 11 do
+    local a = i*(math.pi/6) + math.pi/12
+    graphics.circle(self.x + math.cos(a)*(r - 0.9), self.y + math.sin(a)*(r - 0.9), 0.7, gold)
+  end
+  -- Meander band: alternating short ticks, the Greek key reduced to its rhythm.
+  self:core_ticks(Color(0.90, 0.74, 0.32, 0.7), r - 4.4, r - 2.6, 16, math.pi/16)
+  -- Omphalos.
+  graphics.circle(self.x, self.y, r*0.46, Color(0.72, 0.54, 0.24, 1))
+  graphics.circle(self.x, self.y, r*0.46, gold, 1)
+  graphics.circle(self.x - r*0.17, self.y - r*0.19, r*0.17, Color(1, 0.94, 0.68, 0.95))
+end
+
+
+-- Vampire: a blood moon. A dark disc lit from one side, with fine filaments
+-- hanging from the inner rim and a single bright bead where they gather.
+function Paddle:draw_core_vampire(c)
+  local r    = self:core_half()
+  local dark = Color(0.30, 0.03, 0.06, 1)
+  local red  = Color(0.72, 0.08, 0.13, 1)
+  local pale = Color(1, 0.72, 0.72, 1)
+  self:core_halo(red, r)
+  graphics.circle(self.x, self.y, r, dark)
+  graphics.circle(self.x, self.y, r, red, 1)
+  -- The lit crescent: an arc band, not a fill, so the disc stays dark.
+  for i = 0, 3 do
+    graphics.arc('open', self.x, self.y, r - 0.8 - i*0.9,
+                 -math.pi*0.86, -math.pi*0.20, Color(red.r, red.g, red.b, 0.85 - i*0.17), 1)
+  end
+  -- Filaments hanging inside the lower rim, each a different length.
+  local drop = {0.30, 0.52, 0.38, 0.62, 0.34}
+  for i, d in ipairs(drop) do
+    local a  = math.pi*(0.22 + (i - 1)*0.14)
+    local x1 = self.x + math.cos(a)*(r - 1)
+    local y1 = self.y + math.sin(a)*(r - 1)
+    graphics.line(x1, y1, x1, y1 - r*d, Color(red.r, red.g, red.b, 0.6), 1)
+    graphics.circle(x1, y1 - r*d, 0.7, Color(pale.r, pale.g, pale.b, 0.7))
+  end
+  graphics.circle(self.x - r*0.22, self.y - r*0.26, r*0.20, red)
+  graphics.circle(self.x - r*0.26, self.y - r*0.30, r*0.09, pale)
+end
+
+
+-- Tesla: a coil seen end on. Concentric windings, radial spokes, and a live arc
+-- kinking across the middle between two terminal beads.
+function Paddle:draw_core_tesla(c)
+  local r    = self:core_half()
+  local cu   = Color(0.85, 0.58, 0.28, 1)     -- copper winding
+  local arc  = Color(0.80, 0.90, 1, 1)
+  self:core_halo(arc, r)
+  graphics.circle(self.x, self.y, r, Color(0.10, 0.12, 0.18, 0.95))
+  graphics.circle(self.x, self.y, r, cu, 1)
+  for i = 1, 3 do
+    graphics.circle(self.x, self.y, r - i*2.1, Color(cu.r, cu.g, cu.b, 0.75 - i*0.14), 1)
+  end
+  self:core_ticks(Color(cu.r, cu.g, cu.b, 0.45), r*0.30, r - 0.8, 16, 0)
+  -- The discharge: a three-kink bolt, brightest at its core.
+  local px = r*0.66
+  local pts = {{-px, -0.5}, {-px*0.36, 2.4}, {px*0.20, -2.6}, {px*0.62, 1.4}, {px, -0.6}}
+  for i = 1, #pts - 1 do
+    graphics.line(self.x + pts[i][1], self.y + pts[i][2],
+                  self.x + pts[i+1][1], self.y + pts[i+1][2],
+                  Color(arc.r, arc.g, arc.b, 0.55), 2.5)
+    graphics.line(self.x + pts[i][1], self.y + pts[i][2],
+                  self.x + pts[i+1][1], self.y + pts[i+1][2], fg[5], 1)
+  end
+  for _, sgn in ipairs({-1, 1}) do
+    graphics.circle(self.x + sgn*px, self.y, 1.6, cu)
+    graphics.circle(self.x + sgn*px, self.y, 0.8, fg[5])
+  end
+end
+
+
+-- Glacier: a six-fold flake grown inside a lens. Barbed arms, a faceted inner
+-- hex, and a pale rim where the light catches.
+function Paddle:draw_core_glacier(c)
+  local r    = self:core_half()
+  local ice  = Color(0.66, 0.86, 1, 1)
+  local deep = Color(0.16, 0.30, 0.48, 1)
+  self:core_halo(ice, r)
+  graphics.circle(self.x, self.y, r, Color(deep.r, deep.g, deep.b, 0.92))
+  graphics.circle(self.x, self.y, r, ice, 1)
+  -- Six arms with barbs, the flake proper.
+  for i = 0, 5 do
+    local a  = i*(math.pi/3)
+    local ex, ey = self.x + math.cos(a)*(r - 1.2), self.y + math.sin(a)*(r - 1.2)
+    graphics.line(self.x, self.y, ex, ey, ice, 1)
+    for _, f in ipairs({0.45, 0.72}) do
+      local bx, by = self.x + math.cos(a)*(r - 1.2)*f, self.y + math.sin(a)*(r - 1.2)*f
+      local bl = r*0.22
+      graphics.line(bx, by, bx + math.cos(a + 1.05)*bl, by + math.sin(a + 1.05)*bl, ice, 1)
+      graphics.line(bx, by, bx + math.cos(a - 1.05)*bl, by + math.sin(a - 1.05)*bl, ice, 1)
+    end
+  end
+  graphics.polygon(self:core_ngon(6, r*0.34, math.pi/6), Color(0.86, 0.95, 1, 0.9))
+  graphics.polygon(self:core_ngon(6, r*0.34, math.pi/6), ice, 1)
+  graphics.arc('open', self.x, self.y, r - 0.6, -math.pi*0.82, -math.pi*0.30, Color(1, 1, 1, 0.75), 1)
+end
+
+
+-- Cannon: a rifled bore. A riveted collar, the dark throat, grooves twisting
+-- into it, and a glint off the crown.
+function Paddle:draw_core_cannon(c)
+  local r     = self:core_half()
+  local steel = Color(0.62, 0.60, 0.66, 1)
+  local dark  = Color(0.09, 0.09, 0.11, 1)
+  self:core_halo(Color(0.85, 0.62, 0.32, 1), r)
+  graphics.circle(self.x, self.y, r, Color(0.30, 0.29, 0.33, 0.96))
+  graphics.circle(self.x, self.y, r, steel, 1)
+  graphics.circle(self.x, self.y, r - 1.9, Color(steel.r, steel.g, steel.b, 0.5), 1)
+  for i = 0, 7 do
+    local a = i*(math.pi/4) + math.pi/8
+    graphics.circle(self.x + math.cos(a)*(r - 1), self.y + math.sin(a)*(r - 1), 0.7, steel)
+  end
+  graphics.circle(self.x, self.y, r*0.56, dark)
+  -- Rifling: short chords set at an angle, so the throat reads as twisting.
+  for i = 0, 7 do
+    local a  = i*(math.pi/4)
+    local r1, r2 = r*0.56, r*0.24
+    graphics.line(self.x + math.cos(a)*r1, self.y + math.sin(a)*r1,
+                  self.x + math.cos(a + 0.55)*r2, self.y + math.sin(a + 0.55)*r2,
+                  Color(steel.r, steel.g, steel.b, 0.55), 1)
+  end
+  graphics.arc('open', self.x, self.y, r*0.56, -math.pi*0.9, -math.pi*0.45, Color(1, 0.92, 0.72, 0.8), 1)
+end
+
+
+-- Terrorist: an arming dial. Hazard chevrons round the bezel, a plunger disc,
+-- crosshairs, and the lamp that says it is live.
+function Paddle:draw_core_terrorist(c)
+  local r    = self:core_half()
+  local haz  = Color(0.95, 0.80, 0.20, 1)
+  local red  = Color(0.85, 0.20, 0.16, 1)
+  self:core_halo(haz, r)
+  graphics.circle(self.x, self.y, r, Color(0.14, 0.13, 0.15, 0.96))
+  graphics.circle(self.x, self.y, r, haz, 1)
+  -- Bezel chevrons: alternate segments struck, the hazard stripe wrapped round.
+  for i = 0, 11 do
+    if i % 2 == 0 then
+      local a = i*(math.pi/6)
+      graphics.arc('open', self.x, self.y, r - 1.4, a, a + math.pi/6,
+                   Color(haz.r, haz.g, haz.b, 0.85), 2)
+    end
+  end
+  graphics.circle(self.x, self.y, r*0.60, Color(0.24, 0.22, 0.25, 1))
+  graphics.circle(self.x, self.y, r*0.60, Color(haz.r, haz.g, haz.b, 0.5), 1)
+  self:core_ticks(Color(haz.r, haz.g, haz.b, 0.5), 0, r*0.60, 4, math.pi/4)
+  graphics.circle(self.x, self.y, r*0.26, red)
+  graphics.circle(self.x - r*0.09, self.y - r*0.10, r*0.10, Color(1, 0.80, 0.72, 0.9))
+end
+
+
+-- Hive: a comb rosette. One cell at the centre ringed by six more, brood dots
+-- set in each, and the wax rim drawn thin.
+function Paddle:draw_core_hive(c)
+  local r    = self:core_half()
+  local wax  = Color(0.94, 0.76, 0.24, 1)
+  local deep = Color(0.36, 0.26, 0.07, 1)
+  self:core_halo(wax, r)
+  graphics.circle(self.x, self.y, r, Color(0.20, 0.15, 0.05, 0.94))
+  graphics.circle(self.x, self.y, r, wax, 1)
+  local cell = r*0.30
+  -- Six outer cells.
+  for i = 0, 5 do
+    local a  = i*(math.pi/3) + math.pi/6
+    local ox = self.x + math.cos(a)*cell*1.72
+    local oy = self.y + math.sin(a)*cell*1.72
+    local sx, sy = self.x, self.y
+    self.x, self.y = ox, oy
+    graphics.polygon(self:core_ngon(6, cell, 0), Color(wax.r, wax.g, wax.b, 0.30))
+    graphics.polygon(self:core_ngon(6, cell, 0), Color(wax.r, wax.g, wax.b, 0.85), 1)
+    graphics.circle(ox, oy, cell*0.30, deep)
+    self.x, self.y = sx, sy
+  end
+  graphics.polygon(self:core_ngon(6, cell, 0), Color(wax.r, wax.g, wax.b, 0.9))
+  graphics.polygon(self:core_ngon(6, cell, 0), deep, 1)
+  graphics.circle(self.x, self.y, cell*0.34, deep)
+end
+
+
+-- Mitosis: a nucleus mid-division. A membrane, two lobes pinched apart, spindle
+-- fibres strung between them, and chromatin scattered in each.
+function Paddle:draw_core_mitosis(c)
+  local r    = self:core_half()
+  local mem  = Color(c.r, c.g, c.b, 1)
+  self:core_halo(mem, r)
+  graphics.circle(self.x, self.y, r, Color(c.r*0.22, c.g*0.22, c.b*0.28, 0.94))
+  graphics.circle(self.x, self.y, r, mem, 1)
+  local lr, lx = r*0.46, r*0.42
+  -- Spindle fibres first, so the lobes sit over them.
+  for i = -2, 2 do
+    graphics.line(self.x - lx, self.y + i*1.5*0.6, self.x + lx, self.y + i*1.5*0.6,
+                  Color(mem.r, mem.g, mem.b, 0.30), 1)
+  end
+  for _, sgn in ipairs({-1, 1}) do
+    graphics.circle(self.x + sgn*lx, self.y, lr, Color(c.r*0.55, c.g*0.55, c.b*0.62, 1))
+    graphics.circle(self.x + sgn*lx, self.y, lr, mem, 1)
+    -- Chromatin: three short strokes per lobe, angled differently.
+    for j = 0, 2 do
+      local a  = 0.8 + j*1.9
+      local bx = self.x + sgn*lx + math.cos(a)*lr*0.42
+      local by = self.y + math.sin(a)*lr*0.42
+      graphics.line(bx - 1, by, bx + 1, by, fg[5], 1)
+    end
+  end
+end
+
+
+-- Boomerang: a return path. Nested chevrons stepping inward, wrapped by a
+-- dotted orbit that says the thing comes back.
+function Paddle:draw_core_boomerang(c)
+  local r = self:core_half()
+  self:core_halo(c, r)
+  graphics.circle(self.x, self.y, r, Color(c.r*0.26, c.g*0.26, c.b*0.32, 0.93))
+  graphics.circle(self.x, self.y, r, c, 1)
+  -- Dotted orbit.
+  for i = 0, 15 do
+    if i % 2 == 0 then
+      local a = i*(math.pi/8)
+      graphics.circle(self.x + math.cos(a)*(r - 2.1), self.y + math.sin(a)*(r - 2.1), 0.6,
+                      Color(c.r, c.g, c.b, 0.55))
+    end
+  end
+  -- Three nested chevrons, each shorter and brighter.
+  for i = 0, 2 do
+    local w2 = r*(0.62 - i*0.16)
+    local h2 = r*(0.44 - i*0.11)
+    local a  = 0.45 + i*0.25
+    graphics.line(self.x - w2, self.y + h2, self.x, self.y - h2, Color(c.r, c.g, c.b, a), 1.5)
+    graphics.line(self.x, self.y - h2, self.x + w2, self.y + h2, Color(c.r, c.g, c.b, a), 1.5)
+  end
+  graphics.circle(self.x, self.y, r*0.13, fg[5])
+end
 
 function Paddle:draw_body()
   local s = self.hfx.hit.x
