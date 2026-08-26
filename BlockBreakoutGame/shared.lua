@@ -11,6 +11,27 @@ function ColorRamp:init(color, step)
 end
 
 
+-- ----- Off-screen culling ---------------------------------------------------
+--
+-- Anything allowed to LEAVE the arena -- enemy fire, XP orbs, uncaught powerups
+-- -- ends its life at the edge of the CANVAS, not at the arena wall. The arena
+-- (24, 18 -> 456, 632) is inset inside the 480x656 canvas, and nothing clips
+-- drawing to it, so those margins are on screen: culling on the arena bounds
+-- made things wink out while the player could still see them, right where they
+-- were looking. The pad keeps the cull just past the edge so nothing pops while
+-- a pixel of it is still visible.
+--
+-- Note this governs LIFETIME only, never collision. A powerup still bounces off
+-- the side walls exactly as before (that containment is what keeps it catchable)
+-- -- it just isn't killed the instant it drops past the bottom any more.
+OFF_SCREEN_PAD = 6
+
+function off_screen(x, y, r)
+  local pad = (r or 0) + OFF_SCREEN_PAD
+  return x < -pad or x > gw + pad or y < -pad or y > gh + pad
+end
+
+
 -- ----- Enemy feedback knobs -------------------------------------------------
 --
 -- Enemy feedback is qualitatively different from the player's: it is CONSTANT

@@ -158,7 +158,11 @@ function Powerup:update(dt)
 
   -- Fell past the paddle without being caught. Tier-1: dead. Tier-2: same,
   -- since the deflect logic only flips armed when the paddle actually hits.
-  if self.y > arena.y2 + 20 then self.dead = true end
+  -- Culled off SCREEN rather than at the arena floor (see off_screen in
+  -- shared.lua), so a missed drop is watched out of play instead of blinking
+  -- away just short of the bottom. It still bounces off the side walls, so the
+  -- bottom is the only way out -- that containment is what keeps it catchable.
+  if off_screen(self.x, self.y, self.r_size) then self.dead = true end
 end
 
 

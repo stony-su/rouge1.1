@@ -116,8 +116,11 @@ function XpOrb:update(dt)
     self.dead = true
   end
 
-  -- Despawn once the orb falls off the bottom of the arena.
-  if self.y > arena.y2 + 20 then self.dead = true end
+  -- Despawn once the orb is off SCREEN, not merely past the arena floor (see
+  -- off_screen in shared.lua). Orbs don't collide with the walls either, so a
+  -- scattered one can drift out the side as well -- which the old bottom-only
+  -- test never caught at all, leaving it to idle out on the 20s life timer.
+  if off_screen(self.x, self.y, self.r_size) then self.dead = true end
 end
 
 

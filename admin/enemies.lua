@@ -135,15 +135,6 @@ local PARRY_MAX_HP_FRAC = 0.75
 -- this number is the number of things the shot actually hits.
 local PARRY_PIERCE_TARGETS = 5
 
--- Extra margin past the canvas edge before a shot is culled. Enemy fire is
--- filtered out of colliding with the arena walls (see the fixture mask in init),
--- so a shot that reaches the left, right or bottom edge flies straight THROUGH
--- it and out across the margin the HUD sits in. Culling on the ARENA bounds made
--- it wink out the instant it touched a wall the player could watch it cross;
--- culling on the CANVAS instead means a shot only disappears once it is
--- genuinely out of sight. The pad keeps the cull just past the edge so nothing
--- pops while a pixel of it is still on screen.
-local OFF_SCREEN_PAD = 6
 
 
 -- Slow downward projectile fired by shooter bricks. Hits the paddle.
@@ -407,15 +398,11 @@ function EnemyProjectile:update(dt)
     end
   end
 
-  -- Off-SCREEN cleanup (see OFF_SCREEN_PAD). Measured against the canvas, not
-  -- the arena, so a shot leaves through the wall and keeps going until it is
-  -- actually out of sight. All four edges, not just the three solid ones: the
-  -- rule is "the player can no longer see it", and that reads the same whichever
-  -- way the shot left.
-  local pad = self.r_size + OFF_SCREEN_PAD
-  if self.x < -pad or self.x > gw + pad or self.y < -pad or self.y > gh + pad then
-    self.dead = true
-  end
+  -- Off-SCREEN cleanup. Enemy fire is filtered out of colliding with the arena
+  -- walls (see the fixture mask in init), so a shot that reaches an edge flies
+  -- straight THROUGH it and keeps going until it is genuinely out of sight --
+  -- see off_screen in shared.lua for why the canvas, not the arena, is the line.
+  if off_screen(self.x, self.y, self.r_size) then self.dead = true end
   -- Paddle hit. Swept vertical test over the segment the bullet travelled this
   -- frame, instead of the old "anywhere below paddle.y - 4" column — that acted
   -- like an infinitely tall hitbox under the paddle, so lifting the paddle in

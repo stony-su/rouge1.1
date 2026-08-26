@@ -5,7 +5,6 @@ are you able to create chiptune music for the game or should I look online
 give one of my friends for playtesting
 
 hard
-create a player death animation and sound effect, allow with a transition animation to the Game over Screen
 create a start page 
 add pinball bumpers that spawn in during the boss phase periodicly to help balls his the boss. make sure that they spawn outside of the boss path. add a set of spawning, hit, and despawn animations as well as anything else for the pinball bumpers
 
