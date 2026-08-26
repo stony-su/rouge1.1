@@ -609,6 +609,8 @@ function BallPit:reset_run()
   -- boss wave from starting until everything is cleared (see BallPit:update).
   self.awaiting_boss = false
   self.score         = 0
+  -- Highest combo rank this run reached, banked to the title stele on death.
+  self.peak_rank_idx = 1
   -- Combo state. Persists across paddle bounces — only a ball falling into
   -- the pit (or extended idle time) reduces points. `streak` counts
   -- consecutive brick bounces across all balls; `last_variant` drives the
@@ -1410,10 +1412,11 @@ end
 -- already built (on_enter), with the real paddle hidden, so the rule can be
 -- aimed at that paddle's exact spawn point and width. It lands, the run is
 -- rebuilt, and the paddle that appears is the rule -- same place, same size.
-local TITLE_TEXT    = 'BALL PIT X'
+local TITLE_TEXT    = 'RICO RITE'
 local TITLE_STAGGER = 0.055
 local TITLE_DROP    = 0.34
-local TITLE_SETTLE  = TITLE_STAGGER*(#TITLE_TEXT - 1) + TITLE_DROP
+local TITLE_DELAY   = 0.16       -- facade is up before the first letter lands
+local TITLE_SETTLE  = TITLE_DELAY + TITLE_STAGGER*(#TITLE_TEXT - 1) + TITLE_DROP
 local TITLE_SCALE   = 2.0
 local TITLE_Y       = 0.285      -- fractions of screen height
 local RULE_Y        = 0.365
@@ -1429,6 +1432,225 @@ local INK_GOLD     = Color(0.93, 0.78, 0.38, 1)
 local INK_BRONZE   = Color(0.55, 0.42, 0.22, 1)
 local INK_PALE     = Color(0.88, 0.85, 0.79, 1)
 local INK_GOLD_DIM = Color(0.72, 0.60, 0.30, 1)
+
+
+-- ----- The facade -----------------------------------------------------------
+--
+-- The two margins either side of the marquee are ~120px of nothing each, and
+-- the band under the plates is another 200. One idea fills all three: the glass
+-- is a carved FACADE. A pediment over an entablature, two fluted columns
+-- carrying it, a stepped base under the lot, and the run records cut into a
+-- stele between the columns.
+--
+-- Same five inks as the rest of the print. All the depth is keylines -- no
+-- gradients, no light source, nothing that could not be screened onto glass.
+-- Coordinates are absolute canvas values: gw/gh are not bound until engine_run,
+-- so nothing at file scope may reference them.
+local FAC_M         = 44    -- pediment / cornice inset from the canvas edge
+local PED_APEX_Y    = 28
+local PED_BASE_Y    = 74
+local ENTAB_Y       = 74    -- cornice rule; the pediment sits on it
+local DENTIL_Y      = 79
+local DENTIL_H      = 7
+local ARCH_Y        = 88    -- rule closing the entablature under the dentils
+local COL_INSET     = 83    -- column centre line, in from the canvas edge
+local COL_TOP       = 88    -- top of the abacus; meets the architrave
+local COL_SHAFT_TOP = 112
+local COL_SHAFT_BOT = 546
+local COL_BOT       = 562   -- bottom of the plinth
+local COL_HALF      = 16    -- shaft half-width at the base
+local STYLO_Y       = 566   -- top step of the crepidoma
+local STELE_CY      = 462
+local STELE_W       = 216
+local STELE_H       = 160
+
+
+-- Shaft half-width at `ty` (0 at the shaft top, 1 at its bottom). A column is
+-- not a rectangle: it tapers toward the top and carries a slight outward swell
+-- -- entasis -- around the middle. Both are tiny here (2.5px and 0.5px), which
+-- is the point: you should not be able to name what makes it look right.
+local function col_half(ty)
+  return COL_HALF*(0.84 + 0.16*ty + math.sin(ty*math.pi)*0.035)
+end
+
+
+-- One column: five bronze flutes between two gold arrises, every strip sampled
+-- down the entasis curve so the swell actually reads. Capital and base are
+-- struck as flat plates, the way the bezel is. `a` fades the whole thing in.
+local function draw_column(cx, gold, bronze, a)
+  local yt, yst, ysb = COL_TOP, COL_SHAFT_TOP, COL_SHAFT_BOT
+  local sw = col_half(0)          -- shaft width where the echinus hands over
+
+  -- Capital: abacus slab over a flared echinus, closed by a bead necking.
+  graphics.rectangle(cx, yt + 4, 46, 8, 1, 1, bronze(0.18*a))
+  graphics.rectangle(cx, yt + 4, 46, 8, 1, 1, gold(0.75*a), 1)
+  local ech = {cx - 23, yt + 8, cx + 23, yt + 8, cx + sw, yst, cx - sw, yst}
+  graphics.polygon(ech, bronze(0.16*a))
+  graphics.polygon(ech, gold(0.5*a), 1)
+  graphics.line(cx - sw, yst + 2, cx + sw, yst + 2, bronze(0.8*a), 1)
+
+  -- Shaft. The engine draws with line_style "rough", so a near-vertical line
+  -- snaps to whole pixel columns: sample often enough that the taper steps in
+  -- small increments rather than in three visible jogs. graphics.polyline
+  -- hands a flat table straight to love.graphics.line, so no unpacking here.
+  local SEG = 14
+  local function strip(u, color)
+    local p = {}
+    for i = 0, SEG do
+      local ty = i/SEG
+      p[#p + 1] = cx + col_half(ty)*u
+      p[#p + 1] = yst + (ysb - yst)*ty
+    end
+    graphics.polyline(color, 1, p)
+  end
+  for k = -2, 2 do strip(k/2.6, bronze(0.5*a)) end
+  strip(-1, gold(0.7*a))
+  strip( 1, gold(0.7*a))
+
+  -- Base: torus over a plinth, each a shade wider than the thing above it.
+  graphics.rectangle(cx, ysb + 4,     42, 7, 2, 2, bronze(0.18*a))
+  graphics.rectangle(cx, ysb + 4,     42, 7, 2, 2, gold(0.6*a), 1)
+  graphics.rectangle(cx, COL_BOT - 4, 48, 9, 1, 1, bronze(0.16*a))
+  graphics.rectangle(cx, COL_BOT - 4, 48, 9, 1, 1, gold(0.55*a), 1)
+end
+
+
+-- Cornice, dentil row, architrave. `dy` lets the crown settle down onto the
+-- columns during the entrance.
+local function draw_entablature(gold, bronze, a, dy)
+  local x1, x2 = FAC_M, gw - FAC_M
+  -- The cornice overhangs its own span, the way a real one throws a shadow.
+  graphics.line(x1 - 5, ENTAB_Y + dy,     x2 + 5, ENTAB_Y + dy,     gold(0.8*a), 1)
+  graphics.line(x1,     ENTAB_Y + 3 + dy, x2,     ENTAB_Y + 3 + dy, bronze(0.7*a), 1)
+  -- Dentils: the row of small blocks that makes a cornice read as carved
+  -- rather than drawn. Counted, then centred, so the run is symmetrical.
+  local step  = 11
+  local n     = math.floor(((x2 - 12) - (x1 + 12))/step) + 1
+  local start = gw/2 - (n - 1)*step/2
+  local y     = DENTIL_Y + DENTIL_H/2 + dy
+  for i = 0, n - 1 do
+    graphics.rectangle(start + i*step, y, 3, DENTIL_H, nil, nil, bronze(0.6*a))
+  end
+  graphics.line(x1, ARCH_Y + dy, x2, ARCH_Y + dy, bronze(0.5*a), 1)
+end
+
+
+-- The gable, its tympanum mark, and the three acroteria pips.
+local function draw_pediment(gold, bronze, a, dy)
+  local x1, x2 = FAC_M, gw - FAC_M
+  local cx     = gw/2
+  local ay, by = PED_APEX_Y + dy, PED_BASE_Y + dy
+  graphics.polyline(gold(0.85*a),   1, {x1, by, cx, ay, x2, by})
+  graphics.polyline(bronze(0.75*a), 1, {x1 + 13, by - 3, cx, ay + 8, x2 - 13, by - 3})
+  -- Tympanum mark: a ball over a rule -- the game's own emblem, stated once.
+  -- The stele echoes it at the bottom and that is the whole of it.
+  graphics.circle(cx, by - 22, 4, gold(0.9*a))
+  graphics.line(cx - 11, by - 12, cx + 11, by - 12, bronze(0.9*a), 1)
+  -- Acroteria, using the same 3px pips the bezel corners already carry.
+  graphics.rectangle(cx, ay - 3, 4, 4, nil, nil, gold(0.9*a))
+  graphics.rectangle(x1, by - 2, 4, 4, nil, nil, gold(0.8*a))
+  graphics.rectangle(x2, by - 2, 4, 4, nil, nil, gold(0.8*a))
+end
+
+
+-- Three receding steps, widest at the bottom: the columns have to land on
+-- something or they read as hanging in the panel.
+local function draw_crepidoma(gold, bronze, a)
+  graphics.line(FAC_M - 2,  STYLO_Y,      gw - FAC_M + 2,  STYLO_Y,      gold(0.7*a), 1)
+  graphics.line(FAC_M - 8,  STYLO_Y + 5,  gw - FAC_M + 8,  STYLO_Y + 5,  bronze(0.7*a), 1)
+  graphics.line(FAC_M - 14, STYLO_Y + 10, gw - FAC_M + 14, STYLO_Y + 10, bronze(0.5*a), 1)
+end
+
+
+-- The four inscribed lines. Values come from the persistent record table that
+-- finish_game_over writes; before the first death every one of them is a dash
+-- rather than a zero, so an untouched stele reads as UNCUT instead of as a
+-- record of bad runs.
+local function title_record_rows()
+  local r    = (state and state.records) or {}
+  local runs = r.runs or 0
+  local function cut(v, prefix)
+    if runs <= 0 or not v or v <= 0 then return '--' end
+    return (prefix or '') .. tostring(v)
+  end
+  local rank = '--'
+  if runs > 0 and r.best_rank and COMBO_RANKS[r.best_rank] then
+    rank = COMBO_RANKS[r.best_rank].label
+  end
+  return {
+    {'FURTHEST',   cut(r.best_wave, 'WAVE ')},
+    {'BEST SCORE', cut(r.best_score)},
+    {'PEAK RANK',  rank},
+    {'RITES',      cut(runs)},
+  }
+end
+
+
+-- The stele: the run records cut into the wall between the columns. Its face is
+-- GLASS_DEEP -- darker than the panel around it -- so it reads as recessed into
+-- the glass rather than as one more plate lying on top of it.
+local function draw_stele(gold, bronze, pale, a)
+  local cx, top = gw/2, STELE_CY - STELE_H/2
+  graphics.rectangle(cx, STELE_CY, STELE_W, STELE_H, 3, 3,
+                     Color(GLASS_DEEP.r, GLASS_DEEP.g, GLASS_DEEP.b, 0.85*a))
+  graphics.rectangle(cx, STELE_CY, STELE_W,     STELE_H,     3, 3, gold(0.6*a),   1)
+  graphics.rectangle(cx, STELE_CY, STELE_W - 9, STELE_H - 9, 2, 2, bronze(0.7*a), 1)
+
+  graphics.print_centered('RECORDS', pixul_font, cx, top + 16, 0, 1, 1, 0, 0, gold(0.95*a))
+  graphics.line(cx - 54, top + 28, cx + 54, top + 28, bronze(0.8*a), 1)
+  for _, s in ipairs({-1, 1}) do
+    graphics.rectangle(cx + s*62, top + 28, 3, 3, nil, nil, gold(0.85*a))
+  end
+
+  local y = top + 44
+  for _, row in ipairs(title_record_rows()) do
+    graphics.print(row[1], pixul_font, cx - STELE_W/2 + 20, y, 0, 1, 1, 0, 0, pale(0.7*a))
+    -- Values are set flush RIGHT so the column of them lines up the way an
+    -- inscription's does. Measured rather than guessed -- get_text_width folds
+    -- the font's tracking in, which a character count would miss.
+    local w = pixul_font:get_text_width(row[2])
+    graphics.print(row[2], pixul_font, cx + STELE_W/2 - 20 - w, y, 0, 1, 1, 0, 0, gold(0.95*a))
+    y = y + 21
+  end
+
+  graphics.circle(cx, top + 138, 3, bronze(0.9*a))
+  graphics.line(cx - 11, top + 146, cx + 11, top + 146, bronze(0.7*a), 1)
+end
+
+
+-- ---- dust ------------------------------------------------------------------
+-- Fourteen specks drifting down the panel. Seeded on first use rather than at
+-- file scope, because `random` is not bound until engine_run either; wrapped
+-- forever after, since the title screen is never rebuilt.
+local TITLE_MOTES = nil
+local function title_motes()
+  if TITLE_MOTES then return TITLE_MOTES end
+  TITLE_MOTES = {}
+  for i = 1, 14 do
+    TITLE_MOTES[i] = {
+      x  = random:float(28, gw - 28), y  = random:float(28, gh - 28),
+      vx = random:float(-2.5, 2.5),   vy = random:float(3, 9),
+      r  = random:float(0.6, 1.5),    a  = random:float(0.10, 0.26),
+      p  = random:float(0, math.pi*2),
+    }
+  end
+  return TITLE_MOTES
+end
+
+
+-- Drift: down, with a slow sway. Slow enough that you only notice it once you
+-- have stopped reading -- the room is old, not haunted.
+local function update_title_motes(dt)
+  for _, m in ipairs(title_motes()) do
+    m.p = m.p + dt*0.6
+    m.y = m.y + m.vy*dt
+    m.x = m.x + (m.vx + math.sin(m.p)*3)*dt
+    if m.y > gh - 24 then m.y, m.x = 24, random:float(28, gw - 28) end
+    if     m.x < 24      then m.x = gw - 24
+    elseif m.x > gw - 24 then m.x = 24 end
+  end
+end
+
 
 
 -- The two plates under the rule. Geometry FIRST, read by both the hit test and
@@ -1478,6 +1700,7 @@ end
 
 function BallPit:update_title(dt)
   self.title_t = (self.title_t or 0) + dt
+  update_title_motes(dt)
 
   if self.title_phase == 'launch' then
     self.launch_t = (self.launch_t or 0) + dt
@@ -1575,6 +1798,10 @@ function BallPit:draw_title()
   -- Everything printed on the glass goes first and fast -- the rule is the only
   -- thing that survives the transition, so nothing else may compete with it.
   local ink = launching and (1 - math.clamp(k/0.34, 0, 1)) or 1
+  -- Torch flicker: ONE scalar, multiplied into the GOLD ink only. Two detuned
+  -- sines so the period is never countable, and shallow enough (~2%) that it
+  -- reads as a warm room rather than as an animation.
+  local lume = 1 + 0.022*math.sin(t*1.7) + 0.012*math.sin(t*4.3 + 1.1)
 
   -- ---- the panel -----------------------------------------------------------
   if glass > 0.001 then
@@ -1589,7 +1816,7 @@ function BallPit:draw_title()
   end
 
   if ink > 0.001 then
-    local function gold(a)   return Color(INK_GOLD.r,   INK_GOLD.g,   INK_GOLD.b,   a*ink) end
+    local function gold(a)   return Color(INK_GOLD.r,   INK_GOLD.g,   INK_GOLD.b,   math.min(a*ink*lume, 1)) end
     local function bronze(a) return Color(INK_BRONZE.r, INK_BRONZE.g, INK_BRONZE.b, a*ink) end
     local function pale(a)   return Color(INK_PALE.r,   INK_PALE.g,   INK_PALE.b,   a*ink) end
 
@@ -1607,12 +1834,38 @@ function BallPit:draw_title()
       graphics.rectangle(x + sx*5, y + sy*5, 3, 3, nil, nil, gold(0.9))
     end
 
+    -- ---- dust --------------------------------------------------------------
+    -- Drawn here, under the facade, so a speck never crosses a keyline.
+    for _, m in ipairs(title_motes()) do
+      graphics.circle(m.x, m.y, m.r, bronze(m.a))
+    end
+
+    -- ---- the facade --------------------------------------------------------
+    -- Columns and steps come up first; the crown then SETTLES onto them from
+    -- above. Stone descends -- nothing here floats into place.
+    local base_k  = math.clamp(t/0.30, 0, 1)
+    local crown_k = math.clamp((t - 0.18)/0.34, 0, 1)
+    if base_k > 0 then
+      draw_column(COL_INSET,      gold, bronze, base_k)
+      draw_column(gw - COL_INSET, gold, bronze, base_k)
+      draw_crepidoma(gold, bronze, base_k)
+    end
+    if crown_k > 0 then
+      local dy = -9*(1 - crown_k)^3
+      draw_entablature(gold, bronze, crown_k, dy)
+      draw_pediment(gold, bronze, crown_k, dy)
+    end
+
     -- ---- crest: a static sunburst behind the marquee ------------------------
     local cx, cy = gw/2, gh*TITLE_Y
+    -- The crest breathes: +/-2px on a slow sine. It is the only thing on the
+    -- glass that moves without a reason to, and even at full stretch the apex
+    -- stays clear of the architrave above it.
+    local breath = math.sin(t*0.9)*2
     for i = -7, 7 do
       local a  = -math.pi/2 + i*0.135
       local r1 = 54 + (math.abs(i) % 2)*10
-      local r2 = r1 + 30 - math.abs(i)*1.6
+      local r2 = r1 + 30 - math.abs(i)*1.6 + breath
       graphics.line(cx + math.cos(a)*r1, cy + math.sin(a)*r1,
                     cx + math.cos(a)*r2, cy + math.sin(a)*r2,
                     bronze(0.5 - math.abs(i)*0.03), 1)
@@ -1629,7 +1882,7 @@ function BallPit:draw_title()
     local x = gw/2 - (total*TITLE_SCALE)/2
     for i = 1, n do
       local ch = TITLE_TEXT:sub(i, i)
-      local lk = math.clamp((t - (i - 1)*TITLE_STAGGER)/TITLE_DROP, 0, 1)
+      local lk = math.clamp((t - TITLE_DELAY - (i - 1)*TITLE_STAGGER)/TITLE_DROP, 0, 1)
       if lk > 0 and ch ~= ' ' then
         local e = 1 - (1 - lk)*(1 - lk)*(1 - lk)
         local y = gh*TITLE_Y - 46*(1 - e)
@@ -1661,10 +1914,12 @@ function BallPit:draw_title()
         graphics.print_centered(b.label, pixul_font, b.x, b.y, 0, 1, 1, 0, 0,
                                 on and gold(pk) or pale(pk*0.7))
       end
+      draw_stele(gold, bronze, pale, pk)
       graphics.print_centered('ESC   SETTINGS',
                               pixul_font, gw/2, gh*0.895, 0, 1, 1, 0, 0, bronze(pk*0.9))
-      -- Footer rule, so the panel is closed at the bottom the way it is at the top.
-      graphics.line(gw/2 - 88, gh*0.925, gw/2 + 88, gh*0.925, bronze(pk*0.6), 1)
+      -- Ground line. The facade stands ON something, so this runs the full
+      -- width of the crepidoma rather than stopping under the plates.
+      graphics.line(40, gh*0.925, gw - 40, gh*0.925, bronze(pk*0.6), 1)
     end
   end
 
@@ -2672,6 +2927,9 @@ function BallPit:tick_combo(dt)
   if     disp_idx > prev_idx then self:on_combo_rank_up(disp_idx)
   elseif disp_idx < prev_idx then self:on_combo_rank_down(disp_idx) end
   c.display_idx = disp_idx
+  -- Peak for the record stele, taken off the DRAWN bar so what gets carved is
+  -- the rank the player actually saw light up.
+  self.peak_rank_idx = math.max(self.peak_rank_idx or 1, disp_idx)
 
   -- ---- fill fraction within the drawn tier, plus the lagging ghost tail ----
   local lo = combo_rank_threshold(disp_idx)
@@ -3536,6 +3794,13 @@ function BallPit:finish_game_over()
   -- Bank the run's kills to disk and pre-select the equipped card for when
   -- the player opens the shop.
   PADDLES.ensure_state()
+  -- Cut the run into the title stele. Every field is a high-water mark except
+  -- `runs`, which just counts -- so a bad run still adds a rite to the tally.
+  local rec = state.records
+  rec.runs       = rec.runs + 1
+  rec.best_wave  = math.max(rec.best_wave,  self.wave or 0)
+  rec.best_score = math.max(rec.best_score, self.score or 0)
+  rec.best_rank  = math.max(rec.best_rank,  self.peak_rank_idx or 1)
   self.shop_selected = 1
   for i, id in ipairs(PADDLES.order) do
     if id == state.selected_paddle then self.shop_selected = i; break end

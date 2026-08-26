@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**Ball Pit X** — a LÖVE2D (Love2D 11.3, Lua) roguelike that fuses Arkanoid/Breakout with a
+**Rico Rite** — a LÖVE2D (Love2D 11.3, Lua) roguelike that fuses Arkanoid/Breakout with a
 vampire-survivors swarm loop and an ULTRAKILL-style combo meter. You control a paddle; your
 "heroes" are bouncing balls (SNKRX archetypes) that auto-attack; enemy "bricks" drift down in
 swarms and breach the paddle for HP damage.
@@ -27,9 +27,13 @@ LÖVE opens a GUI window. Every gameplay/UI edit is therefore **UNTESTED** until
 
 There are **two parallel copies** of the game. Every gameplay change must be applied to **both**:
 
-- `BlockBreakoutGame/` — uses **LF** line endings.
-- `admin/` — uses **CRLF** line endings; this is the **PLAYTEST build**. It additionally has
-  `admin/terminal.lua`, a debug console that can spawn powerups / force state.
+- `BlockBreakoutGame/` — the shipping build.
+- `admin/` — the **PLAYTEST build**. It additionally has `admin/terminal.lua`, a debug console
+  that can spawn powerups / force state.
+
+Both working copies are **LF on disk**; git's `autocrlf` writes CRLF on checkout, so an in-place
+edit does not have to preserve carriage returns (verified 2026-08-26 — `tr -cd '' | wc -c`
+returns 0 for both builds).
 
 Many files are *near*-identical between the two copies (modulo line endings), so the same Edit
 `old_string`/`new_string` usually works in both — but several diverge in small ways, so **find
@@ -67,7 +71,7 @@ of the running game; do not edit it to change gameplay.
 ## Architecture (big picture)
 
 ```
-conf.lua    -> love.conf: 720x984 window, identity "BallPitX"
+conf.lua    -> love.conf: 720x984 window, identity "RicoRite"
 main.lua    -> entry: requires modules in order, binds input (WASD move, arrows aim,
                space launch, enter confirm, m1 click, r restart), loads SFX/music,
                creates Main() + BallPit, runs engine_run{ game 480x656, window 720x984 }
@@ -119,6 +123,7 @@ after the boss; no save/meta-progression yet.
 | Boss HP / phases / attacks | `enemies.lua` `Boss` |
 | Powerup kinds + feel | `powerup.lua` `Powerup.KINDS`, init / deflect |
 | Paddle size / dodge band / bounce angle | `paddle.lua` |
+| Title screen facade / record stele | `ballpit.lua` — the `-- ----- The facade` block |
 
 (See `GAME_CODE_SUMMARY.txt` §10 for the full index.)
 
@@ -141,8 +146,8 @@ into the running game; don't edit it to change gameplay. Attacks are in
 - Projectile *motion* and *on-hit* are further down — search the same `self.character == '<name>'`
   (e.g. spellblade's spiral `orbit_r/orbit_vr` ~2013/2116/2132; assassin's bleed `apply_dot` ~2356).
 
-Porting = translate that hero's sensor / cd / attack into a Ball Pit `BEHAVIORS.<name>`. Adapt
-freely: SNKRX heals/buffs allied *units*, but Ball Pit has no ally HP — so e.g. the cleric heals
+Porting = translate that hero's sensor / cd / attack into a Rico Rite `BEHAVIORS.<name>`. Adapt
+freely: SNKRX heals/buffs allied *units*, but Rico Rite has no ally HP — so e.g. the cleric heals
 the *player* instead. Cite the SNKRX `player.lua` line in a comment when you port one.
 
 ### The edit points in `ball_hero.lua`
@@ -209,13 +214,15 @@ the *player* instead. Cite the SNKRX `player.lua` line in a comment when you por
   `get_random_brick_within`, `has_brick_within`, `get_bricks_within`, `breach_line_y` (the red
   defense line — paddle side below, enemy side above), `heal_hearts(n)`, `arena.paddle`.
 
-## Current work in progress
+## Paddle loadouts
 
-`BlockBreakoutGame/paddles.lua` is a new, uncommitted partial implementation of the `PADDLES.md`
-loadout spec (the `PADDLES` data table, persistent meta-state/wallet, signature helpers, and a
-shop screen that replaces the game-over overlay). It is **not yet wired in** — `main.lua` does not
-`require 'paddles'` and there is no matching `admin/paddles.lua`. When this feature lands, it must
-be added to the require chain (after the other game modules) and mirrored into `admin/`.
+`paddles.lua` implements the `PADDLES.md` loadout spec (the `PADDLES` data table, persistent
+meta-state/wallet/records, signature helpers, and the shop screen that replaces the game-over
+overlay). It IS wired in, in both builds, and is required **last** in `main.lua` so its `BallPit`
+methods (including the `draw_game_over` override) land on the final class.
+
+The two copies of this file have diverged slightly beyond line endings — diff before assuming an
+anchor is shared.
 
 ## Conventions / gotchas
 

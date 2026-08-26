@@ -1047,7 +1047,7 @@ end
 -- glow, and peels off a couple of short branches. The stormweaver's chain
 -- links are drawn with these. Ported from SNKRX's LightningLine
 -- (assets_from_SNKRX/objects.lua:40 + :69 generate) -- same midpoint-displacement
--- idea, rebuilt as a Ball Pit effect: ordered subdivision (no greedy re-sort),
+-- idea, rebuilt as a Rico Rite effect: ordered subdivision (no greedy re-sort),
 -- segment-drawn (no unpack), plus forked branches.
 LightningArc = Object:extend()
 LightningArc:implement(GameObject)

@@ -1,5 +1,5 @@
 -- ==========================================================================
--- BALL PIT X — DAMAGE MASTER FILE — Boomerang paddle
+-- RICO RITE — DAMAGE MASTER FILE — Boomerang paddle
 -- ==========================================================================
 -- This file is the single source of truth for every damage number in the
 -- game WHILE THE Boomerang PADDLE IS EQUIPPED. Each paddle has its own copy

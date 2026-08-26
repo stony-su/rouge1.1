@@ -218,6 +218,15 @@ function PADDLES.ensure_state()
   if type(state.wallet) ~= 'number' then state.wallet = 0 end
   if type(state.paddles_owned) ~= 'table' then state.paddles_owned = {} end
   state.paddles_owned.standard = true
+  -- Run records, inscribed on the title stele (see draw_stele in ballpit.lua).
+  -- Repaired field by field like everything else here, so a save written
+  -- before records existed picks them up on the next boot rather than erroring.
+  if type(state.records) ~= 'table' then state.records = {} end
+  local rec = state.records
+  if type(rec.runs)       ~= 'number' then rec.runs       = 0 end
+  if type(rec.best_wave)  ~= 'number' then rec.best_wave  = 0 end
+  if type(rec.best_score) ~= 'number' then rec.best_score = 0 end
+  if type(rec.best_rank)  ~= 'number' then rec.best_rank  = 0 end
   if type(state.selected_paddle) ~= 'string'
   or not PADDLES.defs[state.selected_paddle]
   or not state.paddles_owned[state.selected_paddle] then

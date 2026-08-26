@@ -1,5 +1,5 @@
 -- ==========================================================================
--- BALL PIT X — DAMAGE MASTER FILE — Terrorist paddle
+-- RICO RITE — DAMAGE MASTER FILE — Terrorist paddle
 -- ==========================================================================
 -- This file is the single source of truth for every damage number in the
 -- game WHILE THE Terrorist PADDLE IS EQUIPPED. Each paddle has its own copy

@@ -1,5 +1,5 @@
 -- ==========================================================================
--- BALL PIT X — DAMAGE MASTER FILE — Pinball Lobber paddle
+-- RICO RITE — DAMAGE MASTER FILE — Pinball Lobber paddle
 -- ==========================================================================
 -- This file is the single source of truth for every damage number in the
 -- game WHILE THE Pinball Lobber PADDLE IS EQUIPPED. Each paddle has its own copy

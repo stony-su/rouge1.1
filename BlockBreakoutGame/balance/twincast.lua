@@ -1,5 +1,5 @@
 -- ==========================================================================
--- BALL PIT X — DAMAGE MASTER FILE — Twin Cast paddle
+-- RICO RITE — DAMAGE MASTER FILE — Twin Cast paddle
 -- ==========================================================================
 -- This file is the single source of truth for every damage number in the
 -- game WHILE THE Twin Cast PADDLE IS EQUIPPED. Each paddle has its own copy

@@ -133,7 +133,7 @@ end
 
 function love.run()
   return engine_run({
-    game_name     = 'BallPitX-Admin',
+    game_name     = 'RicoRite-Admin',
     game_width    = 480,
     game_height   = 656,
     window_width  = 720,

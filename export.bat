@@ -28,7 +28,7 @@ set "STAGE=%DIST%\.stage"
 
 echo(
 echo ===========================================================
-echo   Ball Pit X  --  Windows export
+echo   Rico Rite  --  Windows export
 echo ===========================================================
 
 REM --- locate a LOVE runtime -------------------------------------------------
@@ -56,9 +56,9 @@ if not exist "%DIST%" (
   exit /b 1
 )
 
-call :build "BlockBreakoutGame" "BallPitX"
+call :build "BlockBreakoutGame" "RicoRite"
 if errorlevel 1 goto :failed
-call :build "admin" "BallPitX-Admin"
+call :build "admin" "RicoRite-Admin"
 if errorlevel 1 goto :failed
 
 REM --- tidy the staging area, keep the artifacts -----------------------------

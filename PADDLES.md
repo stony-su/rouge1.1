@@ -1,4 +1,4 @@
-# BALL PIT X — Paddle Loadouts (design spec)
+# RICO RITE — Paddle Loadouts (design spec)
 
 Run-start **loadouts**: picking a paddle reconfigures the whole run. Each one
 rewrites a core verb, so stats are balanced by tradeoffs, not flat power.

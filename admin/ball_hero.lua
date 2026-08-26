@@ -146,7 +146,7 @@ local HERO_STATS = {
   -- ----- Chain lightning (SNKRX stormweaver port; behavior = 'chain_lightning') -----
   -- SNKRX's stormweaver is a passive that infuses every allied unit so their hits
   -- fork lightning to 2 (+2 at lvl3) nearby enemies (player.lua:308, :2360-2380).
-  -- Ball Pit has no allied roster, so this stormweaver INITIATES the arc itself:
+  -- Rico Rite has no allied roster, so this stormweaver INITIATES the arc itself:
   -- every cd it zaps the nearest brick, then the bolt forks onward through the
   -- swarm, each hop a falloff of its damage. links/radius grow at lvl3 like SNKRX.
   -- Movement: a moderate base that ramps FAST + bouncy, on an erratic crackling

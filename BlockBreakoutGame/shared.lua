@@ -80,7 +80,7 @@ function enemy_shot_sound(volume, pitch)
 end
 
 
--- Initializes color palette, fonts and canvases used across BallPitX.
+-- Initializes color palette, fonts and canvases used across RicoRite.
 function shared_init()
   local palette = {
     white   = ColorRamp(Color(1, 1, 1, 1), 0.025),

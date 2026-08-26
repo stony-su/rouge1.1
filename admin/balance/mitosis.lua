@@ -1,5 +1,5 @@
 -- ==========================================================================
--- BALL PIT X — DAMAGE MASTER FILE — Mitosis paddle
+-- RICO RITE — DAMAGE MASTER FILE — Mitosis paddle
 -- ==========================================================================
 -- This file is the single source of truth for every damage number in the
 -- game WHILE THE Mitosis PADDLE IS EQUIPPED. Each paddle has its own copy

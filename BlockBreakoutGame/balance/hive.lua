@@ -1,5 +1,5 @@
 -- ==========================================================================
--- BALL PIT X — DAMAGE MASTER FILE — Hive paddle
+-- RICO RITE — DAMAGE MASTER FILE — Hive paddle
 -- ==========================================================================
 -- This file is the single source of truth for every damage number in the
 -- game WHILE THE Hive PADDLE IS EQUIPPED. Each paddle has its own copy
