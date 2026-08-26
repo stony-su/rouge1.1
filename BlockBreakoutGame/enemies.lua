@@ -99,7 +99,7 @@ end
 function EnemyCritter:die()
   local arena = main.current
   spawn_burst(arena.effects, self.x, self.y, self.color, 5, 60, 130)
-  critter2:play{volume = 0.25, pitch = random:float(0.95, 1.1)}
+  enemy_fx_sound(critter2, 0.25, random:float(0.95, 1.1))
   local x, y, v = self.x, self.y, self.xp_value
   arena.t:after(0, function()
     if arena.main and arena.main.world then
@@ -244,6 +244,58 @@ function EnemyProjectile:despawn_factor()
 end
 
 
+-- Turn this shot: the Aegis PERFECT PARRY payload, extracted so the TWO places
+-- a braced shield can catch a bullet share it -- the paddle's own hit test in
+-- update, and the dome's deploy sweep (Paddle:brace_shove). Before this the
+-- sweep silently ATE parries: it threw shots clear of the paddle bar, which is
+-- where the parry test lives, so bracing into incoming fire deflected the shot
+-- without ever reflecting it. Returns false for anything a shield can't turn.
+function EnemyProjectile:parry_by_shield()
+  local arena = main.current
+  if not arena then return false end
+  if self.reflected or self.unbreakable or self.dead or self.expiring then return false end
+  local sigt  = (arena.run_mods and arena.run_mods.sig) or {}
+  -- A Greater dome doubles the return damage; each turned bullet banks bulwark
+  -- toward the next Greater raise, and refunds a slug of combo points.
+  local gmult = (arena.paddle and arena.paddle.greater and (sigt.greater_reflect_mult or 2)) or 1
+  self:reflect((sigt.reflect_dmg or 60)*gmult)
+  spawn_burst(arena.effects, self.x, self.y, self.color, 8, 90, 170)
+  -- Parry cue: a metallic ting off the shield face, with the magical shimmer
+  -- kept underneath and pulled back so the ting carries.
+  mine1:play{volume = 0.35, pitch = random:float(1.50, 1.70)}
+  buff1:play{volume = 0.22, pitch = random:float(1.25, 1.4)}
+  if arena.add_combo_points then arena:add_combo_points(sigt.parry_combo or 25) end
+  if arena.bulwark_add then arena:bulwark_add(sigt.bulwark_bullet or 1) end
+  return true
+end
+
+
+-- Nearest enemy whose BODY a parried shot is actually touching. The shared
+-- get_nearest_brick_within measures to a brick's CENTRE, which is wrong for the
+-- return trip: a multi-cell brick's body sits at its shape centroid -- up to
+-- ~22px inside a 3x3 -- so a returning shot could pass clean through one
+-- without ever coming within the old 13.5px radius, and the parry would land
+-- nothing. Box-tests the real footprint instead, and uses the boss's true outer
+-- radius (r_outer) rather than an r_size it does not have.
+function EnemyProjectile:reflected_target()
+  local arena = main.current
+  if not (arena and arena.main) then return nil end
+  local r = self.r_size
+  for _, o in ipairs(arena.main.objects) do
+    if o.is and o:is(Brick) and not o.dead then
+      if math.abs(self.x - o.x) <= (o.w or 18)/2 + r
+      and math.abs(self.y - o.y) <= (o.h or 10)/2 + r then return o end
+    end
+  end
+  if arena.boss and not arena.boss.dead
+  and math.distance(self.x, self.y, arena.boss.x, arena.boss.y)
+      < r + (arena.boss.r_outer or 14) then
+    return arena.boss
+  end
+  return nil
+end
+
+
 function EnemyProjectile:update(dt)
   self:update_game_object(dt)
   local arena = main.current
@@ -302,7 +354,10 @@ function EnemyProjectile:update(dt)
   local p_prev_y = self.y - p_vy*dt
   local p_ylo    = math.min(p_prev_y, self.y) - self.r_size
   local p_yhi    = math.max(p_prev_y, self.y) + self.r_size
-  if  not self.reflected
+  -- Phased (the wide powerup): the paddle is INTANGIBLE to enemy fire. The
+  -- whole hit test is skipped, so a shot flies straight THROUGH and carries on
+  -- instead of striking a paddle that merely happens to take no damage.
+  if  not self.reflected and not arena.paddle.phased
   and math.abs(self.x - arena.paddle.x) < arena.paddle.w/2 + self.r_size
   and p_yhi >= arena.paddle.y - arena.paddle.h/2
   and p_ylo <= arena.paddle.y + arena.paddle.h/2 then
@@ -310,25 +365,11 @@ function EnemyProjectile:update(dt)
     local braced = sig == 'aegis' and arena.paddle and (arena.paddle.brace_t or 0) > 0
     if braced and not self.unbreakable then
       -- Aegis PERFECT PARRY: only a BRACED shield turns a shot (see
-      -- Paddle:start_brace) — THIS very bullet flips gold and flies back at
-      -- the swarm (see reflect below) instead of being swapped for a
-      -- stand-in arrow, and the parry refunds a slug of combo points. An
-      -- unbraced Aegis paddle eats bullets like any other loadout (below).
-      -- Unbreakable boss bullets punch through (the boss stays honest).
-      -- A Greater dome doubles the return damage; each turned bullet banks
-      -- bulwark toward the next Greater raise.
-      local sigt  = arena.run_mods.sig or {}
-      local gmult = (arena.paddle.greater and (sigt.greater_reflect_mult or 2)) or 1
-      self:reflect((sigt.reflect_dmg or 60)*gmult)
-      spawn_burst(arena.effects, self.x, self.y, self.color, 8, 90, 170)
-      -- Parry cue: a metallic ting off the shield face, with the old magical
-      -- shimmer kept underneath and pulled back so the ting carries.
-      mine1:play{volume = 0.35, pitch = random:float(1.50, 1.70)}
-      buff1:play{volume = 0.22, pitch = random:float(1.25, 1.4)}
-      if arena.add_combo_points then
-        arena:add_combo_points(sigt.parry_combo or 25)
-      end
-      if arena.bulwark_add then arena:bulwark_add(sigt.bulwark_bullet or 1) end
+      -- Paddle:start_brace). An unbraced Aegis paddle eats bullets like any
+      -- other loadout (below); unbreakable boss bullets punch through, so the
+      -- boss stays honest. Shared with the dome's deploy sweep -- see
+      -- EnemyProjectile:parry_by_shield.
+      self:parry_by_shield()
     else
       -- Hit the paddle directly. Routed through damage_player so the
       -- Vampire bar takes the equivalent of self.dmg hearts.
@@ -367,11 +408,7 @@ function EnemyProjectile:update(dt)
   -- otherwise). Falls back to the boss so a parry still lands something
   -- during the fight's breakable-bullet phases.
   if self.reflected and not self.dead then
-    local hit = arena:get_nearest_brick_within(self.x, self.y, self.r_size + 10)
-    if not hit and arena.boss and not arena.boss.dead
-    and math.distance(self.x, self.y, arena.boss.x, arena.boss.y) < self.r_size + (arena.boss.r_size or 14) then
-      hit = arena.boss
-    end
+    local hit = self:reflected_target()
     if hit then
       -- 75% of the brick's MAX HP (see PARRY_MAX_HP_FRAC). The boss is not a
       -- block, so it keeps the flat reflect payload.
@@ -1255,7 +1292,7 @@ function Boss:attack_ring()
   self.t:after(0.6, function()
     if not (arena.main and arena.main.world and not self.dead) then return end
     enemy_shot_sound(0.4, 0.8)
-    explosion1:play{volume = 0.25, pitch = 1.3}
+    enemy_fx_sound(explosion1, 0.25, 1.3)
     Flash{group = arena.effects, x = gw/2, y = gh/2,
           color = Color(self.color.r, self.color.g, self.color.b, 0.25), duration = 0.1}
     for i = 0, 17 do

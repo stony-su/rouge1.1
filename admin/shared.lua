@@ -27,8 +27,14 @@ end
 
 ENEMY_SHAKE_MULT      = 0.5    -- amplitude scale
 ENEMY_SHAKE_DUR_MULT  = 0.75   -- duration scale (a long weak shake is a tremor)
-ENEMY_SHOT_VOL_MULT   = 0.45   -- quieter
-ENEMY_SHOT_PITCH_MULT = 0.78   -- and pitched down, which is what reads as muted
+ENEMY_SFX_VOL_MULT    = 0.45   -- quieter
+ENEMY_SFX_PITCH_MULT  = 0.78   -- and pitched down, which is what reads as muted
+-- Weapon FIRE takes a further cut on top of the shared scale. It is by far the
+-- most repeated enemy sound -- 14 of the ~23 enemy call sites, and a late wave
+-- fires several per second from many bodies at once -- so the shot sample has to
+-- sit lower than one-off casts and deaths or it becomes the bed of the whole mix
+-- rather than an event in it. Casts/deaths keep the shared level above.
+ENEMY_SHOT_VOL_MULT   = 0.45
 
 -- Screen shake from an enemy source: their bullets landing, their casts, their
 -- death effects.
@@ -37,10 +43,19 @@ function enemy_shake(amount, duration, frequency)
                (duration or 0.2)*ENEMY_SHAKE_DUR_MULT, frequency)
 end
 
--- Enemy weapon fire (bricks and the boss alike).
+-- ANY sound an enemy makes: weapon fire, ability casts, deaths. Same treatment
+-- for all of them -- different enemies doing different things all contribute to
+-- the same wall of noise, so they share one pair of knobs.
+function enemy_fx_sound(snd, volume, pitch)
+  if not snd then return end
+  snd:play{volume = (volume or 0.3)*ENEMY_SFX_VOL_MULT,
+           pitch  = (pitch  or 1.0)*ENEMY_SFX_PITCH_MULT}
+end
+
+-- Enemy weapon fire specifically (bricks and the boss alike), which carries the
+-- extra ENEMY_SHOT_VOL_MULT cut on top of the shared enemy scale.
 function enemy_shot_sound(volume, pitch)
-  shoot1:play{volume = (volume or 0.2)*ENEMY_SHOT_VOL_MULT,
-              pitch  = (pitch  or 1.0)*ENEMY_SHOT_PITCH_MULT}
+  enemy_fx_sound(shoot1, (volume or 0.2)*ENEMY_SHOT_VOL_MULT, pitch)
 end
 
 

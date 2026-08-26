@@ -454,7 +454,7 @@ function Brick:cast_force_push()
   local dirs = {}
   for i = 0, 5 do dirs[#dirs + 1] = i*(math.pi/3) end
   spawn_flicks(fx, self.x, self.y, yellow[0], dirs, {dist = 14, len = 5})
-  force1:play{volume = 0.35, pitch = random:float(0.95, 1.05)}
+  enemy_fx_sound(force1, 0.35, random:float(0.95, 1.05))
   enemy_shake(3, 0.18, 80)
   local arena = main.current
   for _, hero in ipairs(arena.heroes) do
@@ -1032,7 +1032,7 @@ function Brick:die()
   else
     spawn_burst(arena.effects, self.x, self.y, self.color, 8, 60, 160)
   end
-  enemy_die1:play{volume = 0.3, pitch = random:float(0.92, 1.08)}
+  enemy_fx_sound(enemy_die1, 0.3, random:float(0.92, 1.08))
 
   -- Death trigger for the exploder variant.
   if self.behavior == 'exploder' then
@@ -1105,7 +1105,7 @@ function Brick:cast_explode_on_death()
   local radius = BAL('enemies.volatile_death_radius', 28)
   local frac   = BAL('enemies.volatile_death_frac', 0.4)
   TelegraphRing{group = arena.effects, x = self.x, y = self.y, radius = radius, color = blue[0], duration = 0.25}
-  explosion1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
+  enemy_fx_sound(explosion1, 0.3, random:float(0.95, 1.1))
   enemy_shake(2, 0.15, 90)
   for _, o in ipairs(arena.main.objects) do
     if o:is(Brick) and not o.dead and o.id ~= self.id then

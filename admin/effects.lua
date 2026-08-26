@@ -824,7 +824,7 @@ function AllyTurret:fire_burst()
       self.flash_t = 0.1
       local mx, my = self.x + math.cos(r)*bl, self.y + math.sin(r)*bl
       Projectile{group = arena.main, x = mx, y = my, r = r, type = 'arrow', source = 'engineer',
-                 dmg = self.dmg, max_hp_frac = self.max_hp_frac,
+                 dmg = self.dmg, max_hp_frac = self.max_hp_frac, spawn_dur = 0.09,
                  speed = self.shot_speed, color = self.color, pierce = 1}
       spawn_burst(arena.effects, mx, my, self.color, 2, 40, 90)
       shoot1:play{volume = 0.12, pitch = random:float(1.0, 1.15)}

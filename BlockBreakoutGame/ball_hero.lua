@@ -1647,7 +1647,10 @@ function BallHero:do_chain_lightning(s)
     StormSpark{group = arena.effects, x = self.x, y = self.y, color = self.color,
                vx = math.cos(a)*random:float(40, 110), vy = math.sin(a)*random:float(40, 110)}
   end
-  thunder1:play{volume = 0.3, pitch = random:float(0.95, 1.1)}
+  -- Thunder blast, kept well back (was 0.3): the stormweaver recasts every
+  -- s.cd (1.3s) and a run can field several of them, so a full-weight thunder
+  -- sample on that cadence dominated the mix rather than punctuating it.
+  thunder1:play{volume = 0.12, pitch = random:float(0.95, 1.1)}
 end
 
 

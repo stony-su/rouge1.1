@@ -20,6 +20,13 @@ function Projectile:init(args)
   -- against late-wave bricks whose HP scales with the wave. Enemies with no
   -- max_hp (EnemyCritter) fall back to the flat dmg. See Projectile:damage_to.
   self.max_hp_frac = self.max_hp_frac or 0
+  -- Muzzle spawn-out. When spawn_dur > 0 the bolt is born SHORT and white-hot
+  -- and stretches to full length over that window under a shrinking muzzle
+  -- flare, so it reads as being fired out of a barrel rather than appearing
+  -- mid-air already at size. Opt-in per shot (the engineer's turret uses it);
+  -- 0 means the projectile draws at full size from frame one, as before.
+  self.spawn_dur = self.spawn_dur or 0
+  self.spawn_t   = 0
   self.speed    = self.speed or 220
   self.pierce   = self.pierce or 0
   self.ricochet = self.ricochet or 0
@@ -106,8 +113,18 @@ function Projectile:init(args)
 end
 
 
+-- Muzzle spawn-out progress, 0 -> 1, eased. Reads 1 the whole time for shots
+-- that didn't ask for the animation (spawn_dur == 0).
+function Projectile:spawn_k()
+  if (self.spawn_dur or 0) <= 0 then return 1 end
+  local p = math.clamp(self.spawn_t/self.spawn_dur, 0, 1)
+  return 1 - (1 - p)*(1 - p)*(1 - p)
+end
+
+
 function Projectile:update(dt)
   self:update_game_object(dt)
+  if self.spawn_t < self.spawn_dur then self.spawn_t = self.spawn_t + dt end
   -- Keep angle aligned with motion.
   local vx, vy = self:get_velocity()
   if vx ~= 0 or vy ~= 0 then self:set_angle(math.atan2(vy, vx)) end
@@ -213,8 +230,24 @@ function Projectile:draw()
   graphics.push(self.x, self.y, r)
     if self.type == 'arrow' then
       local ps = self.proj_scale
-      graphics.rectangle(self.x, self.y, 8*ps, 2*ps, nil, nil, self.color)
-      graphics.triangle(self.x + 4*ps, self.y, 3*ps, 3*ps, self.color)
+      local k  = self:spawn_k()
+      if k < 1 then
+        -- Being fired: the bolt is still stretching to length and runs white-hot
+        -- for the instant it leaves the barrel, under a muzzle flare that
+        -- shrinks away as the bolt reaches full size.
+        local c  = self.color
+        local wh = 1 - k
+        local col = Color(c.r + (1 - c.r)*wh*0.85,
+                          c.g + (1 - c.g)*wh*0.85,
+                          c.b + (1 - c.b)*wh*0.85, 1)
+        local L  = (0.35 + 0.65*k)*ps
+        graphics.circle(self.x, self.y, (2 + 5*wh)*ps, Color(1, 0.92, 0.6, 0.5*wh))
+        graphics.rectangle(self.x, self.y, 8*L, 2*ps, nil, nil, col)
+        graphics.triangle(self.x + 4*L, self.y, 3*ps, 3*ps, col)
+      else
+        graphics.rectangle(self.x, self.y, 8*ps, 2*ps, nil, nil, self.color)
+        graphics.triangle(self.x + 4*ps, self.y, 3*ps, 3*ps, self.color)
+      end
     else
       graphics.rectangle(self.x, self.y, 6, 2, nil, nil, self.color)
     end

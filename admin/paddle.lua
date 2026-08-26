@@ -386,15 +386,25 @@ function Paddle:brace_shove(reach)
     if o.is and o:is(EnemyProjectile) and not o.dead and not o.reflected then
       local dx = o.x - self.x
       if math.abs(dx) <= half and o.y <= ry + self.h and o.y >= ry - reach then
-        local a      = -math.pi/2 + (dx/half)*BRACE_SHOVE_FAN
-        local vx, vy = o:get_velocity()
-        local sp     = math.max(math.sqrt(vx*vx + vy*vy), BRACE_SHOVE_SPEED)
-        o:set_velocity(math.cos(a)*sp, math.sin(a)*sp)
-        -- One burst per shot, not per frame -- the shove re-runs every frame of
-        -- the deploy, and a per-frame burst would bury the arena in sparks.
-        if not o.shoved then
-          o.shoved = true
-          spawn_burst(arena.effects, o.x, o.y, Color(0.55, 0.80, 1, 1), 3, 60, 120)
+        -- A braced dome TURNS what it sweeps up: the shot becomes a parried
+        -- gold bullet hunting the swarm, worth combo + bulwark, rather than
+        -- debris pushed aside. The sweep used to only shove, which silently ATE
+        -- parries -- it threw shots clear of the paddle bar, where the parry
+        -- test lives, so bracing into incoming fire deflected it without ever
+        -- reflecting it. Only shots a shield cannot turn (unbreakable boss
+        -- fire) fall through to the plain shove below.
+        local turned = o.parry_by_shield and o:parry_by_shield()
+        if not turned then
+          local a      = -math.pi/2 + (dx/half)*BRACE_SHOVE_FAN
+          local vx, vy = o:get_velocity()
+          local sp     = math.max(math.sqrt(vx*vx + vy*vy), BRACE_SHOVE_SPEED)
+          o:set_velocity(math.cos(a)*sp, math.sin(a)*sp)
+          -- One burst per shot, not per frame -- the shove re-runs every frame
+          -- of the deploy, and a per-frame burst would bury it in sparks.
+          if not o.shoved then
+            o.shoved = true
+            spawn_burst(arena.effects, o.x, o.y, Color(0.55, 0.80, 1, 1), 3, 60, 120)
+          end
         end
       end
     end
