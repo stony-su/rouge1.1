@@ -27,7 +27,7 @@ end
 
 ENEMY_SHAKE_MULT      = 0.5    -- amplitude scale
 ENEMY_SHAKE_DUR_MULT  = 0.75   -- duration scale (a long weak shake is a tremor)
-ENEMY_SFX_VOL_MULT    = 0.45   -- quieter
+ENEMY_SFX_VOL_MULT    = 0.0   -- no sound too spammy and loud
 ENEMY_SFX_PITCH_MULT  = 0.78   -- and pitched down, which is what reads as muted
 -- Weapon FIRE takes a further cut on top of the shared scale. It is by far the
 -- most repeated enemy sound -- 14 of the ~23 enemy call sites, and a late wave
