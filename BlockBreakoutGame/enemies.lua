@@ -1139,7 +1139,10 @@ function Boss:init(args)
   -- HP scales with wave the same way bricks do (see Brick:init line 81) so
   -- the fight stays meaningful if the player triggers it on a later loop.
   local wave = (main.current and main.current.wave) or 10
-  self.max_hp     = 2400 * (1 + 0.2*wave)
+  -- Base pool cut 25% (3200 -> 2400 -> 1800): the fight was running long once
+  -- the bumpers started feeding balls back at it, and a boss that outlasts the
+  -- player's attention is a worse boss than one that dies a little early.
+  self.max_hp     = 1800 * (1 + 0.2*wave)
   self.hp         = self.max_hp
   self.player_dmg = 3
   self.xp_value   = 60
@@ -1686,6 +1689,10 @@ function Boss:on_ball_contact(ball)
   -- Hero ball collided with the boss. Match the Brick contact flow but skip
   -- the formation knockback path (boss is solo).
   if self.hp <= 0 then return end
+  -- A bumper's lock-on is spent the moment it lands (see BallHero:steer_boss_lock).
+  -- Cleared before the damage guard below so a ball that connects always drops
+  -- it, even on the frame the boss dies.
+  ball.boss_lock = false
   local dmg = ball.dmg*(ball.charge_dmg_mult or 1)
   self:take_damage(dmg, ball.color)
 end

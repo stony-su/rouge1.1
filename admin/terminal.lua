@@ -185,6 +185,7 @@ function Terminal:register_commands()
     t:log("  phase [2|3]             drop boss hp to next phase")
     t:log("  trace                   toggle boss path trace + readout")
     t:log("  dmg [reset]             toggle damage-source overlay (F2)")
+    t:log("  button [on|off]         show/hide the ADMIN button")
     t:log("  die                     kill the player (game-over screen)")
     t:log("  powerups                list powerup kinds")
     t:log("  powerup <kind>          apply a powerup effect directly")
@@ -358,6 +359,28 @@ function Terminal:register_commands()
   -- walked as a fading line plus an on-screen readout of the current path mode
   -- (mode name, cycle %, base frequency / period, phase, direction, petals).
   -- Run again to clear it.
+  -- Hide the on-screen ADMIN button -- for a clean screen capture, or a build
+  -- handed to a playtester who should not see it. Explicitly reachable both
+  -- ways (`button on` / `button off`) as well as by bare toggle, so a script or
+  -- a muscle-memory operator can set it without checking the current state.
+  --
+  -- The terminal itself stays reachable on ` / F1 while it is hidden, and that
+  -- is deliberate: a command that could lock you out of the console you typed
+  -- it into would be a trap.
+  C.button = function(t, args)
+    local arena = t.arena
+    local a = (args[1] or ''):lower()
+    if     a == 'on'  or a == 'show' then arena.hide_admin_button = false
+    elseif a == 'off' or a == 'hide' then arena.hide_admin_button = true
+    elseif a ~= ''                   then t:log("usage: button [on|off]"); return
+    else                                  arena.hide_admin_button = not arena.hide_admin_button end
+    if arena.hide_admin_button then
+      t:log("admin button HIDDEN -- reopen this terminal with ` or F1")
+    else
+      t:log("admin button SHOWN")
+    end
+  end
+
   C.trace = function(t, args)
     local arena = t.arena
     if arena.boss_trace then

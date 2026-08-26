@@ -1842,6 +1842,214 @@ function PaddleDeath:draw()
 end
 
 
+-- PinballBumper: a live bumper that surfaces during the boss fight and kicks
+-- any ball that runs into it back out, hard. The wave-10 arena is otherwise
+-- empty between the paddle and the boss -- nothing to carom off -- so a ball
+-- that misses the core just falls all the way home. These give the lower half
+-- of the table something to work with, which is what turns the fight from
+-- "aim and wait" into a rally.
+--
+-- Lives in arena.floor, drawn UNDER the balls, so a ball visibly runs over the
+-- top of it rather than disappearing behind a disc.
+--
+-- Its animations are all driven by hand from clocks rather than by tweens: the
+-- birth, the hit flash and the retire all write self.scale, and three tweens
+-- racing for one field is how you get a bumper that pops back to full size
+-- halfway through vanishing.
+local BUMPER_BIRTH      = 0.34   -- surfacing, with an overshoot
+local BUMPER_RETIRE     = 0.34   -- sinking back out
+local BUMPER_SPEED_MULT = 1.5    -- lasting speed the kick grants a ball
+local BUMPER_COMBO      = 12     -- combo points per kick
+local BUMPER_RECOOL     = 0.12   -- per-ball re-hit lockout
+
+PinballBumper = Object:extend()
+PinballBumper:implement(GameObject)
+
+function PinballBumper:init(args)
+  self:init_game_object(args)
+  self.rs       = self.rs or 13
+  self.color    = self.color or yellow[0]
+  self.lifetime = self.lifetime or 11
+  self.spin     = random:float(0, 2*math.pi)
+  self.birth_t  = 0
+  self.retire_t = 0
+  self.retiring = false
+  self.scale    = 0
+  self.hit_t    = 0
+  self.hits     = 0
+  self.cool     = {}      -- ball id -> seconds until it may be kicked again
+  self.age      = 0
+
+  local arena = main.current
+  if arena then
+    TelegraphRing{group = arena.effects, x = self.x, y = self.y,
+                  radius = self.rs*2.6, color = self.color, duration = 0.34}
+    spawn_burst(arena.effects, self.x, self.y, self.color, 8, 40, 110)
+  end
+  spawn1:play{volume = 0.30, pitch = random:float(1.15, 1.30)}
+end
+
+
+-- Sink out and die. Idempotent -- the lifetime and the arena tearing the fight
+-- down can both reach it.
+function PinballBumper:retire()
+  if self.retiring or self.dead then return end
+  self.retiring     = true
+  self.retire_t     = 0
+  self.retire_scale = self.scale
+  local arena = main.current
+  if arena then spawn_burst(arena.effects, self.x, self.y, self.color, 6, 40, 120) end
+  bounce1:play{volume = 0.20, pitch = 1.25}
+end
+
+
+function PinballBumper:update(dt)
+  self:update_game_object(dt)
+  self.age  = self.age + dt
+  -- Idle spin, whipped fast for a beat on every hit.
+  self.spin = self.spin + dt*(0.7 + self.hit_t*9)
+  if self.hit_t > 0 then self.hit_t = math.max(0, self.hit_t - dt*3.4) end
+  for id, t in pairs(self.cool) do
+    local left = t - dt
+    self.cool[id] = (left > 0) and left or nil
+  end
+
+  if self.retiring then
+    self.retire_t = self.retire_t + dt
+    local k = math.clamp(self.retire_t/BUMPER_RETIRE, 0, 1)
+    self.scale = (self.retire_scale or 1)*(1 - k*k)
+    if k >= 1 then self.dead = true end
+    return
+  end
+
+  -- Birth: ease-out-back, so it overshoots past full size and settles. A bumper
+  -- that arrives dead on size reads as a decal that was always there.
+  if self.birth_t < BUMPER_BIRTH then
+    self.birth_t = math.min(BUMPER_BIRTH, self.birth_t + dt)
+    local p = self.birth_t/BUMPER_BIRTH - 1
+    self.scale = 1 + 2.70158*p*p*p + 1.70158*p*p
+  else
+    self.scale = 1
+  end
+
+  if self.age >= self.lifetime then self:retire() return end
+  self:kick_balls()
+end
+
+
+function PinballBumper:kick_balls()
+  local arena = main.current
+  if not (arena and arena.heroes) then return end
+  local reach0 = self.rs*self.scale
+  for _, b in ipairs(arena.heroes) do
+    if b and not b.dead and not b.stuck and not b.returning
+    and b.get_velocity and not self.cool[b.id] then
+      local dx, dy = b.x - self.x, b.y - self.y
+      local d      = math.sqrt(dx*dx + dy*dy)
+      local reach  = reach0 + (b.r_size or 6)
+      if d > 0.01 and d < reach then
+        local nx, ny = dx/d, dy/d
+        local vx, vy = b:get_velocity()
+        local dot    = vx*nx + vy*ny
+        -- Only if it is genuinely coming IN. A ball already on its way out
+        -- would be flipped back into the face and chatter against it.
+        if dot < 0 then
+          vx, vy = vx - 2*dot*nx, vy - 2*dot*ny
+          self:on_hit(b, vx, vy, nx, ny, reach)
+        end
+      end
+    end
+  end
+end
+
+
+function PinballBumper:on_hit(b, vx, vy, nx, ny, reach)
+  local arena = main.current
+  if math.sqrt(vx*vx + vy*vy) > 1 then b:set_velocity(vx, vy) end
+  -- The LASTING part of the kick. BallHero:normalize_speed re-derives velocity
+  -- from base_speed * speed_mult every frame, so a raw velocity boost would be
+  -- gone by the next tick; speed_mult is the channel that survives. Capped by
+  -- the ball's own ceiling, exactly as the Aegis parry does it.
+  b.speed_mult = math.min(b.speed_mult_max or 4,
+                          math.max(b.speed_mult or 1, BUMPER_SPEED_MULT))
+  -- Lock the ball on to the boss for this trip (BallHero:steer_boss_lock). This
+  -- is what makes a bumper an AIMING device: the kick supplies the angle and the
+  -- speed, the lock keeps it honest on the way up.
+  b.boss_lock   = true
+  b.boss_lock_t = 0
+  -- Lift it clear of the face so the same approach cannot re-trigger.
+  if b.set_position then
+    b:set_position(self.x + nx*(reach + 1), self.y + ny*(reach + 1))
+  end
+  self.cool[b.id] = BUMPER_RECOOL
+
+  self.hit_t = 1
+  self.hits  = self.hits + 1
+  self.spring:pull(0.5)
+  if arena then
+    spawn_burst(arena.effects, b.x, b.y, self.color, 6, 90, 190)
+    spawn_burst(arena.effects, b.x, b.y, fg[5], 3, 70, 150)
+    TelegraphRing{group = arena.effects, x = self.x, y = self.y,
+                  radius = self.rs*2.2, color = fg[5], duration = 0.20}
+    if arena.add_combo_points then arena:add_combo_points(BUMPER_COMBO) end
+  end
+  pop1:play{volume = 0.34, pitch = random:float(1.25, 1.55)}
+  camera:shake(1.5, 0.10, 110)
+end
+
+
+function PinballBumper:draw()
+  local s = self.scale*(self.spring and self.spring.x or 1)
+  if s <= 0.02 then return end
+  local r  = self.rs*s
+  local c  = self.color
+  local h  = self.hit_t or 0
+  -- Warms up as it takes hits, so a bumper the player has been working reads as
+  -- hot rather than staying a fixed prop.
+  local warm = math.clamp(self.hits*0.06, 0, 0.35)
+  local a    = math.clamp(0.55 + warm + h*0.45, 0, 1)
+
+  -- Soft seat, so it sits ON the floor rather than being pasted over it.
+  graphics.circle(self.x, self.y, r*1.5, Color(c.r, c.g, c.b, 0.07 + h*0.10))
+  graphics.circle(self.x, self.y, r*1.2, Color(c.r, c.g, c.b, 0.10 + h*0.14))
+
+  -- Skirt and rim.
+  graphics.circle(self.x, self.y, r, Color(c.r*0.30, c.g*0.28, c.b*0.16, 0.92))
+  graphics.circle(self.x, self.y, r, Color(c.r, c.g, c.b, a), 2)
+
+  -- Eight studs around the rim, turning. The two rings counter-rotate, which is
+  -- what makes it read as a machine rather than a spinning sticker.
+  for i = 0, 7 do
+    local ang = self.spin + i*(math.pi/4)
+    graphics.circle(self.x + math.cos(ang)*r*0.78, self.y + math.sin(ang)*r*0.78,
+                    1.1 + h*0.7, Color(c.r, c.g, c.b, 0.75 + h*0.25))
+  end
+  for i = 0, 3 do
+    local ang = -self.spin*1.4 + i*(math.pi/2)
+    graphics.arc('open', self.x, self.y, r*0.60, ang - 0.34, ang + 0.34,
+                 Color(c.r, c.g, c.b, 0.45 + h*0.4), 2)
+  end
+
+  -- Cap, and the hot centre that flares on a hit.
+  graphics.circle(self.x, self.y, r*0.40, Color(c.r, c.g, c.b, 0.85))
+  graphics.circle(self.x, self.y, r*0.40*(1 + h*0.35), Color(1, 1, 1, 0.35 + h*0.6))
+  graphics.circle(self.x, self.y, r*0.16, fg[5])
+
+  -- Hit shock: a ring thrown off the rim, gone within a beat.
+  if h > 0.02 then
+    graphics.circle(self.x, self.y, r*(1 + (1 - h)*1.5), Color(1, 1, 1, 0.55*h), 1.5)
+  end
+
+  -- Expiry warning: the rim strobes over the last stretch of its life, so a
+  -- bumper never simply disappears from under a ball that was aiming at it.
+  local left = self.lifetime - self.age
+  if not self.retiring and left < 2.0 then
+    local blink = 0.5 + 0.5*math.sin(self.age*18)
+    graphics.circle(self.x, self.y, r*1.12, Color(1, 1, 1, 0.30*blink*(1 - left/2)), 1)
+  end
+end
+
+
 -- BlankWave: the Enter the Gungeon style BLANK the paddle lets off when an
 -- enemy shot lands on it. A repulsion front expands from the paddle across the
 -- WHOLE arena, shoving every enemy shot it passes outward and burning it out;

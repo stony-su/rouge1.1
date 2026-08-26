@@ -262,6 +262,11 @@ function BallPit:init(name)
   -- Admin damage-source overlay (F2 or the terminal 'dmg' command). Lives on
   -- the State, not the run, so the toggle survives restarts.
   self.show_dmg_tally = false
+  -- ADMIN button visibility (terminal: `button`). On the State for the same
+  -- reason, so the choice sticks across restarts. Hiding it can never lock the
+  -- operator out: the ` / F1 bind still opens the terminal either way, which is
+  -- what makes it safe to turn off for a clean capture or a playtest build.
+  self.hide_admin_button = false
 
   -- ----- Title screen (pinball backglass) -----
   --
@@ -892,6 +897,90 @@ function BallPit:start_wave()
 end
 
 
+-- ----- Boss-fight bumpers ---------------------------------------------------
+--
+-- The wave-10 arena is empty between the paddle and the boss, so a ball that
+-- misses the core just falls all the way home. Bumpers surface periodically in
+-- the band BELOW the boss's reach and kick balls back up at it (see
+-- PinballBumper in effects.lua), which is what turns the fight into a rally.
+--
+-- BUMPER_CLEAR is the gap kept clear of the boss's own band and of the defense
+-- line, so a bumper can never spawn somewhere the boss will fly through or
+-- inside the paddle's dodge band.
+local BUMPER_R          = 13
+local BUMPER_INTERVAL   = {2.0, 3.2}   -- was {3.6, 5.4}
+local BUMPER_MAX        = 4      -- alive at once
+local BUMPER_LIFETIME   = 11
+local BUMPER_CLEAR      = 18
+local BUMPER_MIN_GAP    = 58     -- between two bumpers
+local BUMPER_TRIES      = 14     -- placement attempts before giving up this tick
+
+-- The vertical band a bumper may occupy. Boss:update clamps the boss to the TOP
+-- HALF of the arena, so everything below that half -- plus the boss's own radius
+-- and a margin -- is space it can never enter. The bottom stops short of the
+-- defense line so a bumper never sits inside the paddle's dodge band.
+function BallPit:bumper_band()
+  local arena_h = self.y2 - self.y1
+  local reach   = (self.boss and self.boss.r_outer) or 28
+  return self.y1 + arena_h*0.5 + reach + BUMPER_CLEAR,
+         self:breach_line_y() - BUMPER_CLEAR
+end
+
+
+function BallPit:live_bumpers()
+  local n = 0
+  for _, o in ipairs(self.floor.objects) do
+    if o.is and o:is(PinballBumper) and not o.dead and not o.retiring then n = n + 1 end
+  end
+  return n
+end
+
+
+-- Place one bumper by rejection sampling: somewhere in the band, clear of the
+-- other bumpers, and clear of the boss where it is RIGHT NOW as well -- the band
+-- already excludes its path, but this costs nothing and covers the case of the
+-- boss sitting at the very bottom of its travel as a bumper appears.
+function BallPit:spawn_bumper()
+  if not (self.boss and not self.boss.dead) then return end
+  if self:live_bumpers() >= BUMPER_MAX then return end
+
+  local top, bottom = self:bumper_band()
+  if bottom - top < BUMPER_R*2 then return end
+
+  for _ = 1, BUMPER_TRIES do
+    local x = random:float(self.x1 + BUMPER_R + 8, self.x2 - BUMPER_R - 8)
+    local y = random:float(top + BUMPER_R, bottom - BUMPER_R)
+    local ok = true
+    for _, o in ipairs(self.floor.objects) do
+      if o.is and o:is(PinballBumper) and not o.dead
+      and math.distance(x, y, o.x, o.y) < BUMPER_MIN_GAP then
+        ok = false
+        break
+      end
+    end
+    if ok and math.distance(x, y, self.boss.x, self.boss.y)
+             < (self.boss.r_outer or 28) + BUMPER_R + BUMPER_CLEAR then
+      ok = false
+    end
+    if ok then
+      PinballBumper{group = self.floor, x = x, y = y, rs = BUMPER_R,
+                    color = yellow[0], lifetime = BUMPER_LIFETIME}
+      return
+    end
+  end
+end
+
+
+-- Sink every live bumper. Called when the fight ends, so none is left standing
+-- on an empty table after the boss is gone.
+function BallPit:retire_bumpers()
+  self.t:cancel('spawn_bumper')
+  for _, o in ipairs(self.floor.objects) do
+    if o.is and o:is(PinballBumper) and o.retire then o:retire() end
+  end
+end
+
+
 function BallPit:spawn_boss()
   local arena = self
   arena.t:after(0, function()
@@ -903,12 +992,21 @@ function BallPit:spawn_boss()
       }
       Flash{group = arena.effects, x = gw/2, y = gh/2,
             color = red_transparent_weak, duration = 0.4}
+      -- Bumpers, from a beat after the boss lands so its arrival is uncluttered.
+      arena.t:after(2.2, function()
+        arena.t:every(BUMPER_INTERVAL, function()
+          if arena.paused or arena.game_over or arena.upgrade_pending then return end
+          arena:spawn_bumper()
+        end, 0, nil, 'spawn_bumper')
+      end)
     end
   end)
 end
 
 
 function BallPit:advance_wave()
+  -- The fight is over (or the wave rolled on): take the table down.
+  if self.retire_bumpers then self:retire_bumpers() end
   -- Guaranteed end-of-wave Tier-2 powerup drop. Spawned just inside the top
   -- of the arena so it's visible / catchable as the next wave starts. Fires
   -- on every wave clear, so slow runs still see at least one Tier-2 per wave.
@@ -2306,6 +2404,11 @@ end
 
 
 function BallPit:admin_button_hit()
+  -- Hidden means GONE, not merely invisible. An unseen button still eating
+  -- clicks in the top corner would be worse than the button itself -- and this
+  -- is also what stops the update path opening the terminal on a stray click
+  -- there, since it gates on this same test.
+  if self.hide_admin_button then return false end
   local cx, cy, w, h = self:admin_button_rect()
   return mouse.x >= cx - w/2 and mouse.x <= cx + w/2
      and mouse.y >= cy - h/2 and mouse.y <= cy + h/2
@@ -2313,6 +2416,7 @@ end
 
 
 function BallPit:draw_admin_button()
+  if self.hide_admin_button then return end
   local cx, cy, w, h = self:admin_button_rect()
   local hovered  = self:admin_button_hit()
   local active   = self.terminal and self.terminal.open

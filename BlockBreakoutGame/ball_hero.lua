@@ -1146,9 +1146,12 @@ function BallHero:launch_from_paddle()
   self:set_position(px, py)
   self.speed_mult = 1.0
   self.bounces    = 0
-  -- A recalled ball also drops any unspent Aegis parry charges.
+  -- A recalled ball also drops any unspent Aegis parry charges...
   self.parry_hits_left = 0
   self.parry_dmg_mult  = nil
+  -- ...and any bumper lock-on, which is about this trip up the table and has
+  -- no meaning once the ball is back on the paddle.
+  self.boss_lock = false
   -- Inherit pierce from the active buff for this fresh launch.
   self:set_piercing(arena.pierce_active == true)
   local angle = -math.pi/2 + random:float(-0.25, 0.25)
@@ -2427,6 +2430,11 @@ function BallHero:update(dt)
     self:normalize_speed()
   end
 
+  -- Bumper lock-on. Steers DIRECTION only, so normalize_speed above (which
+  -- rescales to the target speed without touching heading) neither fights it
+  -- nor undoes it.
+  self:steer_boss_lock(dt)
+
   -- Jester weave: bend the heading side to side so the ball weaves a restless,
   -- chaotic path -- its signature movement. Only the DIRECTION oscillates, and
   -- sin integrates to ~0 over a period, so there's no net spin and normalize_speed
@@ -3180,6 +3188,24 @@ function BallHero:draw()
     for i = 0, 5 do
       local a = a0 + i*(math.pi/3)
       graphics.arc('open', self.x, self.y, rr, a, a + 0.36, Color(c.r, c.g, c.b, 0.55), 1.2)
+    end
+  end
+
+  -- Bumper lock-on: a ball kicked at the boss wears a tight tracking ring with
+  -- a lead marker pointing the way it is steering, so the player can see which
+  -- balls are hunting and where each is being pulled.
+  if self.boss_lock then
+    local arena = main.current
+    local boss  = arena and arena.boss
+    local lt    = love.timer.getTime()
+    local pulse = 0.5 + 0.5*math.sin(lt*14)
+    graphics.circle(self.x, self.y, self.r_size + 2.4 + pulse*0.8,
+                    Color(1, 0.55, 0.30, 0.30 + 0.25*pulse), 1)
+    if boss and not boss.dead then
+      local a = math.atan2(boss.y - self.y, boss.x - self.x)
+      local d = self.r_size + 5
+      graphics.circle(self.x + math.cos(a)*d, self.y + math.sin(a)*d, 1.3,
+                      Color(1, 0.62, 0.32, 0.55 + 0.35*pulse))
     end
   end
 
@@ -4317,6 +4343,46 @@ end
 function BallHero:get_speed()
   local vx, vy = self:get_velocity()
   return math.sqrt(vx*vx + vy*vy)
+end
+
+
+-- ----- Bumper lock-on -------------------------------------------------------
+--
+-- A ball kicked by a boss-fight bumper (PinballBumper) locks on to the boss and
+-- steers toward it until it lands a hit -- which is what makes a bumper a way of
+-- AIMING at the core rather than just a random scatter.
+--
+-- The lock is spent on contact (Boss:on_ball_contact) and dropped on recall, and
+-- carries its own timeout so a ball that never connects -- boss dead, ball stuck
+-- in a corner -- eventually flies straight again instead of orbiting forever.
+--
+-- Turn rate is deliberately finite: at an unlimited rate the ball would snap on
+-- to the boss and travel in a dead straight line, which reads as a guided
+-- missile rather than as a pinball that was aimed well.
+local BOSS_LOCK_TURN = 4.2    -- rad/s
+local BOSS_LOCK_TIME = 3.0    -- seconds before it gives up
+
+
+function BallHero:steer_boss_lock(dt)
+  if not self.boss_lock then return end
+  if self.stuck or self.returning then self.boss_lock = false return end
+  local arena = main.current
+  local boss  = arena and arena.boss
+  if not (boss and not boss.dead) then self.boss_lock = false return end
+
+  self.boss_lock_t = (self.boss_lock_t or 0) + dt
+  if self.boss_lock_t >= BOSS_LOCK_TIME then self.boss_lock = false return end
+
+  local vx, vy = self:get_velocity()
+  local sp = math.sqrt(vx*vx + vy*vy)
+  if sp < 1 then return end
+  local cur  = math.atan2(vy, vx)
+  local want = math.atan2(boss.y - self.y, boss.x - self.x)
+  -- Wrap to [-pi, pi] so it always turns the short way round the circle.
+  local diff = math.loop(want - cur, 2*math.pi)
+  if diff > math.pi then diff = diff - 2*math.pi end
+  local a = cur + math.clamp(diff, -BOSS_LOCK_TURN*dt, BOSS_LOCK_TURN*dt)
+  self:set_velocity(math.cos(a)*sp, math.sin(a)*sp)
 end
 
 
