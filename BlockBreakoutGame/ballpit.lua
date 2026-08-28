@@ -627,6 +627,9 @@ function BallPit:reset_run()
   -- space the blank just cleared.
   self.fire_lock_t   = 0
   self.wave_time     = 0
+  -- Wave-track presentation state (see tick_wave_bar); rebuilt on first tick so
+  -- a restart never inherits the last run's fill.
+  self.wave_bar      = nil
   self.boss          = nil
   self.boss_defeated = false
   -- Set while wave 9 has elapsed but the arena still has live blocks; holds the
@@ -1400,6 +1403,7 @@ function BallPit:update(dt)
   self:tick_powerup_pity(dt)
   self:tick_levelup_pity(dt)
   self:tick_combo(dt)
+  self:tick_wave_bar(dt)
   self:tesla_tick(dt)    -- Tesla: persistent conduction web pulses (no-op otherwise)
   self:glacier_tick(dt)  -- Glacier: lay slick ice patches on the rink (no-op otherwise)
   self:twincast_tick(dt) -- Twin Cast: orbit/charge/fuse the bonded pairs (no-op otherwise)
@@ -2599,6 +2603,214 @@ function BallPit:draw_blood_bar()
 end
 
 
+-- ----- Wave progress bar ----------------------------------------------------
+--
+-- The strip between the HP readout and the combo meter. It began life as an XP
+-- bar and still fills with XP on the orb loadouts -- but for every other paddle
+-- the next draft is bought by CLEARING THE WAVE (see advance_wave), so what it
+-- actually reports is "how far through this wave am I". It is drawn as that:
+--
+--   WAVE 3  [####|####|##  |    |    |    |    ]  >>
+--
+-- Three things do the talking, and none of them are things an XP tube does:
+--   * a LABEL naming what is being counted (and changing when that changes --
+--     BOSS on wave 10, CLEAR while wave 9 drains, LV on the orb loadouts, which
+--     really are still filling with XP and should not pretend otherwise),
+--   * NOTCHES cutting the track into chunks, so it answers "how much of this
+--     wave is behind me" instead of "how full is a bar", and each chunk lands
+--     as a visible tick when the fill crosses it,
+--   * an END MARKER for what finishing it gets you -- chevrons for the next
+--     wave, a boss diamond when the boss is what is waiting (wave 9's drain and
+--     the boss fight itself).
+local WAVE_BAR_H     = 7    -- track height, matching the Vampire vial's
+local WAVE_BAR_SEGS  = 10   -- notches on a timed wave
+local WAVE_BOSS_SEGS = 3    -- ...one per boss phase on the boss wave
+local WAVE_LABEL_GAP = 7    -- px between the label and the track
+local WAVE_END_W     = 15   -- reserved at the right for the end-of-wave marker
+
+
+-- What the bar is measuring, as a fraction, plus the mode driving it and how
+-- many notches the track should be cut into. Modes:
+--   'xp'   orb loadouts (Terrorist): the level is still bought with orbs, so
+--          the bar stays an XP bar and its label says so.
+--   'boss' wave 10: the wave ends on the boss's DEATH, not on a clock (its
+--          duration is a placeholder 999), so the honest measure of progress is
+--          the boss's missing HP -- cut into its three phases.
+--   'time' every other wave: the wave clock, which is what pays the draft.
+-- Pure read of state, so the tick and the draw can both call it freely.
+function BallPit:wave_progress()
+  if self:uses_xp_orbs() then
+    return math.clamp(self.xp/self.xp_to_next, 0, 1), 'xp', WAVE_BAR_SEGS
+  end
+  if self.wave_cfg and self.wave_cfg.boss then
+    local b = self.boss
+    if b and not b.dead and (b.max_hp or 0) > 0 then
+      return math.clamp(1 - b.hp/b.max_hp, 0, 1), 'boss', WAVE_BOSS_SEGS
+    end
+    return (self.boss_defeated and 1 or 0), 'boss', WAVE_BOSS_SEGS
+  end
+  -- Wave 9 holds past its timer while the arena drains before the boss; the
+  -- clamp parks the bar full there, which is exactly what is happening.
+  return math.clamp(self.wave_time/((self.wave_cfg and self.wave_cfg.duration) or 1), 0, 1),
+         'time', WAVE_BAR_SEGS
+end
+
+
+-- Per-frame animation state for the wave track. Kept out of the draw (same
+-- contract as tick_combo) so the bar animates identically however often draw
+-- runs, and so the notch ticks fire exactly once each.
+function BallPit:tick_wave_bar(dt)
+  local w = self.wave_bar
+  if not w then
+    w = {disp = 0, vel = 0, flash = 0, pop = 0, seg = 0, seg_pop = 0, wave = self.wave}
+    self.wave_bar = w
+  end
+  local pct, _, segs = self:wave_progress()
+
+  -- A new wave (or, on the orb loadouts, a fresh level) empties the track. Snap
+  -- rather than let the chase run backwards: the track restarting from nothing
+  -- is the clearest "that one is behind you" this HUD has.
+  if self.wave ~= w.wave or pct < w.disp - 0.25 then
+    w.wave, w.disp, w.seg = self.wave, 0, 0
+    w.flash, w.pop = 1, 1
+  end
+
+  local prev = w.disp
+  w.disp = w.disp + (pct - w.disp)*math.min(1, 9*dt)
+  -- Fill velocity, normalised and decayed: drives the leading-edge glow, so a
+  -- burst of boss damage lights the front up while the slow wave clock does not.
+  local rate = (w.disp - prev)/math.max(dt, 0.0001)
+  w.vel = math.clamp(math.max(w.vel - dt*2.2, math.min(1, rate*4)), 0, 1)
+
+  -- Notch crossings pop, so every completed chunk of the wave lands as an event
+  -- instead of sliding by.
+  local seg = math.floor(w.disp*segs)
+  if seg > w.seg then w.seg, w.seg_pop = seg, 1 end
+
+  w.flash   = math.max(0, w.flash   - dt*2.2)
+  w.pop     = math.max(0, w.pop     - dt*2.5)
+  w.seg_pop = math.max(0, w.seg_pop - dt*3.0)
+end
+
+
+-- Paints the wave track. `x0` is where the strip may start (past whatever width
+-- the HP readout took) and `x1` where it must stop (the combo meter's reserve).
+-- Reads ONLY state pre-computed by tick_wave_bar, so it stays a pure painter.
+function BallPit:draw_wave_bar(x0, x1)
+  local w = self.wave_bar
+  if not w then return end
+  local _, mode, segs = self:wave_progress()
+  local t  = love.timer.getTime()
+  local cy = self.y1 - 8
+  local h  = WAVE_BAR_H
+
+  -- ---- label ----
+  -- Names what the track is counting, and changes with the state so it is never
+  -- just a second copy of the "Wave N" readout on the bottom row.
+  local label, lcol = 'WAVE ' .. self.wave, fg_alt[0]
+  if mode == 'xp' then
+    label, lcol = 'LV ' .. self.level, blue[0]
+  elseif mode == 'boss' then
+    label, lcol = 'BOSS', red[0]
+  elseif self.awaiting_boss then
+    label, lcol = 'CLEAR', yellow[0]
+  end
+  local lw = pixul_font:get_text_width(label)
+  local ls = 1 + 0.22*w.pop
+  -- print_centered scales about the centre, so the centre comes off the LIVE
+  -- scale: a wave-change pop then grows rightward from a pinned left edge
+  -- instead of swelling back over the hearts.
+  graphics.print_centered(label, pixul_font, x0 + lw*ls/2, cy, 0, ls, ls, 0, 0, lcol)
+
+  -- ---- track ----
+  -- Width is measured off the UNSCALED label so a popping label cannot shove
+  -- the track sideways.
+  local tx0 = x0 + lw + WAVE_LABEL_GAP
+  local tw  = (x1 - WAVE_END_W) - tx0
+  if tw < 24 then return end
+  local cx  = tx0 + tw/2
+  graphics.rectangle(cx, cy, tw + 4, h + 4, (h + 4)/2, (h + 4)/2, Color(0, 0, 0, 0.45))  -- casing
+  graphics.rectangle(cx, cy, tw, h, h/2, h/2, bg[-2])                                    -- empty track
+
+  -- ---- fill ----
+  local base
+  if mode == 'xp' then
+    base = blue[0]
+  elseif mode == 'boss' then
+    -- The live boss tint, so the track shifts red -> orange -> purple with the
+    -- phase it is counting down.
+    base = (self.boss and self.boss.color) or red[0]
+  else
+    base = yellow2[0]
+  end
+  local fw = tw*w.disp
+  if fw > 0.5 then
+    fw = math.max(h*0.6, fw)                                       -- keep the cap round
+    graphics.rectangle(tx0 + fw/2, cy, fw, h, h/2, h/2, base)
+    graphics.rectangle(tx0 + fw/2, cy - h*0.22, fw, h*0.34, 1, 1,  -- glassy upper band
+                       Color(math.min(1, base.r + 0.3), math.min(1, base.g + 0.3),
+                             math.min(1, base.b + 0.3), 0.5))
+
+    -- Marching chevrons: the wave is always travelling toward its end. Clipped
+    -- by only drawing the ones that sit fully inside the fill.
+    local period = 10
+    local sx = tx0 - period + ((t*22) % period)
+    while sx < tx0 + fw do
+      if sx - 2 > tx0 and sx + 3 < tx0 + fw then
+        graphics.polyline(Color(1, 1, 1, 0.15), 1,
+                          sx - 2, cy - h/2 + 1, sx + 2, cy, sx - 2, cy + h/2 - 1)
+      end
+      sx = sx + period
+    end
+
+    -- Leading edge: a bright cap, glowing harder the faster the track is moving.
+    graphics.rectangle(tx0 + fw - 1, cy, 2, h, 1, 1, Color(1, 1, 1, 0.35 + 0.5*w.vel))
+    graphics.circle(tx0 + fw, cy, 1.4 + 2.2*w.vel,
+                    Color(base.r, base.g, base.b, 0.3 + 0.4*w.vel))
+  end
+
+  -- ---- notches ----
+  -- Cut across the whole track, over the fill, so the bar reads as N chunks of
+  -- wave rather than one continuous tube. The notch the fill has just passed
+  -- flashes -- the per-chunk tick a smooth bar could never give.
+  for i = 1, segs - 1 do
+    local nx = tx0 + tw*i/segs
+    graphics.line(nx, cy - h/2 + 1, nx, cy + h/2 - 1, Color(0, 0, 0, 0.6), 1)
+    if i == w.seg and w.seg_pop > 0.01 then
+      graphics.line(nx, cy - h/2 - 2, nx, cy + h/2 + 2, Color(1, 1, 1, w.seg_pop), 1)
+    end
+  end
+  graphics.rectangle(cx, cy, tw, h, h/2, h/2,                      -- rim, drawn over the cuts
+                     Color(fg_alt[0].r, fg_alt[0].g, fg_alt[0].b, 0.22), 1)
+
+  -- ---- end-of-wave marker ----
+  -- What finishing the track gets you, parked past its right end and brightening
+  -- as the fill closes on it.
+  local mx   = tx0 + tw + 7
+  local near = math.clamp((w.disp - 0.55)/0.45, 0, 1)
+  if mode == 'boss' or (mode ~= 'xp' and self.wave == 9) then
+    local p = 0.55 + 0.45*math.sin(t*5)
+    local a = 0.35 + 0.65*p*(0.35 + 0.65*near)
+    graphics.polygon({mx, cy - 5, mx + 4, cy, mx, cy + 5, mx - 4, cy},
+                     Color(red[0].r, red[0].g, red[0].b, a))
+    graphics.circle(mx, cy, 1.2, Color(1, 1, 1, a))
+  else
+    local a = 0.25 + 0.6*near
+    for i = 0, 1 do
+      local ox = mx - 3 + i*4
+      graphics.polyline(Color(fg_alt[0].r, fg_alt[0].g, fg_alt[0].b, a), 1,
+                        ox - 2, cy - 3.5, ox + 1.5, cy, ox - 2, cy + 3.5)
+    end
+  end
+
+  -- ---- wave-change flash ----
+  if w.flash > 0.01 then
+    graphics.rectangle(cx, cy, tw + 4, h + 4, (h + 4)/2, (h + 4)/2,
+                       Color(1, 1, 1, 0.45*w.flash))
+  end
+end
+
+
 function BallPit:draw_hud()
   -- Playfield frame, open at the TOP. Drawn as one polyline down the left
   -- side, across the bottom and back up the right, so the three solid edges
@@ -2629,39 +2841,14 @@ function BallPit:draw_hud()
     self:draw_themed_hearts()
   end
 
-  -- Progression bar. Starts past however wide the HP readout is (Aegis runs 7
-  -- hearts, the Vampire blood bar is longer still) and stops COMBO_STRIP_W short
-  -- of the right edge to reserve the combo meter block (label + bar + chips).
-  --
-  -- WHAT it fills with depends on what pays the next level. On the orb loadouts
-  -- (Terrorist) it is the XP bar it has always been. Everywhere else the level
-  -- comes from CLEARING THE WAVE, so the bar tracks the clear instead -- same
-  -- question ("how close is the next draft?"), measured against the thing that
-  -- actually answers it. An XP bar that could never move would just be furniture.
+  -- Wave progress track. Starts past however wide the HP readout is (Aegis runs
+  -- 7 hearts, the Vampire blood bar is longer still) and stops COMBO_STRIP_W
+  -- short of the right edge to reserve the combo meter block (label + bar +
+  -- chips). See draw_wave_bar for what it measures and why it is a wave track
+  -- rather than the XP tube it used to be.
   local hb_x, _, hb_w = self:blood_bar_rect()
   local bx = hp_bar_mode and (hb_x + hb_w + 14) or (self.x1 + 20 + self.player_hp_max*10)
-  local bw = (self.x2 - COMBO_STRIP_W) - bx
-  graphics.rectangle(bx + bw/2, self.y1 - 8, bw, 4, nil, nil, bg[-2])
-  local pct
-  if self:uses_xp_orbs() then
-    pct = math.clamp(self.xp/self.xp_to_next, 0, 1)
-  elseif self.wave_cfg and self.wave_cfg.boss then
-    -- The boss wave ends on the boss's DEATH, not on a clock (its duration is a
-    -- placeholder 999), so the honest measure of progress is the boss's HP.
-    local b = self.boss
-    if b and not b.dead and (b.max_hp or 0) > 0 then
-      pct = math.clamp(1 - b.hp/b.max_hp, 0, 1)
-    else
-      pct = self.boss_defeated and 1 or 0
-    end
-  else
-    -- Wave 9 holds past its timer while the arena drains before the boss; the
-    -- clamp parks the bar full there, which is exactly what is happening.
-    pct = math.clamp(self.wave_time/((self.wave_cfg and self.wave_cfg.duration) or 1), 0, 1)
-  end
-  if pct > 0 then
-    graphics.rectangle(bx + bw*pct/2, self.y1 - 8, bw*pct, 4, nil, nil, blue[0])
-  end
+  self:draw_wave_bar(bx, self.x2 - COMBO_STRIP_W)
 
   self:draw_combo_meter()
 

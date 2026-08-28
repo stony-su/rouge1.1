@@ -117,6 +117,7 @@ after the boss; no save/meta-progression yet.
 | Palette / hero colors / draft pool | `shared.lua` (`shared_init`) |
 | Per-wave difficulty / enemy mix | `ballpit.lua` `wave_config()` |
 | Combo ranks + point tunables | `ballpit.lua` `COMBO_RANKS` / `COMBO_*` |
+| Wave progress track (notches / label / end marker) | `ballpit.lua` `WAVE_BAR_*` / `draw_wave_bar` |
 | Pity timers (powerup / level-up) | `ballpit.lua` `reset_run` |
 | Hero stats & behaviors | `ball_hero.lua` `HERO_STATS` |
 | Brick variant stats / sizes | `brick.lua` `VARIANTS`, `BRICK_W/H`, `CELL_W/H` |
