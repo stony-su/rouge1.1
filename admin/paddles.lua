@@ -67,7 +67,10 @@ PADDLES.defs = {
     -- flip lobs them back up. ball/restitution kept low + gravity gentle so
     -- balls stay slow and easy to flip; launch_speed is the modest pop.
     sig = {
-      flip_window = 0.16, gap = 14,
+      -- `gap` is the DRAIN between the two bats. Wide enough that the drain is a
+      -- real hazard you have to flip away from rather than a slot a ball has to
+      -- be unlucky to find -- which is the whole tension of a pinball table.
+      flip_window = 0.16, gap = 28,
       flipper_len = 34, flipper_thick = 5, rest_tilt = 0.30, flip_up = 0.62,
       -- Floaty + slow between flips (low gravity = high hang-time arc), but a
       -- flip is a real launch: launch_speed is the "100%" unit and flip_launch

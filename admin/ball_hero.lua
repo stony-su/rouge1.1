@@ -126,13 +126,13 @@ local HERO_STATS = {
   -- ----- Engineer "Builder" (SNKRX engineer port; behavior = 'turret_drop') -----
   -- SNKRX player.lua:409 / Turret:3196 -- every cd seconds the engineer DEPLOYS a
   -- turret at its own position. Each turret aims at the nearest brick and fires a
-  -- BURST of burst_count shots, each dealing turret_hp_frac of the target's MAX HP
-  -- (see Projectile.max_hp_frac), persisting for `lifetime` then folding up. Turret
+  -- BURST of burst_count shots, each dealing FLAT damage (current_dmg * turret_mult
+  -- -- no percent-of-max-HP), persisting for `lifetime` then folding up. Turret
   -- fire rate also scales with the player's level (see AllyTurret). Level 3
   -- ("Upgrade!!!") drops lvl3_count turrets per deploy and UPGRADES them all (+50%
   -- damage & fire rate). The engineer ball is a steady fabricator drone: medium
   -- speed, mildly dampened, hovering on a gentle bob (skin = 'engineer').
-  engineer    = {r = 6, base_speed = 150, dmg = 8, color = 'orange', behavior = 'turret_drop', cd = 8, lifetime = 16, turret_cd = 3.0, burst_count = 5, burst_gap = 0.12, turret_range = 256, turret_mult = 2.0, turret_hp_frac = 0.33, shot_speed = 220, lvl3_count = 2, skin = 'engineer'},
+  engineer    = {r = 6, base_speed = 150, dmg = 8, color = 'orange', behavior = 'turret_drop', cd = 8, lifetime = 16, turret_cd = 3.0, burst_count = 5, burst_gap = 0.12, turret_range = 256, turret_mult = 2.0, shot_speed = 220, lvl3_count = 2, skin = 'engineer'},
 
   -- ----- Force area (behavior = 'force_area') -----
   -- ----- Psykino "Magnetic Force" (SNKRX psykino port; behavior = 'force_pull') -----
@@ -928,6 +928,15 @@ function BallHero:fx_scale()
 end
 
 
+-- How far a ball fades once it is fully into the paddle's half of the pit (the
+-- ramp itself is pit_fade_at, in shared.lua). The BODY stays readable -- it is
+-- the thing the player is steering -- while its aftershadow smear goes much
+-- fainter: the trail carries no information the body doesn't, so down there it is
+-- pure occlusion over the bullets the player is trying to dodge.
+local PIT_FADE_ALPHA = 0.45   -- body alpha once fully into the paddle's half
+local PIT_FADE_TRAIL = 0.14   -- aftershadow / speed-trail alpha down there
+
+
 function BallHero:maybe_spawn_trail()
   if self.stuck or self.returning or self.mortar then return end
   local mult = self.speed_mult or 1
@@ -946,8 +955,13 @@ function BallHero:maybe_spawn_trail()
   local base_rs       = self.r_size  * math.clamp(math.remap(mult, 1.3, 4.0, 0.85, 1.25), 0.85, 1.25)
   local base_alpha    = math.clamp(math.remap(mult, 1.3, 4.0, 0.35, 0.85), 0.35, 0.85)
   local base_duration = math.clamp(math.remap(mult, 1.3, 4.0, 0.22, 0.4),  0.22, 0.4)
+  -- Below the breach line the whole smear thins out (see pit_fade_at). A trail
+  -- disc never moves once dropped, so the fade is baked in from the SAMPLE
+  -- position rather than re-evaluated per frame: it is exactly right, and a ball
+  -- crossing the line leaves a wake that thins along it instead of blinking.
+  local pit_a = pit_fade_at(ty, PIT_FADE_TRAIL)
   BallTrail{group = fx, x = self.x, y = ty, color = self.color,
-            rs = base_rs*ts, alpha = base_alpha, duration = base_duration}
+            rs = base_rs*ts, alpha = base_alpha*pit_a, duration = base_duration}
 
   -- Tier 2 (mult >= 2.5): NEON OVERDRIVE. A white-hot core particle sits on
   -- top of the coloured trail so the ball looks like it's burning through
@@ -956,7 +970,7 @@ function BallHero:maybe_spawn_trail()
     local neon = math.clamp(math.remap(mult, 2.5, 4.0, 0, 1), 0, 1)
     BallTrail{group = fx, x = self.x, y = ty, color = Color(1, 1, 1, 1),
               rs = self.r_size*ts*(0.45 + neon*0.45),
-              alpha = 0.55 + neon*0.4,
+              alpha = (0.55 + neon*0.4)*pit_a,
               duration = 0.18 + neon*0.22}
 
     -- Tier 3 (mult >= ~3.25): saturated outer glow. We boost the hero's
@@ -971,7 +985,7 @@ function BallHero:maybe_spawn_trail()
         1)
       BallTrail{group = fx, x = self.x, y = ty, color = glow,
                 rs = self.r_size*ts*(1.0 + neon*0.6),
-                alpha = 0.45*neon,
+                alpha = 0.45*neon*pit_a,
                 duration = 0.32 + neon*0.3}
     end
   end
@@ -1543,7 +1557,7 @@ BEHAVIORS.turret_drop = function(self, s)
       AllyTurret{group = arena.effects, x = px, y = py, color = self.color,
                  lifetime = s.lifetime, burst_cd = s.turret_cd, burst_count = s.burst_count,
                  burst_gap = s.burst_gap, range = s.turret_range, dmg = tdmg,
-                 max_hp_frac = s.turret_hp_frac, shot_speed = s.shot_speed, upgraded = lvl3}
+                 shot_speed = s.shot_speed, upgraded = lvl3}
     end
     -- Deploy juice: a fabrication recoil + a spray of welding sparks.
     self.spring:pull(0.4)
@@ -3089,23 +3103,10 @@ function BallHero.draw_preview(character, x, y, r_size)
 end
 
 
--- Alpha for a ball sitting in the paddle's half of the pit. Below the red
--- dotted breach line is exactly where enemy fire converges on the paddle, and
--- a crowd of opaque balls down there hides the shots the player has to dodge --
--- which is the one place in the run where seeing them matters most.
---
--- Ramped over PIT_FADE_BAND rather than switched at the line: a ball crossing
--- the boundary would otherwise flicker between two alphas as it bounced, and
--- the line is a soft warning, not a hard edge.
-local PIT_FADE_ALPHA = 0.45   -- alpha once fully into the paddle's half
-local PIT_FADE_BAND  = 28     -- px below the line over which it fades in
-
+-- Alpha for a ball sitting in the paddle's half of the pit (see pit_fade_at in
+-- shared.lua).
 function BallHero:pit_alpha()
-  local arena = main.current
-  if not (arena and arena.breach_line_y) then return 1 end
-  local d = self.y - arena:breach_line_y()      -- >0 = below the line (y is DOWN)
-  if d <= 0 then return 1 end
-  return 1 - (1 - PIT_FADE_ALPHA)*math.clamp(d/PIT_FADE_BAND, 0, 1)
+  return pit_fade_at(self.y, PIT_FADE_ALPHA)
 end
 
 

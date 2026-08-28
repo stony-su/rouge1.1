@@ -772,11 +772,12 @@ function AllyTurret:init(args)
   self.burst_count = self.burst_count or 5
   self.burst_gap   = self.burst_gap or 0.12
   self.range       = self.range or 256
+  -- Turret bolts deal FLAT damage -- the same number to a wave-1 cell, a fat
+  -- late-wave brick and the boss. They used to bill a fraction of the target's
+  -- max HP (Projectile.max_hp_frac), which scaled with whatever the wave had
+  -- inflated enemy HP to and made a single burst worth wildly different amounts
+  -- depending on what it hit.
   self.dmg         = self.dmg or 8
-  -- Turret bolts deal a FRACTION OF THE TARGET'S MAX HP rather than flat damage
-  -- (see Projectile.max_hp_frac), so one burst stays meaningful against fat
-  -- late-wave bricks. Enemies with no max_hp (critters) fall back to self.dmg.
-  self.max_hp_frac = self.max_hp_frac or 0.33
   self.shot_speed  = self.shot_speed or 220
   self.color       = self.color or orange[0]
   self.upgraded    = self.upgraded or false
@@ -799,9 +800,12 @@ function AllyTurret:update(dt)
   self.gear_a = self.gear_a + 1.5*dt
   if self.flash_t  > 0 then self.flash_t  = self.flash_t - dt end
   if self.deploy_t > 0 then self.deploy_t = math.max(0, self.deploy_t - dt*4) end
-  -- Track the nearest brick: smoothly rotate the barrel toward it.
+  -- Track the nearest ENEMY: smoothly rotate the barrel toward it. Deliberately
+  -- get_nearest_enemy_within, not the brick-only helper -- on the boss wave the
+  -- field holds no Bricks at all, so a brick-only turret sat aiming at nothing
+  -- for the whole fight.
   local arena = main.current
-  local target = arena and arena.get_nearest_brick_within and arena:get_nearest_brick_within(self.x, self.y, self.range)
+  local target = arena and arena.get_nearest_enemy_within and arena:get_nearest_enemy_within(self.x, self.y, self.range)
   if target then
     local want = math.atan2(target.y - self.y, target.x - self.x)
     local diff = math.loop(want - self.aim_a, 2*math.pi)
@@ -812,19 +816,19 @@ end
 function AllyTurret:fire_burst()
   local arena = main.current
   if not (arena and arena.main and arena.main.world) then return end
-  if not arena:get_nearest_brick_within(self.x, self.y, self.range) then return end
+  if not arena:get_nearest_enemy_within(self.x, self.y, self.range) then return end
   local bl = self.upgraded and 11 or 9
   for i = 0, self.burst_count - 1 do
     self.t:after(i*self.burst_gap, function()
       if not (arena.main and arena.main.world) then return end
-      local tgt = arena:get_nearest_brick_within(self.x, self.y, self.range)
+      local tgt = arena:get_nearest_enemy_within(self.x, self.y, self.range)
       if not tgt then return end
       local r = math.atan2(tgt.y - self.y, tgt.x - self.x)
       self.aim_a   = r
       self.flash_t = 0.1
       local mx, my = self.x + math.cos(r)*bl, self.y + math.sin(r)*bl
       Projectile{group = arena.main, x = mx, y = my, r = r, type = 'arrow',
-                 dmg = self.dmg, max_hp_frac = self.max_hp_frac, spawn_dur = 0.09,
+                 dmg = self.dmg, spawn_dur = 0.09,
                  speed = self.shot_speed, color = self.color, pierce = 1}
       spawn_burst(arena.effects, mx, my, self.color, 2, 40, 90)
       shoot1:play{volume = 0.12, pitch = random:float(1.0, 1.15)}

@@ -109,20 +109,20 @@ return {
   -- ======================================================================
   combo = {
     -- Rank ladder, low -> high. threshold = points needed to sit at that rank.
-    -- The rank does NOT buff damage any more: it buys TEMPO and PROGRESSION.
+    -- The rank does NOT buff damage: it buys TEMPO, and that is all it buys --
+    -- the XP dividend it used to pay went out with the XP-orb economy.
     --   speed_mult = every ball's speed while at that rank (1.00 -> 1.75,
     --                even steps of 0.75/7 -- see COMBO_RANKS in ballpit.lua)
-    --   xp_mult    = every XP pickup's value while at that rank
     -- Labels/colors stay in ballpit.lua.
     ranks = {
-      {threshold =    0, speed_mult = 1.0,  xp_mult = 1.0 },   -- D
-      {threshold =   50, speed_mult = 1.11, xp_mult = 1.1 },   -- C
-      {threshold =  150, speed_mult = 1.21, xp_mult = 1.25},   -- B
-      {threshold =  300, speed_mult = 1.32, xp_mult = 1.4 },   -- A
-      {threshold =  500, speed_mult = 1.43, xp_mult = 1.6 },   -- S
-      {threshold =  750, speed_mult = 1.54, xp_mult = 1.8 },   -- SS
-      {threshold = 1100, speed_mult = 1.64, xp_mult = 2.0 },   -- SSS
-      {threshold = 1500, speed_mult = 1.75, xp_mult = 2.25},   -- FRENZY
+      {threshold =    0, speed_mult = 1.0 },   -- D
+      {threshold =   50, speed_mult = 1.11},   -- C
+      {threshold =  150, speed_mult = 1.21},   -- B
+      {threshold =  300, speed_mult = 1.32},   -- A
+      {threshold =  500, speed_mult = 1.43},   -- S
+      {threshold =  750, speed_mult = 1.54},   -- SS
+      {threshold = 1100, speed_mult = 1.64},   -- SSS
+      {threshold = 1500, speed_mult = 1.75},   -- FRENZY
     },
 
     -- Per-ball bounce chain: +bounce_dmg_step damage per consecutive bounce

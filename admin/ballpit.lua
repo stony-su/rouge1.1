@@ -1,8 +1,9 @@
 -- BallPit: the combined Arkanoid / vampire-survivors gameplay loop.
 -- Heroes are balls that bounce in the play area; enemy bricks drift downward
--- and damage the player if they reach the paddle line. Killing bricks drops
--- XP orbs; collecting enough levels the player up and lets them draft a new
--- ball-hero.
+-- and damage the player if they reach the paddle line. CLEARING A WAVE levels the
+-- player up and lets them draft a new ball-hero -- one level, one draft, one wave.
+-- (The Terrorist loadout is the exception: it keeps the old XP-orb economy, where
+-- kills drop orbs and enough of them buy a level. See BallPit:uses_xp_orbs.)
 
 -- A static rectangle wall (invisible) used to bound the arena.
 Wall = Object:extend()
@@ -69,6 +70,14 @@ local function append_ranged(mix, wave)
 end
 
 
+-- The hard floor under the gap between swarm spawns, in seconds, no matter how
+-- deep the run goes. Note this is a ceiling on the SPAWN ATTEMPT rate, not on the
+-- arrival rate: a swarm still has to find a clear slot (BallPit:can_place_layout,
+-- SWARM_GAP_MIN_ROWS), so once the field is packed the geometry, not this, is
+-- what paces the wave.
+local SWARM_INTERVAL_MIN = 0.9
+
+
 -- Per-wave config: row cadence, row width, drift speed and the variant mix.
 -- Variants come from SNKRX-master/enemies.lua (Seeker flags and boss subtypes).
 -- Mix entries are {variant, weight} pairs that don't need to sum to 100.
@@ -123,8 +132,20 @@ local function wave_config(wave)
   local min_w    = math.min(0.80, 0.33 + 0.035*wave)
   local max_w    = math.min(1.00, math.max(min_w + 0.1, 0.55 + 0.045*wave))
 
+  -- Seconds between swarm spawns. Two terms, and the interval is whichever is
+  -- LARGER:
+  --   * a linear ramp that tightens through the early waves, and
+  --   * a FLOOR that used to be a flat 2.5s -- from wave 10 on, every wave was
+  --     spawning at exactly the same cadence as the one before it, so the run
+  --     stopped getting denser and only got tougher per block. The floor now
+  --     slides down with the wave too, bottoming out at 0.9s, so late waves keep
+  --     compounding pressure instead of plateauing.
+  -- Early waves are untouched: the ramp is the larger term until wave 10, which
+  -- is where the old floor took over.
+  local interval_floor = math.max(SWARM_INTERVAL_MIN, 2.5 - 0.08*wave)
+
   return {
-    swarm_interval     = math.max(2.5, 6 - 0.35*wave),       -- spawn frequency ↑
+    swarm_interval     = math.max(interval_floor, 6 - 0.35*wave), -- spawn frequency ↑
     duration           = 25 + 2*wave,
     swarm_rows_min     = min_rows,
     swarm_rows_max     = max_rows,                            -- swarm size ↑
@@ -145,24 +166,25 @@ end
 -- ULTRAKILL-style combo system. Points come from chaining brick bounces;
 -- balls falling into the pit take a heavy penalty.
 --
--- What the rank PAYS OUT: climbing the ladder no longer buffs contact damage.
--- Instead a higher rank makes every ball FASTER (speed_mult, folded into
--- BallHero:normalize_speed) and every XP pickup WORTH MORE (xp_mult, folded
--- into BallPit:gain_xp) — so a hot meter converts into tempo and levels
--- rather than raw numbers. The per-ball bounce chain (bounce_dmg_mult) is a
--- separate channel and still scales damage.
+-- What the rank PAYS OUT: climbing the ladder does not buff contact damage. It
+-- makes every ball FASTER (speed_mult, folded into BallHero:normalize_speed) --
+-- that is the whole payout now. The meter used to pay a second dividend in XP
+-- (xp_mult, folded into gain_xp), which stopped meaning anything once levels came
+-- from clearing waves rather than from collecting orbs; rather than leave a payout
+-- that only one loadout could ever see, it was cut. The per-ball bounce chain
+-- (bounce_dmg_mult) is a separate channel and still scales damage.
 --
 -- Rank entries are ordered low → high. `combo_rank_index` walks them from
 -- the top so the highest threshold the current points crosses wins.
 local COMBO_RANKS = {
-  {label = 'D',      threshold =    0, speed_mult = 1.0,  xp_mult = 1.0,  color_key = 'fg_alt'},
-  {label = 'C',      threshold =   50, speed_mult = 1.11, xp_mult = 1.1,  color_key = 'fg'    },
-  {label = 'B',      threshold =  150, speed_mult = 1.21, xp_mult = 1.25, color_key = 'yellow'},
-  {label = 'A',      threshold =  300, speed_mult = 1.32, xp_mult = 1.4,  color_key = 'orange'},
-  {label = 'S',      threshold =  500, speed_mult = 1.43, xp_mult = 1.6,  color_key = 'red'   },
-  {label = 'SS',     threshold =  750, speed_mult = 1.54, xp_mult = 1.8,  color_key = 'red'   },
-  {label = 'SSS',    threshold = 1100, speed_mult = 1.64, xp_mult = 2.0,  color_key = 'red'   },
-  {label = 'FRENZY', threshold = 1500, speed_mult = 1.75, xp_mult = 2.25, color_key = 'purple'},
+  {label = 'D',      threshold =    0, speed_mult = 1.0,  color_key = 'fg_alt'},
+  {label = 'C',      threshold =   50, speed_mult = 1.11, color_key = 'fg'    },
+  {label = 'B',      threshold =  150, speed_mult = 1.21, color_key = 'yellow'},
+  {label = 'A',      threshold =  300, speed_mult = 1.32, color_key = 'orange'},
+  {label = 'S',      threshold =  500, speed_mult = 1.43, color_key = 'red'   },
+  {label = 'SS',     threshold =  750, speed_mult = 1.54, color_key = 'red'   },
+  {label = 'SSS',    threshold = 1100, speed_mult = 1.64, color_key = 'red'   },
+  {label = 'FRENZY', threshold = 1500, speed_mult = 1.75, color_key = 'purple'},
 }
 
 -- Ranks at/above this index are the "hot streak" tiers — the meter grows a
@@ -234,11 +256,6 @@ end
 local function combo_rank_speed_mult(i)
   return BAL('combo.ranks.' .. i .. '.speed_mult', COMBO_RANKS[i].speed_mult)
 end
-local function combo_rank_xp_mult(i)
-  return BAL('combo.ranks.' .. i .. '.xp_mult', COMBO_RANKS[i].xp_mult)
-end
-
-
 function BallPit:init(name)
   self:init_state(name)
   self:init_game_object()
@@ -644,10 +661,9 @@ function BallPit:reset_run()
     idle_t        = 0,
     last_variant  = nil,
     bounces_total = 0,
-    -- Cached payouts for the current rank, refreshed once per frame in
-    -- tick_combo: ball speed (BallHero:normalize_speed) and XP (gain_xp).
+    -- Cached payout for the current rank, refreshed once per frame in tick_combo
+    -- and read every frame by every ball (BallHero:normalize_speed).
     speed_m       = 1,
-    xp_m          = 1,
     -- Presentation.
     display       = 0,    -- smoothed points the bar draws
     display_idx   = 1,    -- rank the drawn bar currently sits in
@@ -1030,14 +1046,17 @@ function BallPit:advance_wave()
     end
   end
 
-  -- The "no-reset + floor" powerup lasts until the next wave starts. Tear
-  -- down the temporary bottom wall + clear the flag here so the player has
-  -- to re-earn the floor each wave.
-  if self.floor_wall then
-    self.floor_wall.dead = true
-    self.floor_wall      = nil
-    self.no_speed_reset  = false
-  end
+  -- The floor runs on its own timer now (see apply_floor), but it never survives
+  -- a wave boundary either: drop the wall AND the buff slot so the player has to
+  -- re-earn the floor each wave.
+  self:remove_floor()
+  if self.buffs then self.buffs.floor = nil end
+
+  -- CLEARING THE WAVE IS THE LEVEL. This is the whole progression loop for every
+  -- loadout but the Terrorist (which is still on orbs -- see uses_xp_orbs). Paid
+  -- here rather than in start_wave so it lands on the clear itself, and so the
+  -- draft it opens covers the gap between waves instead of interrupting one.
+  if not self:uses_xp_orbs() then self:level_up() end
 
   -- The wave-end tier-2 drop above counts as the start-of-wave powerup; reset
   -- the pity counter so the very next pity roll doesn't immediately spawn a
@@ -1135,8 +1154,10 @@ function BallPit:can_place_layout(x_center, y_top, cells_layout, min_gap)
         local b = ec.brick
         if b and not b.dead then
           -- Use the swarm's logical centre (no knockback offset) so a
-          -- transient spring oscillation doesn't unblock a cell.
-          for _, ep in ipairs(expand_to_cells(ec, swarm.x_center, swarm.y_top)) do
+          -- transient spring oscillation doesn't unblock a cell, and its
+          -- SETTLED y (Swarm:place_y) so a swarm still gliding in already owns
+          -- the slot it is heading for.
+          for _, ep in ipairs(expand_to_cells(ec, swarm.x_center, swarm:place_y())) do
             for _, np in ipairs(new_cells) do
               if math.abs(np.x - ep.x) < CELL_W - 1 and math.abs(np.y - ep.y) < v_threshold then
                 return false
@@ -1215,7 +1236,18 @@ function BallPit:spawn_swarm(force)
   -- Plan the per-row irregular layout once, then try a few anchor positions
   -- (zone-biased + snapped to grid) until we find one with no overlaps.
   local layout = Swarm.generate_cells(rows_count, max_cols, cfg.swarm_density, CELL_W, CELL_H)
+  -- Where the top row SETTLES. Everything below -- the overlap test, the grid
+  -- reservation -- is judged here, at the slot the swarm is claiming, not at the
+  -- off-screen position it is built at.
   local y_top  = self.y1 + 8
+
+  -- How far above the arena's top edge to build it, so the whole formation
+  -- starts off screen and glides in (Swarm's entry glide). Deepest cell plus a
+  -- row of clearance plus the gap down to the settle line: enough that the
+  -- BOTTOM row is above the edge at spawn, so nothing pops into view.
+  local deepest = 0
+  for _, c in ipairs(layout) do if c.dy > deepest then deepest = c.dy end end
+  local entry_dist = deepest + CELL_H + (y_top - self.y1) + 4
 
   -- Vertical clearance this swarm demands from the ones already on the field.
   -- Rolled once per spawn rather than per anchor attempt, so all 8 tries below
@@ -1230,6 +1262,7 @@ function BallPit:spawn_swarm(force)
         group          = self.swarms,
         x_center       = x_center,
         y              = y_top,
+        entry_dist     = entry_dist,
         spacing_x      = CELL_W,
         spacing_y      = CELL_H,
         drift          = cfg.drift_speed,
@@ -2059,19 +2092,19 @@ local TUTORIAL_PAGES = {
     {'SO',         'losing a heart also buys you room'},
   }},
 
-  {title = 'XP & LEVELS', rows = {
-    {'ORBS',       'every block killed drops XP'},
-    {'MAGNET',     'orbs near the paddle are pulled in'},
-    {'MISSED',     'orbs fall past you and are gone'},
+  {title = 'LEVELS', rows = {
+    {'CLEAR A WAVE', 'and you gain a level -- one per wave'},
     {'A LEVEL',    'opens the three-card draft'},
-    {'THE CURVE',  'each level costs more than the last'},
-    {'COMBO',      'a hot meter makes every orb worth more'},
+    {'THE BAR',    'up top fills as the wave runs down'},
+    {'WAVE 10',    'the boss: it fills as the boss bleeds'},
+    {'LEVEL ORBS', 'a powerup that levels your BALLS instead'},
+    {'TERRORIST',  'that loadout levels on XP orbs instead'},
   }},
 
   {title = 'COMBO METER', rows = {
     {'POINTS',     'from chaining block hits without missing'},
     {'RANKS',      'D, C, B, A, S, SS, SSS, FRENZY'},
-    {'IT PAYS',    'faster balls and richer XP -- not raw damage'},
+    {'IT PAYS',    'faster balls -- not raw damage'},
     {'IT BLEEDS',  'idle time drains a fraction of what you hold'},
     {'SO',         'a hot meter costs more attention than a cold one'},
     {'DROPPING',   'a ball into the pit takes a heavy cut'},
@@ -2310,9 +2343,27 @@ function BallPit:draw_tutorial()
 end
 
 
+-- Clip the play field to the arena's TOP EDGE for the duration of `draw_fn`.
+--
+-- Swarms now glide in from ABOVE that edge (see the entry glide in swarm.lua),
+-- and the band above it is not spare canvas -- it is the HUD, where the
+-- progression bar and the combo meter live. Without a clip an arriving formation
+-- would slide straight over the readouts. With it, a swarm emerges from behind
+-- the frame, which is what it is doing.
+--
+-- The scissor is in canvas space, so it does NOT follow camera shake: during a
+-- shake the clip line holds while the contents move under it. At the 1-3px the
+-- shake actually uses that reads as the cabinet's frame staying put.
+function BallPit:clip_to_arena(draw_fn)
+  love.graphics.setScissor(0, self.y1, gw, gh - self.y1)
+  draw_fn()
+  love.graphics.setScissor()
+end
+
+
 function BallPit:draw()
   self.floor:draw()
-  self.main:draw()
+  self:clip_to_arena(function() self.main:draw() end)
   self:draw_hop_layer()
   self.effects:draw()
   if self.frozen then self:draw_frost_overlay() end
@@ -2834,14 +2885,36 @@ function BallPit:draw_hud()
     self:draw_themed_hearts()
   end
 
-  -- XP bar. Starts past however wide the HP readout is (Aegis runs 7 hearts,
-  -- the Vampire blood bar is longer still) and stops COMBO_STRIP_W short of
-  -- the right edge to reserve the combo meter block (label + bar + chips).
+  -- Progression bar. Starts past however wide the HP readout is (Aegis runs 7
+  -- hearts, the Vampire blood bar is longer still) and stops COMBO_STRIP_W short
+  -- of the right edge to reserve the combo meter block (label + bar + chips).
+  --
+  -- WHAT it fills with depends on what pays the next level. On the orb loadouts
+  -- (Terrorist) it is the XP bar it has always been. Everywhere else the level
+  -- comes from CLEARING THE WAVE, so the bar tracks the clear instead -- same
+  -- question ("how close is the next draft?"), measured against the thing that
+  -- actually answers it. An XP bar that could never move would just be furniture.
   local hb_x, _, hb_w = self:blood_bar_rect()
   local bx = hp_bar_mode and (hb_x + hb_w + 14) or (self.x1 + 20 + self.player_hp_max*10)
   local bw = (self.x2 - COMBO_STRIP_W) - bx
   graphics.rectangle(bx + bw/2, self.y1 - 8, bw, 4, nil, nil, bg[-2])
-  local pct = math.clamp(self.xp/self.xp_to_next, 0, 1)
+  local pct
+  if self:uses_xp_orbs() then
+    pct = math.clamp(self.xp/self.xp_to_next, 0, 1)
+  elseif self.wave_cfg and self.wave_cfg.boss then
+    -- The boss wave ends on the boss's DEATH, not on a clock (its duration is a
+    -- placeholder 999), so the honest measure of progress is the boss's HP.
+    local b = self.boss
+    if b and not b.dead and (b.max_hp or 0) > 0 then
+      pct = math.clamp(1 - b.hp/b.max_hp, 0, 1)
+    else
+      pct = self.boss_defeated and 1 or 0
+    end
+  else
+    -- Wave 9 holds past its timer while the arena drains before the boss; the
+    -- clamp parks the bar full there, which is exactly what is happening.
+    pct = math.clamp(self.wave_time/((self.wave_cfg and self.wave_cfg.duration) or 1), 0, 1)
+  end
   if pct > 0 then
     graphics.rectangle(bx + bw*pct/2, self.y1 - 8, bw*pct, 4, nil, nil, blue[0])
   end
@@ -2917,11 +2990,6 @@ end
 -- these have to stay O(1).
 function BallPit:combo_speed_mult()
   return (self.combo and self.combo.speed_m) or 1
-end
-
-
-function BallPit:combo_xp_mult()
-  return (self.combo and self.combo.xp_m) or 1
 end
 
 
@@ -3167,7 +3235,6 @@ function BallPit:tick_combo(dt)
   -- ---- cached payouts, read off the LIVE rank ----
   local idx = combo_index_for(c.points)
   c.speed_m = combo_rank_speed_mult(idx)
-  c.xp_m    = combo_rank_xp_mult(idx)
 
   -- ---- the drawn bar chases the real total ----
   -- Rate = a fraction of the remaining gap with a floor under it, so a
@@ -3468,18 +3535,38 @@ end
 
 
 
+-- XP. Reachable only on a loadout that still runs the orb economy -- the
+-- Terrorist (see uses_xp_orbs); every other paddle levels on wave clears and
+-- never calls this. The loadout's XP stat scales every gain. Rounded, never
+-- below 1.
 function BallPit:gain_xp(amount)
-  -- The loadout's XP stat scales every gain, and so does the combo rank --
-  -- climbing the meter now pays out in PROGRESSION rather than damage (see
-  -- COMBO_RANKS.xp_mult). Rounded, never below 1.
-  amount = math.max(1, math.floor(amount*((self.run_mods and self.run_mods.xp) or 1)
-                                        *self:combo_xp_mult() + 0.5))
+  amount = math.max(1, math.floor(amount*((self.run_mods and self.run_mods.xp) or 1) + 0.5))
   self.xp = self.xp + amount
   FloatingText{group = self.effects, x = self.paddle.x, y = self.paddle.y - 16, text = '+' .. amount, color = blue[0]}
   while self.xp >= self.xp_to_next do
     self.xp = self.xp - self.xp_to_next
     self:level_up()
   end
+end
+
+
+-- Does this run still level on XP ORBS? Only the Terrorist does.
+--
+-- Every other loadout levels on the WAVE CLOCK -- one level per wave cleared,
+-- granted in advance_wave -- so blocks drop nothing, there is no XP to chase
+-- across the arena, and the draft arrives on a rhythm the player can plan around
+-- instead of whenever enough gems happened to fall within reach of the paddle.
+--
+-- The Terrorist is left on orbs because its whole loop is built out of them: it
+-- auto-collects field-wide, levels on a FLAT curve, gains XP passively over time,
+-- and every level auto-arms a ball instead of opening a draft (see
+-- terror_auto_levelup). Wave-paced levelling would flatten all of that into the
+-- same cadence every other paddle has.
+--
+-- Read by: the three orb drops (Brick:die, EnemyCritter:die, Boss:die), the wave
+-- clear in advance_wave, and the HUD bar in draw_hud.
+function BallPit:uses_xp_orbs()
+  return (self.run_mods and self.run_mods.signature == 'terrorist') or false
 end
 
 
@@ -4169,10 +4256,20 @@ end
 
 -- ----- Ability helpers used by ball heroes -----
 
+-- An enemy still gliding into the arena is not a target yet. It is off screen
+-- (the play field is clipped at the top edge -- see clip_to_arena), so a shot
+-- aimed at one would fly up and vanish into the ceiling, and an ability would
+-- spend itself on something the player cannot see. Anything not riding a swarm
+-- -- critters, the boss -- is always in play.
+local function targetable(o)
+  return not (o.swarm and o.swarm.entering and o.swarm:entering())
+end
+
+
 function BallPit:get_nearest_brick(x, y, exclude)
   local best, best_d = nil, 1e9
   for _, o in ipairs(self.main.objects) do
-    if o:is(Brick) and not o.dead and (not exclude or o.id ~= exclude.id) then
+    if o:is(Brick) and not o.dead and targetable(o) and (not exclude or o.id ~= exclude.id) then
       local d = math.distance(x, y, o.x, o.y)
       if d < best_d then best_d = d; best = o end
     end
@@ -4183,7 +4280,7 @@ end
 
 function BallPit:has_brick_within(x, y, range)
   for _, o in ipairs(self.main.objects) do
-    if o:is(Brick) and not o.dead then
+    if o:is(Brick) and not o.dead and targetable(o) then
       if math.distance(x, y, o.x, o.y) <= range then return true end
     end
   end
@@ -4195,7 +4292,7 @@ end
 -- by the Terrorist to decide whether a ball is "armed" (close enough to blow).
 function BallPit:terror_has_enemy_within(x, y, range)
   for _, o in ipairs(self.main.objects) do
-    if not o.dead and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
+    if not o.dead and targetable(o) and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
       if math.distance(x, y, o.x, o.y) <= range then return true end
     end
   end
@@ -4242,7 +4339,23 @@ end
 function BallPit:get_nearest_brick_within(x, y, range)
   local best, best_d = nil, range
   for _, o in ipairs(self.main.objects) do
-    if o:is(Brick) and not o.dead then
+    if o:is(Brick) and not o.dead and targetable(o) then
+      local d = math.distance(x, y, o.x, o.y)
+      if d <= best_d then best_d = d; best = o end
+    end
+  end
+  return best
+end
+
+
+-- Nearest ANY enemy -- block, critter or boss -- within range. get_nearest_brick_within
+-- above only sees Bricks, so anything that targets through it goes blind on the
+-- boss wave (nothing but the Boss is on the field). Used by the engineer's
+-- deployed turrets, which otherwise stood idle through the whole fight.
+function BallPit:get_nearest_enemy_within(x, y, range)
+  local best, best_d = nil, range
+  for _, o in ipairs(self.main.objects) do
+    if not o.dead and targetable(o) and (o:is(Brick) or o:is(EnemyCritter) or o:is(Boss)) then
       local d = math.distance(x, y, o.x, o.y)
       if d <= best_d then best_d = d; best = o end
     end
@@ -4254,7 +4367,7 @@ end
 function BallPit:get_bricks_within(x, y, range)
   local out = {}
   for _, o in ipairs(self.main.objects) do
-    if o:is(Brick) and not o.dead and math.distance(x, y, o.x, o.y) <= range then
+    if o:is(Brick) and not o.dead and targetable(o) and math.distance(x, y, o.x, o.y) <= range then
       table.insert(out, o)
     end
   end
@@ -4265,7 +4378,7 @@ end
 function BallPit:get_random_brick_within(x, y, range)
   local candidates = {}
   for _, o in ipairs(self.main.objects) do
-    if o:is(Brick) and not o.dead and math.distance(x, y, o.x, o.y) <= range then
+    if o:is(Brick) and not o.dead and targetable(o) and math.distance(x, y, o.x, o.y) <= range then
       table.insert(candidates, o)
     end
   end
@@ -4432,12 +4545,14 @@ end
 --
 -- Apply a powerup by name. Effects come in three flavours:
 --   1. Instant (heal, water_wave, level_random): no buff slot.
---   2. Timed buff (wide_paddle, big_ball, fire_trail, freeze_wave, pierce, multi_ball):
+--   2. Timed buff (wide_paddle, big_ball, fire_trail, freeze_wave, pierce, multi_ball,
+--      floor):
 --      stashed in self.buffs[kind] with an `expires_at` + `restore` pair;
 --      tick_buffs counts down and calls restore on expiry. Stacking the same
 --      buff while it's active extends the timer instead of stacking the
 --      multiplier (so Wide Paddle twice = 15s + extension, not 2.56× width).
---   3. Wave-bounded (floor): cleared in advance_wave / reset_run, no timer.
+--      The floor is additionally wave-bounded: advance_wave / reset_run clear it
+--      early even if its timer has not run out.
 
 
 -- Pity-timer driven powerup spawner. Called every sub-step from update;
@@ -5076,15 +5191,36 @@ function BallPit:apply_pierce_buff()
 end
 
 
+-- How long the floor stays up. It used to be purely wave-bounded -- torn down in
+-- advance_wave and nowhere else -- which on a long wave (and especially the boss
+-- wave, which only ends on the boss's death) left the pit sealed for minutes,
+-- far longer than any other powerup and with no countdown anywhere to say so.
+-- It is a timed buff like the rest now, so it shows in the buff strip and reads
+-- honestly; the wave-end teardown stays as a hard cap on top of the timer.
+local FLOOR_DUR = 12
+
+
+-- Tear the temporary bottom wall down. Idempotent -- the buff timer, the wave
+-- advance and reset_run can all reach it.
+function BallPit:remove_floor()
+  if self.floor_wall then self.floor_wall.dead = true end
+  self.floor_wall     = nil
+  self.no_speed_reset = false
+end
+
+
 function BallPit:apply_floor()
-  if self.floor_wall then return end                 -- already up; one floor per wave
-  local thick = 6
-  local cx    = (self.x1 + self.x2)/2
-  local cy    = self.y2 + thick/2 + 2                -- just below the paddle row
-  local w     = self.x2 - self.x1 + thick
-  self.floor_wall      = self:spawn_wall(cx, cy, w, thick)
-  self.no_speed_reset  = true
-  TelegraphRing{group = self.effects, x = cx, y = cy, radius = w*0.6, color = yellow2[0], duration = 0.45}
+  self:add_or_extend_buff('floor', FLOOR_DUR,
+    function()
+      local thick = 6
+      local cx    = (self.x1 + self.x2)/2
+      local cy    = self.y2 + thick/2 + 2              -- just below the paddle row
+      local w     = self.x2 - self.x1 + thick
+      self.floor_wall     = self:spawn_wall(cx, cy, w, thick)
+      self.no_speed_reset = true
+      TelegraphRing{group = self.effects, x = cx, y = cy, radius = w*0.6, color = yellow2[0], duration = 0.45}
+    end,
+    function() self:remove_floor() end)
 end
 
 

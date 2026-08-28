@@ -20,6 +20,25 @@ Swarm:implement(GameObject)
 local DRIFT_SPEED_MULT = 0.5
 
 
+-- ENTRY GLIDE. A swarm is not stamped into the top of the arena fully formed --
+-- it is built entirely ABOVE the top edge, off screen, and slides down into
+-- place. The wave's own drift is far too slow to do that (a few px/s: a 7-row
+-- formation would take half a minute to finish arriving), so the entry runs on
+-- its own speed and eases into the drift, reaching it exactly as the top row
+-- lands on the y the arena reserved for it.
+--
+-- The glide holds ENTRY_SPEED until the last ENTRY_EASE_FRAC of the distance,
+-- then bleeds off into the drift across it. Easing over the WHOLE distance made
+-- a seven-row wall take four seconds -- most of it creeping -- because the speed
+-- is proportional to the distance left, which approaches the settle line
+-- asymptotically. Holding full speed most of the way and easing only at the end
+-- lands a short formation in ~1.1s and a tall one in ~2.2s, and because the ease
+-- bottoms out AT the drift speed rather than at zero, the swarm never visibly
+-- stops -- it simply stops arriving and starts descending.
+local ENTRY_SPEED     = 90
+local ENTRY_EASE_FRAC = 0.35
+
+
 -- Guaranteed vertical corridor. Every swarm gets a channel this many columns
 -- wide (rolled per swarm) cleared through its FULL height -- the classic
 -- breakout chimney -- so a formation can never roll as an unbroken slab and
@@ -179,8 +198,15 @@ function Swarm:init(args)
   --   cells_layout   : list of {dx, dy} offsets pre-computed by BallPit
   --                    (so the arena can vet the layout against the grid
   --                    before committing the spawn).
+  --   entry_dist     : how far ABOVE `y` to build the swarm, so it glides in
+  --                    from off screen instead of appearing (see ENTRY_SPEED).
   self.x_center    = self.x_center or gw/2
   self.y_top       = self.y or 24
+  -- `y` is where the top row SETTLES -- the slot the arena's placement test
+  -- reserved. Start the whole formation entry_dist above it and glide down.
+  self.entry_y     = self.y_top
+  self.entry_dist  = math.max(0, self.entry_dist or 0)
+  self.y_top       = self.y_top - self.entry_dist
   self.spacing_x   = self.spacing_x or 22
   self.spacing_y   = self.spacing_y or 14
   self.drift_speed = (self.drift or 4)*DRIFT_SPEED_MULT
@@ -227,10 +253,22 @@ function Swarm:update(dt)
   self.y_offset = self.y_offset + self.vy*dt
 
   -- Continuous downward drift -- suspended while the arena is frozen by the
-  -- freeze powerup (bricks hold their position; drift resumes on thaw).
+  -- freeze powerup (bricks hold their position; drift resumes on thaw). A swarm
+  -- that has not finished gliding in yet moves on the entry speed instead, which
+  -- decays into the drift over the last of the entry distance so there is no
+  -- step change when it arrives. Freeze seals the entry too: a formation caught
+  -- half in stops half in.
   local arena = main.current
   if not (arena and arena.frozen) then
-    self.y_top = self.y_top + self.drift_speed*dt
+    local remaining = self.entry_y - self.y_top
+    if remaining > 0 then
+      local ease  = self.entry_dist*ENTRY_EASE_FRAC
+      local k     = (ease > 0) and math.clamp(remaining/ease, 0, 1) or 0
+      local speed = self.drift_speed + (ENTRY_SPEED - self.drift_speed)*k
+      self.y_top  = math.min(self.entry_y, self.y_top + speed*dt)
+    else
+      self.y_top = self.y_top + self.drift_speed*dt
+    end
   end
 
   -- Reposition surviving bricks and track the lowest occupied y for the
@@ -271,6 +309,24 @@ function Swarm:update(dt)
     end
     self.dead = true
   end
+end
+
+
+-- Still gliding in from above the arena's top edge? Such a swarm is off screen
+-- (the play field is clipped at that edge -- see BallPit:clip_to_arena), so its
+-- bricks hold their fire and cannot be targeted by hero abilities: nothing the
+-- player cannot see should be shooting at them or soaking their shots.
+function Swarm:entering()
+  return self.y_top < self.entry_y
+end
+
+
+-- The y the arena's placement test has to reserve for this swarm. While it is
+-- still gliding in that is where it is GOING, not where it is -- otherwise a
+-- swarm spawned during another's entry would pass the overlap test against empty
+-- space and then settle straight into it.
+function Swarm:place_y()
+  return math.max(self.y_top, self.entry_y)
 end
 
 

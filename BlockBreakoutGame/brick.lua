@@ -251,6 +251,10 @@ function Brick:hold_fire()
   local arena = main.current
   if not arena or not arena.paddle then return false end
   if arena.frozen then return true end
+  -- Still gliding in from above the top edge: the brick is off screen (the play
+  -- field is clipped there -- see BallPit:clip_to_arena), and a shot from
+  -- something the player cannot see is not a threat they can read.
+  if self.swarm and self.swarm.entering and self.swarm:entering() then return true end
   -- Blank lockout: the player just took a hit and the blank swept the field.
   -- Nothing fires for the lockout so the wave that hit you can't instantly
   -- refill the space it cleared (see BallPit.fire_lock_t / the blank trigger
@@ -1094,13 +1098,17 @@ function Brick:die()
     end
   end
 
-  -- Drop XP after world step (Box2D is locked mid-collision).
-  local x, y, value = self.x, self.y, self.xp_value
-  arena.t:after(0, function()
-    if arena.main and arena.main.world then
-      XpOrb{group = arena.main, x = x, y = y, value = value}
-    end
-  end)
+  -- Drop XP after world step (Box2D is locked mid-collision). Only on a loadout
+  -- that still runs the orb economy -- everyone else levels on wave clears and
+  -- blocks drop nothing (BallPit:uses_xp_orbs).
+  if arena.uses_xp_orbs and arena:uses_xp_orbs() then
+    local x, y, value = self.x, self.y, self.xp_value
+    arena.t:after(0, function()
+      if arena.main and arena.main.world then
+        XpOrb{group = arena.main, x = x, y = y, value = value}
+      end
+    end)
+  end
   self.dead = true
 end
 

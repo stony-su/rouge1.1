@@ -50,10 +50,12 @@ local PADDLE_CORE_FRAC  = 0.68  -- of the loadout's BASE width, NOT of the widen
                                 -- the hurtbox with them. 0.68 of 36 = ~24.5px,
                                 -- exactly the core the x2 build had.
 
--- The Pinball rig is not part of the wing/core system at all (it has no core,
--- see core_half), so it keeps the earlier x2 rather than following the wings out
--- to x3: at triple length its bats would span nearly half the arena.
-local FLIPPER_LEN_MULT  = 2
+-- The Pinball rig plays by the same rules now: its bats are ghosted wings and its
+-- two pivot lamps are the core (see core_hit / draw_flipper_cores). It keeps its
+-- own length multiplier rather than following the bar out to x3 -- two bats plus
+-- a drain gap is already a wide shape, and at x2 the rig spanned a third of the
+-- arena, which left almost nowhere to miss. Cut to x1.5.
+local FLIPPER_LEN_MULT  = 1.5
 local WING_ALPHA        = 0.28  -- how ghosted the untouchable part is
 
 -- Aegis dome deploy / dissipate.
@@ -114,7 +116,7 @@ function Paddle:init(args)
 
   if self.flippers then
     local sig          = self.flipper_sig or {}
-    self.flipper_gap   = self.flipper_gap or 14
+    self.flipper_gap   = self.flipper_gap or 28
     self.flip_window   = self.flip_window or 0.16
     -- The Pinball rig has no bar to widen, so the multiplier goes into the bat
     -- length instead; build_flipper_rig then derives self.w from the geometry.
@@ -166,7 +168,7 @@ function Paddle:build_flipper_rig(scale)
   self.flipper_scale = scale or 1
   local len   = self.flipper_len*self.flipper_scale
   local thick = self.flipper_thick
-  local gap   = self.flipper_gap or 14
+  local gap   = self.flipper_gap or 28
   local tilt  = self.rest_tilt
   self.cur_len = len
   -- Logical span (gap + both bats) — the bullet hit-test, xp magnet and
@@ -203,18 +205,31 @@ end
 -- live flip animation: returns pivot (px,py), tip (tx,ty), the bat elevation
 -- angle and the 0..1 raise amount. The pivot is fixed outboard; the tip swings
 -- from a resting droop up to flip_up while a flip window is live.
-function Paddle:flipper_pose(side)
+--
+-- `raise_at` overrides the live animation with an explicit 0..1 raise, which is
+-- how flip_launch walks the bat's SWEPT arc rather than only its end pose.
+function Paddle:flipper_pose(side, raise_at)
   local ft    = (side == -1) and (self.flip_l_t or 0) or (self.flip_r_t or 0)
-  local raise = (self.flip_window > 0) and math.clamp(ft/self.flip_window, 0, 1) or 0
+  local raise = raise_at
+             or ((self.flip_window > 0) and math.clamp(ft/self.flip_window, 0, 1) or 0)
   local elev  = self.rest_tilt + (-self.flip_up - self.rest_tilt)*raise
   local len   = self.cur_len or self.flipper_len
-  local gap   = self.flipper_gap or 14
+  local gap   = self.flipper_gap or 28
   local pivx  = self.x + side*(gap/2 + len*math.cos(self.rest_tilt))
   local pivy  = self.y
   local tipx  = pivx + (-side*math.cos(elev))*len
   local tipy  = pivy + math.sin(elev)*len
   return pivx, pivy, tipx, tipy, elev, raise
 end
+
+
+-- How many poses along the flip arc the catch test samples (rest -> fully raised,
+-- inclusive). One is not enough: update sets flip_*_t to the full window BEFORE
+-- calling flip_launch, so a single sample was always the FULLY RAISED bat -- well
+-- clear of the drooping bat the ball was actually sitting on. The bat visibly
+-- swept through the ball and nothing happened. A real flipper hits everything it
+-- passes, so test the whole sweep and keep the closest touch.
+local FLIP_SWEEP_SAMPLES = 5
 
 
 -- A live flip kicks every ball resting on (or just above) that bat up and
@@ -225,12 +240,18 @@ end
 function Paddle:flip_launch(side)
   local arena = main.current
   if not (arena and arena.heroes) then return end
-  local pivx, pivy, tipx, tipy = self:flipper_pose(side)
   local catch_r = (self.flipper_thick or 5) + 15
   local hit_any = false
   for _, h in ipairs(arena.heroes) do
     if h and not h.dead and h.body and not h.stuck and not h.returning then
-      local d, t = point_segment_distance(h.x, h.y, pivx, pivy, tipx, tipy)
+      -- Closest approach of the ball to the bat anywhere along the sweep, plus
+      -- the position along the bat (t) at that pose -- t is what scales the pop.
+      local d, t = math.huge, 0
+      for i = 0, FLIP_SWEEP_SAMPLES - 1 do
+        local pivx, pivy, tipx, tipy = self:flipper_pose(side, i/(FLIP_SWEEP_SAMPLES - 1))
+        local sd, st = point_segment_distance(h.x, h.y, pivx, pivy, tipx, tipy)
+        if sd < d then d, t = sd, st end
+      end
       if d < catch_r + (h.r_size or 6) then
         local _, vy = h:get_velocity()
         if (vy or 0) > -60 then     -- don't re-fire a ball already flying up
@@ -487,15 +508,44 @@ end
 -- Multiplied into whatever is already set, and restored on the same path.
 local PHASED_ALPHA = 0.35
 
--- Half-width of the VULNERABLE core: the only part of the paddle enemy fire can
--- hit (see the paddle test in EnemyProjectile:update). Everything outside it is
--- wing -- solid to balls, transparent to bullets.
+-- Radius of one flipper PIVOT LAMP: the Pinball rig's core (see
+-- draw_flipper_cores). Deliberately bigger than the bolt draw_flipper puts under
+-- it -- the core is the one part of this rig that can be hurt, so it has to be
+-- the one part that is unmissable. Drawn and hit-tested off this same number, so
+-- growing the lamp grows the hurtbox with it and never lies about the trade.
+local FLIPPER_CORE_R = 7.5
+
+function Paddle:flipper_core_r()
+  return FLIPPER_CORE_R
+end
+
+
+-- Does a shot at world x (with radius r) strike the VULNERABLE core -- the only
+-- part of the paddle enemy fire can hit? Everything outside it is wing: solid to
+-- balls, transparent to bullets. Called from EnemyProjectile:update, which owns
+-- the vertical half of the test.
 --
--- The Pinball rig is the one exception: its span is a gap between two bats, so
--- the middle of it is the drain rather than a body, and shrinking the hurtbox to
--- "the centre" would put it exactly where nothing is. It keeps the full span.
+-- The Pinball rig is the one shape this can't answer with a single centred span:
+-- its middle is the drain, so the core is the two pivot bolts at the outboard
+-- ends of the bats instead -- two small circles, not one band.
+function Paddle:core_hit(px, r)
+  if self.flippers then
+    local cr = self:flipper_core_r()
+    for _, side in ipairs({-1, 1}) do
+      local pivx = self:flipper_pose(side, 0)
+      if math.abs(px - pivx) <= cr + r then return true end
+    end
+    return false
+  end
+  return math.abs(px - self.x) < self:core_half() + r
+end
+
+
+-- Half-width of the VULNERABLE core, for the loadouts whose core is one centred
+-- emblem on the bar. The Pinball rig answers with one bolt's radius -- its core
+-- is two of them, off at the ends, so only core_hit above can place them.
 function Paddle:core_half()
-  if self.flippers then return self.w/2 end
+  if self.flippers then return self:flipper_core_r() end
   -- Measured against the loadout's BASE width -- self.w divided back down by the
   -- multiplier -- rather than against the widened span. The wings are reach; the
   -- core is exposure, and the two must be free to move independently.
@@ -601,10 +651,75 @@ function Paddle:core_ngon(n, r, phase, squash)
 end
 
 
+-- The Pinball rig's core: a PIVOT LAMP at each bat's hinge -- machine hardware
+-- lit from inside, the two points enemy fire can hit and so the only two things
+-- on this rig drawn solid.
+--
+-- Every other loadout's core is one emblem sitting still on a bar. This one is a
+-- pair, and it is bolted to the thing the player actually operates, so it MOVES
+-- with the verb: the hex bolt and its slot CRANK round with the bat's live
+-- elevation, so a flip visibly turns the pivot, and the lamp floods white on the
+-- kick before settling back to a slow breath. Between flips it idles like the
+-- bulbs on the cabinet; on a flip it reads as a machine doing work.
+--
+-- Each opens with the same soft halo the other emblems sit in -- core_halo is
+-- hardwired to the paddle centre, so its rings are inlined here around the pivot.
+function Paddle:draw_flipper_cores()
+  local c = self.hfx.hit.f and fg[0] or self.color
+  local r = self:flipper_core_r()
+  local t = love.timer.getTime()
+  for _, side in ipairs({-1, 1}) do
+    local px, py, _, _, elev, raise = self:flipper_pose(side)
+    -- Seat.
+    for i = 3, 1, -1 do
+      graphics.circle(px, py, r + i*2.2, Color(c.r, c.g, c.b, 0.07*(4 - i)))
+    end
+    -- Lamp glow: a slow breath at rest (the two pivots offset so they don't
+    -- pulse in lockstep), flooding out past the housing through a flip.
+    local lamp = math.max(0.35 + 0.20*math.sin(t*2.4 + side*1.7), raise)
+    graphics.circle(px, py, r + 3.5*raise, Color(c.r, c.g, c.b, 0.10 + 0.30*lamp))
+    -- Housing: dark bore, bright rim, an inner ring that brightens with the lamp.
+    graphics.circle(px, py, r, Color(c.r*0.26, c.g*0.26, c.b*0.32, 0.94))
+    graphics.circle(px, py, r, c, 1)
+    graphics.circle(px, py, r - 2.2, Color(c.r, c.g, c.b, 0.28 + 0.42*lamp), 1)
+    -- Rim rivets, fixed to the housing so the crank below reads against them.
+    for i = 0, 5 do
+      local a = i*(math.pi/3) + math.pi/6
+      graphics.circle(px + math.cos(a)*(r - 1.1), py + math.sin(a)*(r - 1.1), 0.7,
+                      Color(c.r, c.g, c.b, 0.75))
+    end
+    -- The bolt head, turned by its own bat. elev swings ~53 degrees, safely
+    -- inside a hex's 60 degrees of symmetry, so the crank never looks like it
+    -- snapped back to where it started. -side mirrors it onto the right bat.
+    local spin = -side*elev
+    local hex  = {}
+    for i = 0, 5 do
+      local a = spin + i*(math.pi/3)
+      hex[#hex+1] = px + math.cos(a)*r*0.58
+      hex[#hex+1] = py + math.sin(a)*r*0.58
+    end
+    graphics.polygon(hex, Color(c.r*0.52, c.g*0.52, c.b*0.60, 1))
+    graphics.polygon(hex, Color(c.r, c.g, c.b, 0.85), 1)
+    -- Driver slot across the head, turning with it.
+    for i = 0, 1 do
+      local a = spin + i*(math.pi/2)
+      graphics.line(px - math.cos(a)*r*0.40, py - math.sin(a)*r*0.40,
+                    px + math.cos(a)*r*0.40, py + math.sin(a)*r*0.40,
+                    Color(c.r*0.18, c.g*0.18, c.b*0.24, 0.9), 1)
+    end
+    -- The filament: the ball's colour at rest, white-hot through the kick.
+    graphics.circle(px, py, r*0.30, Color(c.r, c.g, c.b, 0.55 + 0.45*lamp))
+    graphics.circle(px, py, r*0.15 + 1.1*raise, Color(1, 1, 1, 0.55 + 0.45*raise))
+  end
+end
+
+
 function Paddle:draw_core()
-  -- The Pinball rig has no core (see core_half): its middle is the drain. Draw
-  -- it solid instead of leaving it ghosted.
-  if self.flippers then self:draw_body() return end
+  -- The Pinball rig's middle is the drain, so its core sits at the ENDS: the two
+  -- pivot lamps are the whole hurtbox (see core_hit). Only they are stamped
+  -- solid; the bats stay ghosted wings from the pass before, same as every other
+  -- loadout's -- what is drawn solid is what can be hurt.
+  if self.flippers then self:draw_flipper_cores() return end
 
   local s = self.hfx.hit.x
   local c = self.hfx.hit.f and fg[0] or self.color
@@ -1382,7 +1497,7 @@ function Paddle.draw_preview(id, def, x, y)
     }, Paddle)
     if def.signature == 'flippers' then
       stub.flippers      = true
-      stub.flipper_gap   = (sig.gap or 14)*0.6
+      stub.flipper_gap   = (sig.gap or 28)*0.6
       stub.flip_window   = sig.flip_window or 0.16
       stub.flipper_len   = (sig.flipper_len or 34)*0.6
       stub.flipper_thick = math.max(3, (sig.flipper_thick or 5) - 1)

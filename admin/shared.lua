@@ -32,6 +32,29 @@ function off_screen(x, y, r)
 end
 
 
+-- ----- The breach-line fade -------------------------------------------------
+--
+-- Alpha for anything drawn in the PADDLE's half of the pit. Below the red dotted
+-- breach line is exactly where enemy fire converges on the paddle, and whatever
+-- the player's own side of the field is throwing down there -- balls, their
+-- aftershadows, hero shots -- sits on top of the bullets they have to read.
+--
+-- `floor_a` is the alpha once fully past the line; each caller picks its own (a
+-- ball body stays readable, its smear does not, a spellblade shard is nearly
+-- gone). Ramped over PIT_FADE_BAND rather than switched at the line: something
+-- crossing the boundary would otherwise flicker between two alphas, and the line
+-- is a soft warning, not a hard edge.
+PIT_FADE_BAND = 28   -- px below the line over which the fade comes in
+
+function pit_fade_at(y, floor_a)
+  local arena = main.current
+  if not (arena and arena.breach_line_y) then return 1 end
+  local d = y - arena:breach_line_y()      -- >0 = below the line (y is DOWN)
+  if d <= 0 then return 1 end
+  return 1 - (1 - floor_a)*math.clamp(d/PIT_FADE_BAND, 0, 1)
+end
+
+
 -- ----- Enemy feedback knobs -------------------------------------------------
 --
 -- Enemy feedback is qualitatively different from the player's: it is CONSTANT

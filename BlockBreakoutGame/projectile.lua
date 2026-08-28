@@ -313,6 +313,14 @@ function Projectile:draw()
 end
 
 
+-- Alpha a spellblade shard keeps once it is fully below the breach line. Far
+-- lower than anything else that fades down there (see pit_fade_at in shared.lua):
+-- the spellblade fires constantly and each shard drags a spiral trail behind it,
+-- so a pack of them in the paddle's half is the single worst thing on screen for
+-- reading incoming bullets. Left as a ghost rather than hidden outright, so the
+-- player can still see where their shots went.
+local SPELLBLADE_PIT_ALPHA = 0.06
+
 -- The spellblade shard: a spinning arcane blade with a white-hot core and a
 -- curved afterimage trail tracing its spiral path. Drawn in world space (the
 -- trail samples are world positions) and spinning on its own angle (self.spin),
@@ -322,11 +330,18 @@ function Projectile:draw_spellblade_shard()
   -- Dissolve factor (1 -> 0 over the last fade_dur of life): scales every alpha
   -- and shrinks the blade so the shard melts away instead of popping out.
   local f = self.fade or 1
-  -- Curved trail (newest first): fading dots along the spiral path.
+  -- Everything below runs through the breach-line fade. Restored on the single
+  -- exit at the bottom of the function.
+  local prev = graphics.alpha_mult
+  -- Curved trail (newest first): fading dots along the spiral path. Each sample
+  -- fades by its OWN y: a spiral straddling the line thins only on the half of
+  -- the curl that is actually down in the paddle's half.
   for i, p in ipairs(self.btrail or {}) do
     local k = 1 - (i - 1)*0.15
+    graphics.alpha_mult = prev*pit_fade_at(p.y, SPELLBLADE_PIT_ALPHA)
     graphics.circle(p.x, p.y, 2.4*k*f, Color(c.r, c.g, c.b, (0.5 - (i - 1)*0.075)*f))
   end
+  graphics.alpha_mult = prev*pit_fade_at(self.y, SPELLBLADE_PIT_ALPHA)
   -- Soft glow.
   graphics.circle(self.x, self.y, 4.5*f, Color(c.r, c.g, c.b, 0.28*f))
   -- A 4-point blade: one long axis (the blade) and one short (the crossguard);
@@ -341,14 +356,21 @@ function Projectile:draw_spellblade_shard()
                 self.x + math.cos(pa)*cg, self.y + math.sin(pa)*cg, Color(c.r, c.g, c.b, f), 1.5)
   -- White-hot core.
   graphics.circle(self.x, self.y, 2*f, Color(1, 1, 1, 0.9*f))
+  graphics.alpha_mult = prev
 end
 
 
 -- Damage this projectile deals to `target`: a fraction of the target's MAX HP
 -- when max_hp_frac is set and the target tracks one, otherwise the flat dmg.
 -- (Brick and Boss both carry max_hp; EnemyCritter doesn't, so it takes flat dmg.)
+--
+-- The BOSS is the one exception. Percent-max-HP shots are budgeted against a
+-- BRICK's pool; the boss carries two orders of magnitude more, so the same
+-- fraction would delete it outright -- the archer's 100% bolt in a single hit.
+-- Against the boss the shot pays its flat damage instead. (The engineer's turret
+-- used to come through here too; its bolts are flat damage now.)
 function Projectile:damage_to(target)
-  if self.max_hp_frac > 0 and target.max_hp then
+  if self.max_hp_frac > 0 and target.max_hp and not (Boss and target.is and target:is(Boss)) then
     return target.max_hp*self.max_hp_frac
   end
   return self.dmg

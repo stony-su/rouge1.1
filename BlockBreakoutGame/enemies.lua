@@ -100,12 +100,15 @@ function EnemyCritter:die()
   local arena = main.current
   spawn_burst(arena.effects, self.x, self.y, self.color, 5, 60, 130)
   enemy_fx_sound(critter2, 0.25, random:float(0.95, 1.1))
-  local x, y, v = self.x, self.y, self.xp_value
-  arena.t:after(0, function()
-    if arena.main and arena.main.world then
-      XpOrb{group = arena.main, x = x, y = y, value = v}
-    end
-  end)
+  -- Orb only on a loadout that still runs the orb economy (BallPit:uses_xp_orbs).
+  if arena.uses_xp_orbs and arena:uses_xp_orbs() then
+    local x, y, v = self.x, self.y, self.xp_value
+    arena.t:after(0, function()
+      if arena.main and arena.main.world then
+        XpOrb{group = arena.main, x = x, y = y, value = v}
+      end
+    end)
+  end
   self.dead = true
 end
 
@@ -225,16 +228,15 @@ function EnemyProjectile:init(args)
     end
   end
 
-  -- Optional self-destruct timer so short-range bullet-hell shots don't pile
-  -- up forever when fired away from the paddle.
-  if self.life then
-    self.t:after(self.life, function() self:begin_despawn() end)
-  end
+  -- No self-destruct timer. Enemy fire is culled by GEOMETRY only -- it lives
+  -- until it actually leaves the playfield (see the cull in update). A clock
+  -- deleted shots in mid-flight over open arena, which reads as the game taking
+  -- back a threat the player had already committed to dodging.
 end
 
--- Burn-out. A shot that reached the end of its life, or was shot down by a
--- ball, used to blink off in a single frame -- which reads as a rendering
--- glitch rather than "that one is gone". It now leaves the FIGHT immediately
+-- Burn-out. A shot that was spent -- shot down, or swept up by a blank -- used to
+-- blink off in a single frame, which reads as a rendering glitch rather than
+-- "that one is gone". It now leaves the FIGHT immediately
 -- (update bails before every hit test below, so it cannot strike the paddle,
 -- be parried, or damage a brick) while continuing to drift and draw for
 -- despawn_dur, fading out under a ring that pushes off it.
@@ -242,8 +244,9 @@ end
 -- The body is deliberately left active: enemy shots collide with nothing at
 -- the Box2D level anyway (the paddle hit is a manual sweep in update), so a
 -- burning-out shot coasting on its last heading is free and looks better than
--- one that freezes. Idempotent -- the life timer, take_damage and a stray
--- caller can all reach it.
+-- one that freezes. Idempotent -- take_damage, the blank sweep and a stray caller
+-- can all reach it. (Flying out of the playfield is NOT this: that path just
+-- clears the shot, since there is nothing on screen left to animate.)
 function EnemyProjectile:begin_despawn(dur)
   if self.expiring or self.dead then return end
   self.expiring    = true
@@ -336,6 +339,12 @@ end
 -- clears the screen.
 local BLANK_LOCK = 1.0
 
+-- Margin above the arena's top edge before a shot counts as having flown past the
+-- spawn line. Enemies enter a few px below y1, so a shot has to clear the whole
+-- top of the playfield -- not merely be level with the front rank -- before it is
+-- culled for leaving.
+local SPAWN_CULL_PAD = 16
+
 local function trigger_blank()
   local arena = main.current
   if not (arena and arena.paddle) then return end
@@ -393,11 +402,17 @@ function EnemyProjectile:update(dt)
     end
   end
 
-  -- Off-SCREEN cleanup. Enemy fire is filtered out of colliding with the arena
-  -- walls (see the fixture mask in init), so a shot that reaches an edge flies
-  -- straight THROUGH it and keeps going until it is genuinely out of sight --
-  -- see off_screen in shared.lua for why the canvas, not the arena, is the line.
-  if off_screen(self.x, self.y, self.r_size) then self.dead = true end
+  -- Cull. A shot dies when it FLIES OUT, never on a clock: up past the spawn line
+  -- at the top of the arena (where the swarms and the boss enter -- there is
+  -- nothing above it left to hit), or out of sight on any other edge. Enemy fire
+  -- is filtered out of colliding with the arena walls (see the fixture mask in
+  -- init), so a shot that reaches a side or the bottom flies straight THROUGH and
+  -- keeps going until it is genuinely gone -- see off_screen in shared.lua for
+  -- why the canvas, not the arena, is the line there.
+  local spawn_y = ((arena and arena.y1) or 0) - SPAWN_CULL_PAD
+  if self.y + self.r_size < spawn_y or off_screen(self.x, self.y, self.r_size) then
+    self.dead = true
+  end
   -- Paddle hit. Swept vertical test over the segment the bullet travelled this
   -- frame, instead of the old "anywhere below paddle.y - 4" column — that acted
   -- like an infinitely tall hitbox under the paddle, so lifting the paddle in
@@ -412,9 +427,11 @@ function EnemyProjectile:update(dt)
   -- instead of striking a paddle that merely happens to take no damage.
   if  not self.reflected and not arena.paddle.phased
   -- CORE only: the paddle is wider than its hurtbox now, and the ghosted wings
-  -- let a shot pass straight through (Paddle:core_half). Tested against what is
-  -- actually drawn solid, so the transparency is not decorative.
-  and math.abs(self.x - arena.paddle.x) < arena.paddle:core_half() + self.r_size
+  -- let a shot pass straight through (Paddle:core_hit). Tested against what is
+  -- actually drawn solid, so the transparency is not decorative. The Pinball rig
+  -- answers with two circles at the bat ends rather than one centred band, which
+  -- is why this asks the paddle instead of measuring the span itself.
+  and arena.paddle:core_hit(self.x, self.r_size)
   and p_yhi >= arena.paddle.y - arena.paddle.h/2
   and p_ylo <= arena.paddle.y + arena.paddle.h/2 then
     local sig    = arena.run_mods and arena.run_mods.signature
@@ -1245,11 +1262,9 @@ function Boss:fire(opts)
   if opts.x == nil then opts.x = self.x end
   if opts.y == nil then opts.y = self.y end
   if opts.unbreakable == nil then opts.unbreakable = true end
-  -- Boss bullets must survive long enough to cross the tall (~600px) arena and
-  -- then despawn at the edge via EnemyProjectile's off-screen cleanup, instead
-  -- of self-destructing mid-flight. The per-attack `life` values were far
-  -- shorter than the slow bullets' arena-crossing time, so enforce a floor.
-  opts.life = math.max(opts.life or 0, 16)
+  -- No `life` on boss bullets (or any other enemy shot): they are culled when
+  -- they leave the playfield, which is what the floor this used to clamp was
+  -- approximating anyway -- the slow orbs never reached it before flying out.
   return EnemyProjectile(opts)
 end
 
@@ -1296,7 +1311,7 @@ function Boss:attack_spiral()
     self.t:after(i*0.1, function()
       -- Boss spiral: slow, matches the spiraler enemy's bullet tempo so both
       -- attack types read as "swirling, lingering" threats.
-      self:fire{kind = 'boss_orb', angle = base + dir*i*0.42, speed = 55, r_size = 3.2, life = 4}
+      self:fire{kind = 'boss_orb', angle = base + dir*i*0.42, speed = 55, r_size = 3.2}
     end)
   end
 end
@@ -1314,8 +1329,8 @@ function Boss:attack_spiral_double()
   local base = random:float(0, 2*math.pi)
   for i = 0, 17 do
     self.t:after(i*0.08, function()
-      self:fire{kind = 'boss_orb', angle = base + i*0.34,           speed = 52, r_size = 3, life = 4.5}
-      self:fire{kind = 'boss_orb', angle = base + math.pi - i*0.34, speed = 52, r_size = 3, life = 4.5}
+      self:fire{kind = 'boss_orb', angle = base + i*0.34,           speed = 52, r_size = 3}
+      self:fire{kind = 'boss_orb', angle = base + math.pi - i*0.34, speed = 52, r_size = 3}
     end)
   end
 end
@@ -1337,7 +1352,7 @@ function Boss:attack_flower()
     self.t:after(i*0.085, function()
       for arm = 0, arms - 1 do
         local a = base + dir*i*0.30 + arm*(2*math.pi/arms)
-        self:fire{kind = 'star', angle = a, speed = 58, r_size = 3, life = 4.5}
+        self:fire{kind = 'star', angle = a, speed = 58, r_size = 3}
       end
     end)
   end
@@ -1379,7 +1394,7 @@ function Boss:attack_snipe()
       if not (arena.main and arena.main.world and not self.dead) then return end
       enemy_shot_sound(0.3, 1.15)
       local a = math.atan2(arena.paddle.y - self.y, arena.paddle.x - self.x)
-      self:fire{kind = 'dart', angle = a, speed = 150, dmg = 2, r_size = 3.4, life = 5}
+      self:fire{kind = 'dart', angle = a, speed = 150, dmg = 2, r_size = 3.4}
     end)
   end
 end
@@ -1402,9 +1417,9 @@ function Boss:attack_ring()
     for i = 0, 17 do
       local a = i*(2*math.pi/18)
       -- Medium speed so players can slip between adjacent shots.
-      self:fire{kind = 'boss_orb', angle = a, speed = 80, life = 4}
+      self:fire{kind = 'boss_orb', angle = a, speed = 80}
       if self.phase >= 3 then
-        self:fire{kind = 'boss_orb', angle = a + math.pi/18, speed = 55, life = 5}
+        self:fire{kind = 'boss_orb', angle = a + math.pi/18, speed = 55}
       end
     end
   end)
@@ -1446,7 +1461,7 @@ function Boss:attack_wall()
     for i = 0, n - 1 do
       if not is_gap(i) then
         local px = math.lerp(i/(n - 1), x1, x2)
-        self:fire{x = px, y = y0, kind = 'diamond', angle = math.pi/2, speed = 64, life = 8}
+        self:fire{x = px, y = y0, kind = 'diamond', angle = math.pi/2, speed = 64}
       end
     end
   end)
@@ -1466,7 +1481,7 @@ function Boss:attack_homing()
     enemy_shot_sound(0.3, 0.9)
     for _, off in ipairs({-0.5, 0, 0.5}) do
       self:fire{kind = 'comet', angle = math.pi/2 + off, speed = 60, r_size = 3.4,
-                life = 7, homing = true, homing_turn = 0.55}
+                homing = true, homing_turn = 0.55}
     end
   end)
 end
@@ -1744,13 +1759,16 @@ function Boss:die()
     for _ = 1, BOSS_PADDLE_LEVELS do arena:level_up() end
   end)
 
-  -- Big XP drop so the player gets a meaningful payoff and likely level-up.
-  local x, y, v = self.x, self.y, self.xp_value
-  arena.t:after(0, function()
-    if arena.main and arena.main.world then
-      XpOrb{group = arena.main, x = x, y = y, value = v}
-    end
-  end)
+  -- Big XP drop, on the loadouts that still collect XP (BallPit:uses_xp_orbs).
+  -- The real payout is the levels granted above, which every loadout gets.
+  if arena.uses_xp_orbs and arena:uses_xp_orbs() then
+    local x, y, v = self.x, self.y, self.xp_value
+    arena.t:after(0, function()
+      if arena.main and arena.main.world then
+        XpOrb{group = arena.main, x = x, y = y, value = v}
+      end
+    end)
+  end
 
   arena.boss_defeated = true
   self.dead = true
