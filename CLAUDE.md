@@ -125,6 +125,7 @@ after the boss; no save/meta-progression yet.
 | Boss HP / phases / attacks | `enemies.lua` `Boss` |
 | Powerup kinds + feel | `powerup.lua` `Powerup.KINDS`, init / deflect |
 | Paddle size / dodge band / bounce angle | `paddle.lua` |
+| Music rotation / crossfade / ESC duck | `ballpit.lua` `MUSIC_*` / `tick_music` |
 | Title screen backglass (marquee, chase, reel, lanes) | `ballpit.lua` — the `-- ----- Title screen` block |
 | Pinball cabinet hardware (bulb/panel/rail/bumper/target/reel) | `paddles.lua` — `cab_*`, exported as `PADDLES.cab` |
 
@@ -246,6 +247,10 @@ anchor is shared.
 - The user edits files concurrently and a linter touches them, so **line numbers shift**. Re-grep
   for anchors before editing; don't trust cached line numbers.
 - `engine/sound.lua` is a stub; audio goes through `engine/external/ripple.lua` (sfx/music tags).
+  Note ripple's OWN fades (`play{fadeDuration=}` / `stop(fade)`) are DEAD here — nothing
+  in the engine calls `Sound:update(dt)`, so `_fadeVolume` never advances and a faded
+  sound just stays silent. Ramp `instance.volume` yourself (the music director in
+  `ballpit.lua` does; see `tick_music`).
 - Git: branch off `main` before committing; **commit/push only when asked**; end commit messages
   with the `Co-Authored-By` trailer.
 </content>

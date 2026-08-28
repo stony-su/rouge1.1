@@ -83,7 +83,11 @@ function init()
   --
   -- Long tracks stream from disk ('stream' mode) instead of decoding into
   -- RAM up-front, so big files don't bloat the process.
-  local m = {tags = {music}, loop = true}
+  -- loop = false: looping is the music director's job now (ballpit.lua
+  -- music_init / tick_music). It plays a track THROUGH and crossfades into a
+  -- different one, so a source that loops itself would never end and never
+  -- hand over.
+  local m = {tags = {music}, loop = false}
   songs = {}
   if love.filesystem.getInfo('assets/music') then
     for _, name in ipairs(love.filesystem.getDirectoryItems('assets/music')) do

@@ -483,6 +483,153 @@ end
 -- Removed - tutorial functionality has been deleted from the codebase.
 
 
+-- ----- Music director -------------------------------------------------------
+--
+-- The soundtrack used to be a single randomly-picked track on an infinite loop,
+-- so a long run sat on the same two minutes forever. It now plays a track
+-- THROUGH and crossfades into a different one, and it ducks out while the ESC
+-- menu is up.
+--
+-- Everything goes through one place. `voices` holds the live track plus however
+-- many are still fading out; each voice carries its own target gain and ramp
+-- rate, and tick_music is the ONLY thing that writes a source volume. That is
+-- what lets a track change, the ESC duck and a restart overlap without three
+-- bits of code fighting over the same source.
+--
+-- The handover is scheduled off the track's own length (so it lands on the
+-- ending rather than cutting a track off mid-phrase). Streamed sources don't
+-- always know how long they are, so a play-window timer and an "it stopped on
+-- its own" watchdog both back that up -- the channel must never fall silent
+-- because one mp3 had a bad header.
+local MUSIC_VOL       = 0.45   -- gain of whichever track is currently "the" track
+local MUSIC_FADE      = 3.0    -- seconds of overlap on a track change
+local MUSIC_BOOT_FADE = 1.5    -- ...and on the first track of a run
+local MUSIC_MENU_FADE = 0.35   -- seconds to duck out / back in for the ESC menu
+-- Fallback play window, used only when the source can't report a usable
+-- duration. Long enough that a switch still feels like a track change.
+local MUSIC_MIN_PLAY  = 90
+local MUSIC_MAX_PLAY  = 150
+
+
+-- Fresh channel for a run. Hard-stops anything left over so a restart can't
+-- stack tracks on top of each other (the old bug this replaces).
+function BallPit:music_init()
+  if self.music then
+    for _, v in ipairs(self.music.voices) do v.inst:stop() end
+  end
+  self.music = {voices = {}, live = nil, idx = nil, played = 0,
+                switch_at = nil, duck = 1, paused = false}
+  if songs and #songs > 0 then
+    self:music_start(random:int(1, #songs), MUSIC_BOOT_FADE)
+  end
+end
+
+
+-- Bring track `idx` up over `fade` seconds and make it the live one.
+function BallPit:music_start(idx, fade)
+  local m   = self.music
+  local snd = songs and songs[idx]
+  if not (m and snd) then return end
+  fade = math.max(0.01, fade or MUSIC_FADE)
+
+  -- loop = false is the whole point: a track that ENDS is what hands over. The
+  -- watchdog below catches an end we mis-timed.
+  local ok, inst = pcall(function() return snd:play{volume = 0, loop = false} end)
+  if not (ok and inst) then return end
+
+  local v = {inst = inst, vol = 0, target = MUSIC_VOL, rate = MUSIC_VOL/fade}
+  table.insert(m.voices, v)
+  m.live, m.idx, m.played = v, idx, 0
+
+  -- Schedule the handover just before the end of the track. A streamed source
+  -- with a bad header reports 0 or -1, so anything implausible falls back to a
+  -- random play window rather than switching instantly forever.
+  local dur = 0
+  local okd, d = pcall(function() return inst._source:getDuration() end)
+  if okd and type(d) == 'number' then dur = d end
+  if dur > MUSIC_FADE + 10 then
+    m.switch_at = dur - MUSIC_FADE
+  else
+    m.switch_at = random:float(MUSIC_MIN_PLAY, MUSIC_MAX_PLAY)
+  end
+end
+
+
+-- Crossfade to a DIFFERENT track. With only one track installed there is
+-- nothing to cross to, so it re-enters the same one -- still softer than the
+-- hard seam of a loop point.
+function BallPit:music_next(fade)
+  local m = self.music
+  if not m or not songs or #songs == 0 then return end
+  fade = fade or MUSIC_FADE
+  if m.live then
+    m.live.target = 0
+    m.live.rate   = MUSIC_VOL/math.max(0.01, fade)
+    m.live        = nil
+  end
+  local idx = m.idx or 1
+  if #songs > 1 then
+    repeat idx = random:int(1, #songs) until idx ~= m.idx
+  end
+  m.switch_at = nil
+  self:music_start(idx, fade)
+end
+
+
+-- Real-time tick, driven from the very top of BallPit:update so it keeps
+-- running behind the title screen, the ESC menu, the draft and game over.
+function BallPit:tick_music(dt)
+  local m = self.music
+  if not m then return end
+
+  -- ---- ESC duck ----
+  -- Driven off the menu STATE rather than the key press: ESC is handled in two
+  -- places (title and in-run) and the menu can also be closed by confirming a
+  -- row, so reading the flag is the only way the duck can't desync from it.
+  local want  = self.settings_open and 0 or 1
+  local drate = dt/MUSIC_MENU_FADE
+  if m.duck < want then m.duck = math.min(want, m.duck + drate)
+  else                  m.duck = math.max(want, m.duck - drate) end
+
+  -- ---- ramp + apply every voice ----
+  for i = #m.voices, 1, -1 do
+    local v    = m.voices[i]
+    local step = dt*v.rate
+    if v.vol < v.target then v.vol = math.min(v.target, v.vol + step)
+    else                     v.vol = math.max(v.target, v.vol - step) end
+    v.inst.volume = v.vol*m.duck
+    -- A voice that has finished fading out is done: stop the source and drop
+    -- it, or a long run leaves a pile of silent streams decoding in the dark.
+    if v.target <= 0 and v.vol <= 0 then
+      v.inst:stop()
+      table.remove(m.voices, i)
+      if m.live == v then m.live = nil end
+    end
+  end
+
+  -- ---- ESC = stop, not "play at zero" ----
+  -- Once the duck has bottomed out, actually pause the sources. Pausing rather
+  -- than stopping keeps each track's position, so closing the menu picks the
+  -- music back up where it left off instead of restarting it.
+  local silent = (m.duck <= 0)
+  if silent ~= m.paused then
+    m.paused = silent
+    for _, v in ipairs(m.voices) do
+      if silent then v.inst:pause() else v.inst:resume() end
+    end
+  end
+
+  -- ---- handover ----
+  local live = m.live
+  if not live or self.settings_open then return end   -- a paused game doesn't burn the track
+  m.played = m.played + dt
+  -- isStopped is only trusted after the source has had a moment to actually
+  -- start, so the first frame of a track can't be read as "it already ended".
+  local ended = (m.played > 1) and live.inst:isStopped()
+  if ended or (m.switch_at and m.played >= m.switch_at) then self:music_next() end
+end
+
+
 function BallPit:on_enter()
   self:reset_run()
   -- Boot: the backglass is up. The run is built so the title's rule has a real
@@ -493,18 +640,12 @@ function BallPit:on_enter()
     self.t:cancel('spawn_brick')
     if self.paddle then self.paddle.hidden = true end
   end
-  -- Pick a random music track on loop. The list is auto-discovered from
-  -- assets/music/ at boot (see main.lua). If the folder is empty, songs
-  -- will be empty and the music channel stays silent — gameplay is
-  -- unaffected. Stop any previous instance so restarts don't stack
-  -- tracks on top of each other.
-  if self.song_instance then self.song_instance:stop() end
-  if songs and #songs > 0 then
-    local pick = songs[random:int(1, #songs)]
-    self.song_instance = pick:play{volume = 0.45, loop = true}
-  else
-    self.song_instance = nil
-  end
+  -- Kick the soundtrack off. It is no longer one track looping forever: the
+  -- director (music_init / tick_music) plays a track through and crossfades
+  -- into a different one, and ducks out while the ESC menu is up. The list is
+  -- auto-discovered from assets/music/ at boot (see main.lua) -- an empty
+  -- folder just leaves the music channel silent, gameplay is unaffected.
+  self:music_init()
 end
 
 
@@ -1281,6 +1422,11 @@ end
 
 
 function BallPit:update(dt)
+  -- The soundtrack runs on real time and ahead of every early return below:
+  -- it has to keep crossfading (and ducking for the ESC menu) while the title
+  -- is up, while the game is paused, and through game over.
+  self:tick_music(dt)
+
   -- Terminal always ticks first, at real-time dt. The toggle key fires here
   -- regardless of pause / game-over / upgrade state, and while the terminal
   -- is open we suspend gameplay entirely (no physics, no swarm drift, no
@@ -3108,9 +3254,13 @@ function BallPit:draw_hud()
 
   self:draw_combo_meter()
 
-  -- Level + wave + score.
-  graphics.print('Lv ' .. self.level, pixul_font, self.x1 + 4, self.y2 + 4, 0, 1, 1, 0, 0, fg[0])
-  graphics.print('Wave ' .. self.wave, pixul_font, (self.x1 + self.x2)/2 - 18, self.y2 + 4, 0, 1, 1, 0, 0, fg[0])
+  -- Level + run clock. The wave number used to be printed here too, but the wave
+  -- track at the top of the screen names it now -- so this corner prints whichever
+  -- of the two the track ISN'T showing (it reads LV, not WAVE, on the orb
+  -- loadouts; see draw_wave_bar). Never a duplicate, and neither number goes
+  -- missing.
+  local corner = self:uses_xp_orbs() and ('Wave ' .. self.wave) or ('Lv ' .. self.level)
+  graphics.print(corner, pixul_font, self.x1 + 4, self.y2 + 4, 0, 1, 1, 0, 0, fg[0])
   graphics.print('Time ' .. math.floor(self.run_time), pixul_font, self.x2 - 50, self.y2 + 4, 0, 1, 1, 0, 0, fg[0])
 
   -- Hero roster: a vertical column tucked into the left margin (outside the
