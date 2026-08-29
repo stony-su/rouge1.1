@@ -771,6 +771,7 @@ function BallPit:reset_run()
   -- Wave-track presentation state (see tick_wave_bar); rebuilt on first tick so
   -- a restart never inherits the last run's fill.
   self.wave_bar      = nil
+  self.boss_bar      = nil   -- ...and the wave-10 core readout (see tick_boss_bar)
   self.boss          = nil
   self.boss_defeated = false
   -- Set while wave 9 has elapsed but the arena still has live blocks; holds the
@@ -2760,17 +2761,16 @@ end
 --
 -- Three things do the talking, and none of them are things an XP tube does:
 --   * a LABEL naming what is being counted (and changing when that changes --
---     BOSS on wave 10, CLEAR while wave 9 drains, LV on the orb loadouts, which
---     really are still filling with XP and should not pretend otherwise),
+--     CLEAR while wave 9 drains, LV on the orb loadouts, which really are still
+--     filling with XP and should not pretend otherwise),
 --   * NOTCHES cutting the track into chunks, so it answers "how much of this
 --     wave is behind me" instead of "how full is a bar", and each chunk lands
 --     as a visible tick when the fill crosses it,
 --   * an END MARKER for what finishing it gets you -- chevrons for the next
---     wave, a boss diamond when the boss is what is waiting (wave 9's drain and
---     the boss fight itself).
+--     wave, a boss diamond on wave 9 when what is waiting at the end of it is
+--     the boss fight.
 local WAVE_BAR_H     = 7    -- track height, matching the Vampire vial's
 local WAVE_BAR_SEGS  = 10   -- notches on a timed wave
-local WAVE_BOSS_SEGS = 3    -- ...one per boss phase on the boss wave
 local WAVE_LABEL_GAP = 7    -- px between the label and the track
 local WAVE_END_W     = 15   -- reserved at the right for the end-of-wave marker
 
@@ -2779,21 +2779,14 @@ local WAVE_END_W     = 15   -- reserved at the right for the end-of-wave marker
 -- many notches the track should be cut into. Modes:
 --   'xp'   orb loadouts (Terrorist): the level is still bought with orbs, so
 --          the bar stays an XP bar and its label says so.
---   'boss' wave 10: the wave ends on the boss's DEATH, not on a clock (its
---          duration is a placeholder 999), so the honest measure of progress is
---          the boss's missing HP -- cut into its three phases.
 --   'time' every other wave: the wave clock, which is what pays the draft.
+-- Wave 10 never reaches here -- the boss readout takes the whole strip (see
+-- draw_boss_bar), because on that wave the only progress worth drawing is the
+-- core coming apart.
 -- Pure read of state, so the tick and the draw can both call it freely.
 function BallPit:wave_progress()
   if self:uses_xp_orbs() then
     return math.clamp(self.xp/self.xp_to_next, 0, 1), 'xp', WAVE_BAR_SEGS
-  end
-  if self.wave_cfg and self.wave_cfg.boss then
-    local b = self.boss
-    if b and not b.dead and (b.max_hp or 0) > 0 then
-      return math.clamp(1 - b.hp/b.max_hp, 0, 1), 'boss', WAVE_BOSS_SEGS
-    end
-    return (self.boss_defeated and 1 or 0), 'boss', WAVE_BOSS_SEGS
   end
   -- Wave 9 holds past its timer while the arena drains before the boss; the
   -- clamp parks the bar full there, which is exactly what is happening.
@@ -2806,6 +2799,8 @@ end
 -- contract as tick_combo) so the bar animates identically however often draw
 -- runs, and so the notch ticks fire exactly once each.
 function BallPit:tick_wave_bar(dt)
+  -- Wave 10 has no track: the boss readout takes the strip (see tick_boss_bar).
+  if self:boss_bar_active() then return self:tick_boss_bar(dt) end
   local w = self.wave_bar
   if not w then
     w = {disp = 0, vel = 0, flash = 0, pop = 0, seg = 0, seg_pop = 0, wave = self.wave}
@@ -2843,6 +2838,8 @@ end
 -- the HP readout took) and `x1` where it must stop (the combo meter's reserve).
 -- Reads ONLY state pre-computed by tick_wave_bar, so it stays a pure painter.
 function BallPit:draw_wave_bar(x0, x1)
+  -- Wave 10 replaces the track outright with THE PRISM CORE's health.
+  if self:boss_bar_active() then return self:draw_boss_bar(x0, x1) end
   local w = self.wave_bar
   if not w then return end
   local _, mode, segs = self:wave_progress()
@@ -2856,8 +2853,6 @@ function BallPit:draw_wave_bar(x0, x1)
   local label, lcol = 'WAVE ' .. self.wave, fg_alt[0]
   if mode == 'xp' then
     label, lcol = 'LV ' .. self.level, blue[0]
-  elseif mode == 'boss' then
-    label, lcol = 'BOSS', red[0]
   elseif self.awaiting_boss then
     label, lcol = 'CLEAR', yellow[0]
   end
@@ -2882,10 +2877,6 @@ function BallPit:draw_wave_bar(x0, x1)
   local base
   if mode == 'xp' then
     base = blue[0]
-  elseif mode == 'boss' then
-    -- The live boss tint, so the track shifts red -> orange -> purple with the
-    -- phase it is counting down.
-    base = (self.boss and self.boss.color) or red[0]
   else
     base = yellow2[0]
   end
@@ -2934,7 +2925,7 @@ function BallPit:draw_wave_bar(x0, x1)
   -- as the fill closes on it.
   local mx   = tx0 + tw + 7
   local near = math.clamp((w.disp - 0.55)/0.45, 0, 1)
-  if mode == 'boss' or (mode ~= 'xp' and self.wave == 9) then
+  if mode ~= 'xp' and self.wave == 9 then
     local p = 0.55 + 0.45*math.sin(t*5)
     local a = 0.35 + 0.65*p*(0.35 + 0.65*near)
     graphics.polygon({mx, cy - 5, mx + 4, cy, mx, cy + 5, mx - 4, cy},
@@ -2953,6 +2944,369 @@ function BallPit:draw_wave_bar(x0, x1)
   if w.flash > 0.01 then
     graphics.rectangle(cx, cy, tw + 4, h + 4, (h + 4)/2, (h + 4)/2,
                        Color(1, 1, 1, 0.45*w.flash))
+  end
+end
+
+
+-- ----- Boss core readout ----------------------------------------------------
+--
+-- Wave 10 takes the wave track away and puts THE PRISM CORE's health in its
+-- place, so the top strip always answers the one question that matters. The old
+-- flat red bar inside the arena is gone (it used to be drawn by Boss:draw).
+--
+-- It DEPLETES: the crystal is whole at the start of the fight and the fracture
+-- eats leftward into it. Everything you have broken off comes back as split
+-- light -- the drained half is not empty, it is the spectrum the core has been
+-- shattered into, and it widens as the fight goes on.
+--
+-- Every shape shares one slanted plane (BOSS_BAR_SKEW), so the casing, the
+-- facets, the phase cuts and the fracture all read as cuts through the same
+-- piece of glass rather than a stack of rectangles.
+--
+-- What each phase changes, beyond the colour tween red -> orange -> purple:
+--   * the facets subdivide (6 -> 10 -> 16), so the crystal visibly gets finer
+--     and more fragile,
+--   * the specular sweep runs faster,
+--   * the phase glyph gains a side (triangle -> diamond -> hexagon) and spins
+--     faster, so the phase is readable from the shape alone,
+--   * phase 3 adds live cracks across the whole bar.
+-- The transition itself fires a squashed polygon shockwave out of the cut that
+-- was just crossed, a white wash over the bar and a prism-coloured shard burst.
+local BOSS_BAR_H       = 8             -- crystal height
+local BOSS_BAR_SKEW    = 3             -- px the top edge leads the bottom by
+local BOSS_FACETS      = {6, 10, 16}   -- facet columns, per phase
+local BOSS_PHASE_SIDES = {3, 4, 6}     -- phase glyph: triangle, diamond, hexagon
+local BOSS_SPEC_SPEED  = {38, 64, 108} -- specular sweep px/s, per phase
+local BOSS_GHOST_LAG   = 0.22          -- fraction of the fracture gap still there after 1s
+local BOSS_FX_MAX      = 44            -- hard cap on live shard particles
+local BOSS_SHATTER_HOLD = 1.4          -- seconds the readout survives the kill
+-- Colour keys, not colours: the palette globals don't exist until shared_init
+-- runs, which is long after this file is loaded.
+local BOSS_PHASE_KEYS  = {'red', 'orange', 'purple'}
+local BOSS_SPECTRUM    = {'red', 'orange', 'yellow', 'green', 'blue', 'purple'}
+
+
+-- A cut through the glass: a parallelogram from xa to xb whose top edge leads
+-- the bottom by `sk`. Every piece of the bar is built from this, which is what
+-- makes the slices tile perfectly against each other.
+local function boss_quad(xa, xb, cy, h, sk)
+  sk = sk or BOSS_BAR_SKEW
+  local yt, yb = cy - h/2, cy + h/2
+  return {xa + sk, yt, xb + sk, yt, xb, yb, xa, yb}
+end
+
+
+-- Walk the six prism stops. u in 0..1 across the shattered width.
+local function boss_spectrum(u)
+  local n = #BOSS_SPECTRUM
+  local p = math.clamp(u, 0, 1)*(n - 1)
+  local i = math.floor(p)
+  local f = p - i
+  local a = _G[BOSS_SPECTRUM[i + 1]][0]
+  local c = _G[BOSS_SPECTRUM[math.min(n, i + 2)]][0]
+  return Color(math.lerp(f, a.r, c.r), math.lerp(f, a.g, c.g), math.lerp(f, a.b, c.b), 1)
+end
+
+
+-- Chips knocked off the fracture. HUD-space (a plain list drawn inside
+-- draw_boss_bar), NOT effects-group entities: the strip is drawn in canvas
+-- space and must not inherit the arena camera's shake.
+--
+-- Spawns on the geometry the LAST draw recorded, so on the first frame of the
+-- fight (tick runs before draw) there is nothing to spawn on yet and the burst
+-- is simply skipped -- which is exactly the frame the boss is still at full HP.
+function BallPit:boss_bar_shards(n, pct, prismatic)
+  local b = self.boss_bar
+  local g = b and b.geo
+  if not g then return end
+  local x = g.tx0 + g.tw*math.clamp(pct, 0, 1)
+  for _ = 1, math.min(n, 12) do
+    if #b.fx >= BOSS_FX_MAX then break end
+    local a  = random:float(-math.pi*0.92, -math.pi*0.08)
+    local sp = random:float(18, prismatic and 80 or 50)
+    local c
+    if prismatic then          c = boss_spectrum(random:float(0, 1))
+    elseif random:bool(25) then c = Color(1, 1, 1, 1)
+    else                        c = _G[BOSS_PHASE_KEYS[b.phase]][0] end
+    b.fx[#b.fx + 1] = {
+      x = x + random:float(-2, 2), y = g.cy + random:float(-3, 3),
+      vx = math.cos(a)*sp + 12, vy = math.sin(a)*sp,
+      r = random:float(1.4, 3.4), rot = random:float(0, 2*math.pi),
+      vr = random:float(-9, 9), t = 0, life = random:float(0.3, 0.75), c = c,
+    }
+  end
+end
+
+
+-- Wave 10 owns the HUD strip -- and keeps it for a beat after the kill so the
+-- core can finish shattering before the wave-11 track takes over.
+function BallPit:boss_bar_active()
+  if self.wave_cfg and self.wave_cfg.boss then return true end
+  local b = self.boss_bar
+  return (b and (b.linger or 0) > 0) and true or false
+end
+
+
+-- Animation state for the core readout. Same contract as tick_combo /
+-- tick_wave_bar: this is the only thing that advances it, the draw is pure.
+function BallPit:tick_boss_bar(dt)
+  local b = self.boss_bar
+  if not b then
+    b = {disp = 1, ghost = 1, seen = 1, phase = 1, hit = 0, spin = 0, low = 0,
+         spawned = false, finished = false, linger = 0,
+         phase_flash = 0, phase_pop = 0, burst_x = 0, fx = {}}
+    self.boss_bar = b
+  end
+
+  -- Reading the target has three states, and getting any of them wrong shows:
+  --   * BEFORE the boss lands (spawn_boss defers a frame) the core is WHOLE,
+  --     not empty -- otherwise the bar slams to zero on the first frame of the
+  --     wave and snaps back,
+  --   * while it lives, its HP,
+  --   * once it has existed and is gone, run to zero and shatter.
+  local boss = self.boss
+  local target
+  if boss and not boss.dead and (boss.max_hp or 0) > 0 then
+    target, b.spawned = math.clamp(boss.hp/boss.max_hp, 0, 1), true
+  elseif b.spawned then
+    target = 0
+  else
+    target = 1
+  end
+
+  -- The kill. BallPit:update advances the wave on the very frame boss_defeated
+  -- is set, so without a hold the readout would be swapped out for the wave-11
+  -- track before the core finished coming apart -- boss_bar_active keeps it up.
+  if b.spawned and target <= 0 and not b.finished then
+    b.finished, b.linger, b.hit, b.phase_flash = true, BOSS_SHATTER_HOLD, 1, 1
+    local g = b.geo
+    b.burst_x = g and (g.tx0 + g.tw*b.disp) or 0
+    self:boss_bar_shards(12, b.disp, true)
+  end
+  b.linger = math.max(0, (b.linger or 0) - dt)
+
+  -- Damage impulse. ANY drop kicks the shake, the cracks and a shard burst --
+  -- scaled by the size of the bite, with a floor so a chip still registers.
+  local lost = b.seen - target
+  if lost > 0.0004 then
+    b.hit = math.min(1, math.max(b.hit, 0.35 + math.min(0.65, lost*22)))
+    self:boss_bar_shards(2 + math.floor(lost*150), target)
+  end
+  b.seen = target
+
+  b.disp = b.disp + (target - b.disp)*math.min(1, 16*dt)
+  -- The ghost trails the fracture as a FRACTION of the gap, so it self-scales:
+  -- a big hit leaves a wide white shard, chip damage leaves a sliver.
+  b.ghost = math.lerp_dt(BOSS_GHOST_LAG, dt, b.ghost, b.disp)
+
+  -- Phase transition, read off the boss itself so the bar can never disagree
+  -- with the attacks the player is dodging.
+  local ph = (boss and boss.phase) or b.phase
+  if ph > b.phase then
+    b.phase, b.phase_flash, b.phase_pop = ph, 1, 1
+    local g = b.geo
+    b.burst_x = g and (g.tx0 + g.tw*b.disp) or 0
+    self:boss_bar_shards(12, target, true)
+  end
+
+  b.spin        = b.spin + dt*(0.7 + 0.45*b.phase)
+  b.low         = math.clamp((0.18 - b.disp)/0.18, 0, 1)
+  b.hit         = math.max(0, b.hit         - dt*3.2)
+  b.phase_flash = math.max(0, b.phase_flash - dt*1.5)
+  b.phase_pop   = math.max(0, b.phase_pop   - dt*2.2)
+
+  for i = #b.fx, 1, -1 do
+    local p = b.fx[i]
+    p.t = p.t + dt
+    if p.t >= p.life then
+      table.remove(b.fx, i)
+    else
+      p.vy = p.vy + 200*dt
+      p.x, p.y, p.rot = p.x + p.vx*dt, p.y + p.vy*dt, p.rot + p.vr*dt
+    end
+  end
+end
+
+
+-- Paints the core readout into the same strip the wave track uses.
+function BallPit:draw_boss_bar(x0, x1)
+  local b = self.boss_bar
+  if not b then return end
+  local t   = love.timer.getTime()
+  local cy  = self.y1 - 8
+  local h   = BOSS_BAR_H
+  local ph  = math.min(3, b.phase)
+  local col = _G[BOSS_PHASE_KEYS[ph]][0]
+  local lit = Color(math.min(1, col.r + 0.42), math.min(1, col.g + 0.42),
+                    math.min(1, col.b + 0.42), 1)
+
+  -- ---- phase glyph ----
+  -- The core's cut, and the phase readout: a triangle, then a diamond, then a
+  -- hexagon. It gains a side and spins faster at every transition, so the phase
+  -- is legible from the silhouette without reading a colour.
+  local gx    = x0 + 6
+  local gr    = 5 + 2.5*b.phase_pop
+  local sides = BOSS_PHASE_SIDES[ph]
+  local gv    = {}
+  for i = 0, sides - 1 do
+    local a = b.spin + i*(2*math.pi/sides)
+    gv[#gv + 1] = gx + math.cos(a)*gr
+    gv[#gv + 1] = cy + math.sin(a)*gr
+  end
+  graphics.polygon(gv, Color(col.r, col.g, col.b, 0.9))
+  graphics.polygon(gv, Color(1, 1, 1, 0.55 + 0.45*b.phase_flash), 1)
+  graphics.circle(gx, cy, 1.2 + 1.6*b.hit, Color(1, 1, 1, 0.9))
+
+  -- ---- nameplate ----
+  -- Chromatic aberration: the name is split into a red and a blue component and
+  -- the split WIDENS on every hit -- the prism idea applied to the type itself.
+  local label = 'PRISM'
+  local lw    = pixul_font:get_text_width(label)
+  local lx    = x0 + 14 + lw/2
+  local ab    = 0.5 + 2.2*b.hit + 0.35*math.sin(t*3)
+  graphics.print_centered(label, pixul_font, lx - ab, cy, 0, 1, 1, 0, 0, Color(1, 0.15, 0.25, 0.55))
+  graphics.print_centered(label, pixul_font, lx + ab, cy, 0, 1, 1, 0, 0, Color(0.2, 0.6, 1, 0.55))
+  graphics.print_centered(label, pixul_font, lx, cy, 0, 1, 1, 0, 0, lit)
+
+  -- ---- geometry ----
+  -- The whole bar jitters on a hit. Horizontal only: the strip has ~2px of
+  -- vertical room above the arena wall and nothing may spill into the playfield.
+  local sh  = b.hit*1.8*math.sin(t*61)
+  local tx0 = x0 + 14 + lw + 8 + sh
+  local tx1 = x1 - BOSS_BAR_SKEW - 2 + sh
+  local tw  = tx1 - tx0
+  if tw < 30 then return end
+  local fx  = tx0 + tw*b.disp      -- the fracture: everything right of it is broken off
+
+  -- Recorded for the shard spawner in the tick, which needs to know where the
+  -- fracture actually is on screen.
+  b.geo = {tx0 = tx0, tw = tw, cy = cy}
+
+  -- ---- casing ----
+  graphics.polygon(boss_quad(tx0 - 2, tx1 + 2, cy, h + 4), Color(0, 0, 0, 0.55))
+  graphics.polygon(boss_quad(tx0, tx1, cy, h), bg[-2])
+
+  -- ---- the shattered half: dispersion ----
+  -- Not an empty gutter. The six prism stops are walked across the BROKEN
+  -- width, so the rainbow always spans exactly the damage done, and it burns
+  -- brighter as the core runs out.
+  local dw = tx1 - fx
+  if dw > 1.5 then
+    local n = math.max(6, math.floor(dw/5))
+    for i = 0, n - 1 do
+      local a0 = fx + dw*(i/n)
+      local a1 = fx + dw*((i + 1)/n)
+      local sc = boss_spectrum(i/math.max(1, n - 1))
+      local sa = 0.11 + 0.09*math.sin(t*2.2 + i*0.55) + 0.22*b.low
+      graphics.polygon(boss_quad(a0, a1, cy, h - 1), Color(sc.r, sc.g, sc.b, sa))
+    end
+    -- Refraction slivers sweeping through the split light, so the dead half is
+    -- alive rather than a flat gradient.
+    for k = 0, 1 do
+      local rx = fx + ((t*(34 + 27*k) + k*41) % dw)
+      graphics.line(rx + BOSS_BAR_SKEW, cy - h/2, rx, cy + h/2, Color(1, 1, 1, 0.15), 1)
+    end
+  end
+
+  -- ---- the intact core: facets ----
+  -- Alternating cut faces, subdividing with the phase. Clipped at the fracture
+  -- so the last facet is a real partial face, not a rounded stub.
+  local nf = BOSS_FACETS[ph]
+  for i = 0, nf - 1 do
+    local a0 = tx0 + tw*(i/nf)
+    local a1 = math.min(tx0 + tw*((i + 1)/nf), fx)
+    if a1 > a0 + 0.2 then
+      local k = (i % 2 == 0) and 1 or 0.7
+      graphics.polygon(boss_quad(a0, a1, cy, h), Color(col.r*k, col.g*k, col.b*k, 1))
+    end
+  end
+  if fx > tx0 + 0.5 then
+    -- Top bevel, and a specular sweep running the length of the remaining glass.
+    graphics.polygon(boss_quad(tx0, fx, cy - h*0.26, h*0.34),
+                     Color(lit.r, lit.g, lit.b, 0.45))
+    local sw   = 7
+    local span = (fx - tx0) + 46
+    local sxp  = tx0 - 24 + ((t*BOSS_SPEC_SPEED[ph]) % span)
+    local qa, qb = math.max(tx0, sxp), math.min(fx, sxp + sw)
+    if qb > qa then
+      graphics.polygon(boss_quad(qa, qb, cy, h), Color(1, 1, 1, 0.22))
+    end
+    -- Phase 3: the crystal is coming apart. Fixed cracks (index-derived, not
+    -- random per frame, so they don't crawl) across whatever is still standing.
+    if ph >= 3 then
+      for i = 1, 4 do
+        local cxp = tx0 + (fx - tx0)*((i*0.23 + 0.11) % 1)
+        local jj  = (i % 2 == 0) and 1 or -1
+        graphics.line(cxp + BOSS_BAR_SKEW, cy - h/2, cxp + jj*1.5, cy + h/2,
+                      Color(0, 0, 0, 0.45), 1)
+      end
+    end
+  end
+
+  -- ---- phase cuts ----
+  -- The 2/3 and 1/3 thresholds, drawn across the WHOLE bar so the next
+  -- transition is always visible ahead of the fracture. A cut already passed
+  -- dims out.
+  for _, u in ipairs({2/3, 1/3}) do
+    local dx = tx0 + tw*u
+    graphics.line(dx + BOSS_BAR_SKEW, cy - h/2 - 1, dx, cy + h/2 + 1, Color(0, 0, 0, 0.7), 2)
+    graphics.line(dx + BOSS_BAR_SKEW, cy - h/2 - 1, dx, cy + h/2 + 1,
+                  Color(1, 1, 1, (b.disp <= u) and 0.22 or 0.6), 1)
+  end
+
+  -- ---- the fracture ----
+  -- The slice between the live front and the trailing ghost is what the last
+  -- hits took: it burns white for a beat before it disperses, so damage reads
+  -- as a chunk being knocked off rather than the bar quietly being shorter.
+  if b.ghost > b.disp + 0.001 then
+    local gx1 = tx0 + tw*b.ghost
+    graphics.polygon(boss_quad(fx, gx1, cy, h), Color(1, 1, 1, 0.5))
+    graphics.polygon(boss_quad(fx, gx1, cy, h - 3), Color(1, 0.96, 0.82, 0.85))
+  end
+  if b.disp > 0.001 then
+    graphics.line(fx + BOSS_BAR_SKEW, cy - h/2 - 1, fx, cy + h/2 + 1, Color(1, 1, 1, 0.9), 2)
+    graphics.circle(fx, cy, 2 + 5*b.hit, Color(lit.r, lit.g, lit.b, 0.3 + 0.45*b.hit))
+    -- Cracks running back into the glass from the point of impact.
+    if b.hit > 0.02 then
+      for i = 1, 3 do
+        local cl = 6 + 17*b.hit
+        local yy = cy + (i - 2)*(h*0.3)
+        graphics.line(fx, yy, math.max(tx0, fx - cl*(0.5 + 0.25*i)), yy + (i - 2)*1.6,
+                      Color(1, 1, 1, 0.5*b.hit), 1)
+      end
+    end
+  end
+
+  -- ---- rim ----
+  local rim = 0.3 + 0.22*math.sin(t*(3 + 3*ph)) + 0.5*b.phase_flash + 0.35*b.low
+  graphics.polygon(boss_quad(tx0, tx1, cy, h), Color(col.r, col.g, col.b, math.min(1, rim)), 1)
+
+  -- ---- phase transition ----
+  -- A shockwave out of the cut that was just crossed, squashed flat so it runs
+  -- along the bar instead of spilling into the playfield, plus a white wash.
+  if b.phase_flash > 0.01 then
+    local k  = 1 - b.phase_flash
+    local br = 4 + 26*k
+    local pv = {}
+    for i = 0, sides - 1 do
+      local a = b.spin*0.5 + i*(2*math.pi/sides)
+      pv[#pv + 1] = b.burst_x + math.cos(a)*br
+      pv[#pv + 1] = cy + math.sin(a)*br*0.32
+    end
+    graphics.polygon(pv, Color(1, 1, 1, 0.65*b.phase_flash), 1)
+    graphics.polygon(boss_quad(tx0, tx1, cy, h), Color(1, 1, 1, 0.32*b.phase_flash))
+  end
+
+  -- ---- shards ----
+  for _, p in ipairs(b.fx) do
+    local k  = 1 - p.t/p.life
+    local pv = {}
+    for i = 0, 2 do
+      local a = p.rot + i*(2*math.pi/3)
+      pv[#pv + 1] = p.x + math.cos(a)*p.r*k
+      pv[#pv + 1] = p.y + math.sin(a)*p.r*k
+    end
+    graphics.polygon(pv, Color(p.c.r, p.c.g, p.c.b, k))
   end
 end
 

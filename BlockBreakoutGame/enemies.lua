@@ -1156,10 +1156,11 @@ function Boss:init(args)
   -- HP scales with wave the same way bricks do (see Brick:init line 81) so
   -- the fight stays meaningful if the player triggers it on a later loop.
   local wave = (main.current and main.current.wave) or 10
-  -- Base pool cut 25% (3200 -> 2400 -> 1800): the fight was running long once
-  -- the bumpers started feeding balls back at it, and a boss that outlasts the
-  -- player's attention is a worse boss than one that dies a little early.
-  self.max_hp     = 1800 * (1 + 0.2*wave)
+  -- Base pool cut again, -33% (3200 -> 2400 -> 1800 -> 1206): the fight was
+  -- running long once the bumpers started feeding balls back at it, and a boss
+  -- that outlasts the player's attention is a worse boss than one that dies a
+  -- little early.
+  self.max_hp     = 1206 * (1 + 0.2*wave)
   self.hp         = self.max_hp
   self.player_dmg = 3
   self.xp_value   = 60
@@ -1878,18 +1879,8 @@ function Boss:draw()
   local pulse = 1 + math.sin(love.timer.getTime()*6)*0.25
   graphics.circle(self.x, self.y, 3*pulse*s, fg[5])
 
-  -- HP bar across the top of the play area.
-  local arena = main.current
-  if arena then
-    local pct   = math.clamp(self.hp/self.max_hp, 0, 1)
-    local bar_w = (arena.x2 - arena.x1) - 16
-    local bar_x = (arena.x1 + arena.x2)/2
-    local bar_y = arena.y1 + 4
-    graphics.rectangle(bar_x, bar_y, bar_w, 4, 1, 1, bg[-2])
-    graphics.rectangle(bar_x - bar_w/2 + bar_w*pct/2, bar_y, bar_w*pct, 4, 1, 1, col)
-    graphics.print_centered('THE PRISM CORE', pixul_font,
-                            bar_x, bar_y + 8, 0, 1, 1, 0, 0, fg[0])
-  end
+  -- (The HP readout lives in the HUD strip now -- BallPit:draw_boss_bar paints
+  -- the core as a prismatic crystal that shatters. Nothing to draw here.)
 
   -- Slow / curse visual overlays, mirror Brick:draw idioms.
   if self.slow_factor < 1 then
