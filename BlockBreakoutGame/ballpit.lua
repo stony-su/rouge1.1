@@ -291,14 +291,14 @@ function BallPit:init(name)
   self.title_phase = 'idle'
   self.launch_t    = 0
   self.title_selected = 1
-  -- Tutorial is a sub-page of the title, not a separate screen: it borrows the
-  -- same glass and returns to the menu. (admin's terminal already guards on
-  -- tutorial_open, so the debug console stays out of the way while it is up.)
-  self.tutorial_open  = false
-  self.tutorial_page  = 1
-  self.tutorial_t     = 0
-  self.tutorial_phase = 'idle'
-  self.tutorial_anim  = 0
+  -- The controls page is a sub-page of the title, not a separate screen: it
+  -- borrows the same glass and returns to the menu. (admin's terminal already
+  -- guards on controls_open, so the debug console stays out of the way.)
+  self.controls_open  = false
+  self.controls_page  = 1
+  self.controls_t     = 0
+  self.controls_phase = 'idle'
+  self.controls_anim  = 0
 end
 
 
@@ -471,8 +471,6 @@ function BallPit:draw_settings_heroes()
 end
 
 
--- ----- Tutorial overlay -----
--- Removed - tutorial functionality has been deleted from the codebase.
 
 
 -- ----- Music director -------------------------------------------------------
@@ -772,6 +770,11 @@ function BallPit:reset_run()
   -- a restart never inherits the last run's fill.
   self.wave_bar      = nil
   self.boss_bar      = nil   -- ...and the wave-10 core readout (see tick_boss_bar)
+  -- Guided-tutorial state (see tut_trigger). `step` nil = no card up; the queue
+  -- holds any that fired while one was already being read. Which cards have been
+  -- EARNED is not in here -- that lives in the save, so it survives the run.
+  self.tut           = {step = nil, obj = nil, opts = nil, t = 0, anim = 0,
+                        hover = false, queue = {}}
   self.boss          = nil
   self.boss_defeated = false
   -- Set while wave 9 has elapsed but the arena still has live blocks; holds the
@@ -1416,13 +1419,22 @@ function BallPit:update(dt)
       ui_switch1:play{volume = 0.3}
     end
     if self.settings_open then self:update_settings(dt) return end
-    if self.tutorial_open then
-      self:update_tutorial(dt)
+    if self.controls_open then
+      self:update_controls(dt)
       self.ui:update(dt)
       return
     end
     self:update_title(dt)
     self.ui:update(dt)
+    return
+  end
+
+  -- A tutorial card freezes the board. Deliberately ahead of self.t:update, not
+  -- merely ahead of the draw: the settings overlay lets arena timers keep running
+  -- underneath it, and a swarm materialising while someone reads a card would
+  -- make the spotlight a lie. Nothing below this line advances.
+  if self.tut and self.tut.step then
+    self:update_tut(dt)
     return
   end
 
@@ -1444,6 +1456,7 @@ function BallPit:update(dt)
     self:update_settings(dt)
     return
   end
+
 
   if self.game_over then
     self.ui:update(dt)
@@ -1849,7 +1862,7 @@ end
 function BallPit:title_buttons()
   return {
     {id = 'play',     label = 'PLAY',     x = gw/2, y = gh*0.455, w = 132, h = 24},
-    {id = 'tutorial', label = 'TUTORIAL', x = gw/2, y = gh*0.520, w = 132, h = 24},
+    {id = 'controls', label = 'CONTROLS', x = gw/2, y = gh*0.520, w = 132, h = 24},
   }
 end
 
@@ -1879,11 +1892,11 @@ function BallPit:title_activate()
   if b.id == 'play' then
     self:start_title_launch()
   else
-    self.tutorial_open  = true
-    self.tutorial_page  = 1
-    self.tutorial_t     = 0
-    self.tutorial_phase = 'in'
-    self.tutorial_anim  = 0
+    self.controls_open  = true
+    self.controls_page  = 1
+    self.controls_t     = 0
+    self.controls_phase = 'in'
+    self.controls_anim  = 0
     ui_switch1:play{volume = 0.3}
   end
 end
@@ -1948,6 +1961,16 @@ function BallPit:finish_title()
                   color = INK_GOLD, duration = 0.30}
     spawn_burst(self.effects, p.x, p.y, INK_GOLD, 14, 70, 190)
   end
+  -- First run ever: teach the paddle before anything is moving. Fired here
+  -- rather than in reset_run so it lands after the rebuild, on a live board.
+  local pw = p and (p.w + 10) or 60
+  self:tut_trigger('paddle', p, {w = pw, h = 26})
+  -- ...and, right behind it, whatever THIS paddle rewrites. Keyed by the
+  -- equipped loadout so each one teaches itself once, the first run it is taken
+  -- out; a paddle with no sig_<id> card in tutorial_text.lua is silent. It queues
+  -- behind the general paddle card above, so the order reads general -> twist.
+  self:tut_trigger('sig_' .. tostring((state and state.selected_paddle) or 'standard'),
+                   p, {w = pw, h = 26})
   spawn1:play{volume = 0.45}
   camera:shake(3, 0.18, 90)
 end
@@ -2140,120 +2163,411 @@ function BallPit:draw_title()
 end
 
 
--- ----- Tutorial ---------------------------------------------------------
+-- ----- Guided tutorial -----------------------------------------------------
 --
--- Opened from the title's TUTORIAL button. A prototype reference for the whole
--- game, written as PAGES OF ROWS rather than prose: every entry is a short
--- label and the one line that explains it, so a player can find the thing they
--- are looking for by scanning instead of reading. Navigated with the PREV /
--- BACK / NEXT buttons, the arrow or A/D keys, or the mouse.
+-- The CONTROLS page is a reference you go and look at. This is the other half:
+-- the game teaching itself, once, at the moment each mechanic first happens to
+-- you. A card fires the first time you meet a thing, freezes the board, dims
+-- everything except THAT thing, and points a line at it.
 --
--- Content is deliberately exhaustive -- controls, every enemy family, every
--- powerup tier, the combo ladder, the boss, the loadouts -- because the point
--- of the prototype is to find out which of it a player actually needs.
-local TUTORIAL_PAGES = {
-  {title = 'CONTROLS', rows = {
-    {'A / D',      'move the paddle left and right'},
-    {'W / S',      'lift and lower it inside the dodge band'},
-    {'LEFT/RIGHT', 'aim a ball that is stuck to the paddle'},
-    {'SPACE',      'launch a stuck ball -- hold to see the aim line'},
-    {'E',          'the signature power of your paddle loadout'},
-    {'MOUSE 1',    'confirm menu choices'},
-    {'ENTER',      'confirm a draft card'},
-    {'R',          'restart the run from the game-over screen'},
-    {'ESC',        'settings (window size)'},
+-- Three rules hold the whole system together:
+--
+--   * ONE ENTRY POINT. Everything is `tut_trigger(id, obj, opts)`. It is safe to
+--     call from anywhere, including inside a Box2D contact callback, because all
+--     it ever does is set a field -- it never touches the world.
+--   * IT FREEZES. update returns early while a card is up, exactly the way the
+--     settings overlay does, so nothing moves under the spotlight while it is
+--     being read and the highlighted object cannot wander off or die.
+--   * ONCE, EVER. Seen ids live in the save (state.tut_seen), so a player who
+--     has done this is never taught again. Clearing the save, or the admin
+--     terminal, is what replays them.
+--
+-- Steps that name no object (the draft, the shop) dim the screen and centre the
+-- card with no spotlight: on those the whole screen IS the thing being
+-- explained, so there is nothing to single out.
+local TUT_LINE_H  = 15    -- body line pitch
+local TUT_BODY_Y  = 38    -- ink top of the first body line, from the panel top
+local TUT_FOOT    = 42    -- room under the last line for the CONTINUE plate
+local TUT_PANEL_W = 340
+local TUT_IN_DUR  = 0.30  -- card rack-in; input is dead until it finishes
+local TUT_DIM     = 0.76  -- how far down everything outside the spotlight goes
+
+
+-- The card COPY is not here: every word the cards say lives in tutorial_text.lua,
+-- so it can be edited without opening this file. That file is pure data and
+-- carries its own editing notes (line budget, key naming).
+--
+-- Read through this accessor rather than captured into a local at load time: the
+-- copy is a global set by another module, so going through a function means
+-- require ORDER cannot matter, and a missing or broken tutorial_text.lua
+-- degrades to 'no cards ever fire' instead of taking the boot down with it.
+local function tut_step(id)
+  return TUTORIAL_TEXT and TUTORIAL_TEXT[id]
+end
+
+
+-- Fire the card for `id`, once ever. `obj` is the thing to spotlight (anything
+-- with .x/.y); `opts` may carry {r = } for a circular hole or {w = , h = } for a
+-- rounded-rect one. Both are optional -- with no object the card just dims the
+-- screen and centres itself.
+--
+-- Safe to call from anywhere: it only sets fields. If a card is already up the
+-- new one queues behind it rather than stomping it.
+function BallPit:tut_trigger(id, obj, opts)
+  if not tut_step(id) then return end
+  local seen = state and state.tut_seen
+  if seen and seen[id] then return end
+  local T = self.tut
+  if not T then return end
+  -- Marked seen at TRIGGER time, not at dismissal: the same event can fire
+  -- twice in one frame (two shots spawned by one volley), and a card that has
+  -- been queued has already been earned.
+  if seen then
+    seen[id] = true
+    if system and system.save_state then system.save_state() end
+  end
+  local entry = {id = id, obj = obj, opts = opts or {}}
+  if T.step then
+    T.queue[#T.queue + 1] = entry
+  else
+    self:tut_open(entry)
+  end
+end
+
+
+function BallPit:tut_open(entry)
+  local T = self.tut
+  T.step  = tut_step(entry.id)
+  T.obj   = entry.obj
+  T.opts  = entry.opts
+  T.t     = 0
+  T.anim  = 0
+  T.hover = false
+  ui_switch1:play{volume = 0.35, pitch = 0.9}
+end
+
+
+-- Dismiss the current card and rack in whatever queued behind it.
+function BallPit:tut_continue()
+  local T = self.tut
+  if not T or not T.step then return end
+  T.step, T.obj, T.opts = nil, nil, nil
+  confirm1:play{volume = 0.35}
+  local nxt = table.remove(T.queue, 1)
+  if nxt then self:tut_open(nxt) end
+end
+
+
+-- Where the spotlight goes: centre, radius, and (for a bar-shaped target) the
+-- rect to cut instead of a circle. nil means this card has no spotlight.
+function BallPit:tut_target()
+  local T = self.tut
+  local o = T and T.obj
+  if not o or o.dead or not o.x then return nil end
+  local op = T.opts or {}
+  if op.w then
+    return o.x, o.y, math.max(op.w, op.h)/2, op.w, op.h
+  end
+  return o.x, o.y, op.r or ((o.r_size or 8) + 10)
+end
+
+
+-- Panel geometry. Parked in the half of the screen the target is NOT in, so the
+-- card never covers the thing it is pointing at.
+function BallPit:tut_panel_rect()
+  local step = self.tut and self.tut.step
+  if not step then return gw/2, gh/2, TUT_PANEL_W, 100 end
+  local h = TUT_BODY_Y + #step.body*TUT_LINE_H + TUT_FOOT
+  local _, ty = self:tut_target()
+  local cy
+  if not ty          then cy = gh*0.5
+  elseif ty < gh*0.5 then cy = gh*0.72
+  else                    cy = gh*0.28 end
+  return gw/2, cy, TUT_PANEL_W, h
+end
+
+
+function BallPit:tut_button_rect()
+  local px, py, _, ph = self:tut_panel_rect()
+  return px, py + ph/2 - 23, 116, 24
+end
+
+
+function BallPit:update_tut(dt)
+  local T = self.tut
+  T.t    = T.t + dt
+  T.anim = math.min(1, T.anim + dt/TUT_IN_DUR)
+
+  local bx, by, bw, bh = self:tut_button_rect()
+  T.hover = mouse.x >= bx - bw/2 and mouse.x <= bx + bw/2
+        and mouse.y >= by - bh/2 and mouse.y <= by + bh/2
+
+  -- Input is dead through the rack-in: the plate is still moving, so what is
+  -- under the cursor is not what will be under it a frame later.
+  if T.anim < 1 then return end
+  if (T.hover and input.click.pressed) or input.confirm.pressed or input.launch.pressed then
+    self:tut_continue()
+  end
+end
+
+
+function BallPit:draw_tut()
+  local T    = self.tut
+  local step = T and T.step
+  if not step then return end
+  local t = T.t
+  local k = T.anim
+  k = 1 - (1 - k)*(1 - k)*(1 - k)          -- ease out, same curve the panels use
+
+  local tx, ty, tr, tw, th = self:tut_target()
+
+  -- ---- dim everything but the target ----
+  -- The hole is punched with a stencil rather than by drawing four rects around
+  -- it, so it can be a circle, and so it can grow: the spotlight closes IN on
+  -- the target, which is what makes the eye follow it there.
+  local grow = 1 + 2.2*(1 - k)
+  graphics.draw_with_mask(
+    function()
+      graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil, Color(0, 0, 0, TUT_DIM*k))
+    end,
+    function()
+      if not tx then return end
+      if tw then
+        local r = math.min(tw, th)/2
+        graphics.rectangle(tx, ty, tw*grow, th*grow, r, r, white[0])
+      else
+        graphics.circle(tx, ty, tr*grow, white[0])
+      end
+    end,
+    true)
+
+  -- ---- the ring, and the line to the card ----
+  if tx then
+    local pulse = 1 + 0.05*math.sin(t*5)
+    local ring  = Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, k)
+    local halo  = Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, 0.30*k)
+    if tw then
+      local r = math.min(tw, th)/2
+      graphics.rectangle(tx, ty, tw*grow*pulse, th*grow*pulse, r, r, ring, 1)
+      graphics.rectangle(tx, ty, tw*grow*pulse + 6, th*grow*pulse + 6, r, r, halo, 1)
+    else
+      graphics.circle(tx, ty, tr*grow*pulse,     ring, 1)
+      graphics.circle(tx, ty, tr*grow*pulse + 4, halo, 1)
+    end
+  end
+
+  -- ---- the card ----
+  local px, py, pw, ph = self:tut_panel_rect()
+  py = py + (1 - k)*14                     -- rises into place
+  if tx then
+    -- Dashed leader from the ring to the near edge of the card, so the two read
+    -- as one object: this text is about THAT thing.
+    local edge = (ty < py) and (py - ph/2) or (py + ph/2)
+    local a    = math.atan2(edge - ty, px - tx)
+    local rr   = (tr or 10)*grow + 3
+    graphics.dashed_line(tx + math.cos(a)*rr, ty + math.sin(a)*rr, px, edge, 5, 4,
+                         Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, 0.7*k), 1)
+    graphics.circle(px, edge, 2, Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, k))
+  end
+
+  graphics.rectangle(px, py, pw, ph, 3, 3,
+                     Color(GLASS_PANEL.r, GLASS_PANEL.g, GLASS_PANEL.b, k))
+  graphics.rectangle(px, py, pw, ph, 3, 3,
+                     Color(INK_GOLD_DIM.r, INK_GOLD_DIM.g, INK_GOLD_DIM.b, k), 1)
+  graphics.rectangle(px, py, pw - 6, ph - 6, 2, 2,
+                     Color(INK_BRONZE.r, INK_BRONZE.g, INK_BRONZE.b, k), 1)
+
+  -- fat_font sits high in its box: through print_centered the ink runs
+  -- y-17s..y+2s, so the draw y that actually centres a glyph is 7.5s BELOW the
+  -- line you want it on (see the cabinet notes in CLAUDE.md).
+  graphics.print_centered(step.title, fat_font, px, py - ph/2 + 18 + 7.5, 0, 1, 1, 0, 0,
+                          Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, k))
+  graphics.line(px - pw/2 + 14, py - ph/2 + 30, px + pw/2 - 14, py - ph/2 + 30,
+                Color(INK_BRONZE.r, INK_BRONZE.g, INK_BRONZE.b, k), 1)
+
+  for i, line in ipairs(step.body) do
+    -- Lines fade up in sequence, so the card reads as being SET rather than
+    -- appearing all at once.
+    local lk = math.clamp((t - (i - 1)*0.04)/0.18, 0, 1)*k
+    graphics.print(line, pixul_font, px - pw/2 + 16,
+                   py - ph/2 + TUT_BODY_Y + (i - 1)*TUT_LINE_H, 0, 1, 1, 0, 0,
+                   Color(INK_PALE.r, INK_PALE.g, INK_PALE.b, lk*0.94))
+  end
+
+  -- ---- CONTINUE ----
+  local bx, by, bw, bh = self:tut_button_rect()
+  by = by + (1 - k)*14
+  local hot  = T.hover and k >= 1
+  local edge = hot and INK_GOLD or INK_GOLD_DIM
+  if hot then
+    graphics.rectangle(bx, by, bw, bh, 2, 2,
+                       Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, 0.16*k))
+  end
+  graphics.rectangle(bx, by, bw, bh, 2, 2, Color(edge.r, edge.g, edge.b, k), 1)
+  graphics.print_centered('CONTINUE', pixul_font, bx, by + 2, 0, 1, 1, 0, 0,
+                          Color(hot and INK_GOLD.r or INK_PALE.r,
+                                hot and INK_GOLD.g or INK_PALE.g,
+                                hot and INK_GOLD.b or INK_PALE.b, k))
+end
+
+
+-- ----- Input glyphs ---------------------------------------------------------
+--
+-- The controls pages draw the KEY, not the name of the key, so a row can be read
+-- at a glance instead of parsed.
+--
+-- One entry point: glyph_draw paints a token with its LEFT edge at x, centred on
+-- y, and RETURNS the width it used -- so a row lays several out in a run without
+-- the caller knowing how wide any of them is (a mouse and a SPACE bar are
+-- nothing alike). glyph_w answers the same question without painting, which is
+-- what lets a row be measured before it is drawn.
+--
+-- Tokens: LEFT / RIGHT / UP / DOWN are arrow caps, MOUSE is a mouse with its
+-- left button lit, DPAD is a d-pad, PAD:x is a round gamepad face button, and
+-- anything else is a lettered cap sized to its own text.
+-- Cap height, and the drop that visually centres the ink inside it. PixulBrush
+-- sits HIGH in its box: through print_centered the ink runs y-6.5 .. y+2.5, so a
+-- letter drawn on the cap centre lands hard against the top edge with five dead
+-- pixels under it. Drawing 2px lower centres it, and 19 (not 15) leaves an even
+-- 5px of cap above and below the ink. Measured, not eyeballed.
+local GLYPH_H    = 19   -- cap height
+local GLYPH_INK  = 2    -- how far below the cap centre the text draws
+local GLYPH_PAD  = 6    -- ink-to-edge padding inside a lettered cap
+local GLYPH_GAP  = 5    -- between two glyphs in the same run
+local GLYPH_MIN  = 21   -- narrowest a cap gets, so 'E' and 'W' still match
+local GLYPH_LIFT = 2    -- how far the face sits above its shoulder
+
+-- Cap materials. Dark face, gold rim, in the same ink the panel is printed in.
+local GLYPH_FACE     = Color(0.15, 0.13, 0.10, 1)
+local GLYPH_SHOULDER = Color(0.31, 0.24, 0.13, 1)
+
+
+local function glyph_w(token)
+  if token == 'MOUSE' then return 15 end
+  if token == 'DPAD'  then return GLYPH_H end
+  if token:sub(1, 4) == 'PAD:' then return GLYPH_H end
+  if token == 'LEFT' or token == 'RIGHT' or token == 'UP' or token == 'DOWN' then
+    return GLYPH_MIN
+  end
+  return math.max(GLYPH_MIN, pixul_font:get_text_width(token) + GLYPH_PAD*2)
+end
+
+
+-- Total width of a run of tokens, gaps included. Rows measure with this so the
+-- text column can be a real column instead of drifting with the widest key.
+local function glyph_run_w(tokens)
+  local w = 0
+  for i, tk in ipairs(tokens) do
+    w = w + glyph_w(tk) + ((i > 1) and GLYPH_GAP or 0)
+  end
+  return w
+end
+
+
+-- The cap itself: a face sitting on a darker shoulder, so it reads as something
+-- you press rather than a boxed word.
+local function glyph_cap(x, y, w, a, rx)
+  rx = rx or 3
+  graphics.rectangle(x + w/2, y + GLYPH_LIFT, w, GLYPH_H, rx, rx,
+                     Color(GLYPH_SHOULDER.r, GLYPH_SHOULDER.g, GLYPH_SHOULDER.b, a*0.9))
+  graphics.rectangle(x + w/2, y, w, GLYPH_H, rx, rx,
+                     Color(GLYPH_FACE.r, GLYPH_FACE.g, GLYPH_FACE.b, a))
+  graphics.rectangle(x + w/2, y, w, GLYPH_H, rx, rx,
+                     Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, a*0.85), 1)
+end
+
+
+-- Arrow-cap headings. graphics.triangle points RIGHT at angle 0, so all four
+-- arrows are that one shape rotated (see the coordinate notes in CLAUDE.md).
+local GLYPH_DIRS = {LEFT = math.pi, RIGHT = 0, UP = -math.pi/2, DOWN = math.pi/2}
+
+
+local function glyph_draw(x, y, token, a)
+  local w    = glyph_w(token)
+  local gold = Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, a)
+
+  if token == 'MOUSE' then
+    -- Rounded body, split line, and the LEFT button filled -- the only one this
+    -- game binds, so the glyph says which button rather than just "a mouse".
+    glyph_cap(x, y, w, a, 5)
+    graphics.rectangle(x + w/4 + 0.5, y - GLYPH_H/4 - 0.5, w/2 - 2, GLYPH_H/2 - 3, 1, 1, gold)
+    graphics.line(x + w/2, y - GLYPH_H/2 + 1, x + w/2, y,
+                  Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, a*0.7), 1)
+    return w
+  end
+
+  if token == 'DPAD' then
+    glyph_cap(x, y, w, a)
+    graphics.rectangle(x + w/2, y, w*0.68, 4.5, 1, 1, gold)
+    graphics.rectangle(x + w/2, y, 4.5, GLYPH_H*0.68, 1, 1, gold)
+    return w
+  end
+
+  local pad = token:match('^PAD:(.+)$')
+  if pad then
+    -- Round face button, so it never reads as a keyboard key.
+    graphics.circle(x + w/2, y + GLYPH_LIFT, w/2,
+                    Color(GLYPH_SHOULDER.r, GLYPH_SHOULDER.g, GLYPH_SHOULDER.b, a*0.9))
+    graphics.circle(x + w/2, y, w/2, Color(GLYPH_FACE.r, GLYPH_FACE.g, GLYPH_FACE.b, a))
+    graphics.circle(x + w/2, y, w/2, Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, a*0.85), 1)
+    graphics.print_centered(pad, pixul_font, x + w/2, y + GLYPH_INK, 0, 1, 1, 0, 0, gold)
+    return w
+  end
+
+  local r = GLYPH_DIRS[token]
+  if r then
+    glyph_cap(x, y, w, a)
+    graphics.push(x + w/2, y, r)
+    graphics.triangle(x + w/2, y, 8, 7, gold)
+    graphics.pop()
+    return w
+  end
+
+  glyph_cap(x, y, w, a)
+  graphics.print_centered(token, pixul_font, x + w/2, y + GLYPH_INK, 0, 1, 1, 0, 0, gold)
+  return w
+end
+
+
+-- ----- Controls ---------------------------------------------------------
+--
+-- Opened from the title's CONTROLS button. It is exactly what it says now: the
+-- inputs, and nothing else. It used to be a full prototype manual -- enemies,
+-- powerups, the combo ladder, the loadouts -- which meant the one thing a player
+-- opens it for was page 1 of nine.
+--
+-- Every row is a RUN OF INPUT GLYPHS plus one line: the key is drawn as a key,
+-- not spelled out, so the page can be read at a glance instead of parsed. Two
+-- pages, split by where you are when you press the thing -- in the arena, or in
+-- a menu -- because those are two different questions.
+--
+-- Row shape: {{token, ...}, 'what it does'}. See glyph_draw below for the
+-- tokens; anything that isn't a special one is drawn as a lettered cap.
+local CONTROLS_PAGES = {
+  {title = 'IN THE ARENA', rows = {
+    {{'A', 'D'},        'move the paddle left and right'},
+    {{'W', 'S'},        'lift and lower it inside the dodge band'},
+    {{'LEFT', 'RIGHT'}, 'aim a ball that is stuck to the paddle'},
+    {{'SPACE'},         'launch it -- hold first to see the aim line'},
+    {{'E'},             'the signature power of your paddle loadout'},
+    {{'LEFT', 'RIGHT'}, 'PINBALL: the left and the right flipper'},
+    {{'E'},             'PHANTOM: drop an anchor, press again to blink'},
   }},
 
-  {title = 'THE LINE', rows = {
-    {'RED DOTS',   'the defense line above your paddle'},
-    {'A BREACH',   'is a block crossing it -- that costs you HP'},
-    {'THE COST',   'scales with how big the swarm was'},
-    {'RETALIATION','a breach sets off a shockwave in return'},
-    {'IT SWEEPS',  'up the arena, damaging and shoving every swarm'},
-    {'SO',         'losing a heart also buys you room'},
-  }},
-
-  {title = 'LEVELS', rows = {
-    {'CLEAR A WAVE', 'and you gain a level -- one per wave'},
-    {'A LEVEL',    'opens the three-card draft'},
-    {'THE BAR',    'up top fills as the wave runs down'},
-    {'WAVE 10',    'the boss: it fills as the boss bleeds'},
-    {'LEVEL ORBS', 'a powerup that levels your BALLS instead'},
-    {'TERRORIST',  'that loadout levels on XP orbs instead'},
-  }},
-
-  {title = 'COMBO METER', rows = {
-    {'POINTS',     'from chaining block hits without missing'},
-    {'RANKS',      'D, C, B, A, S, SS, SSS, FRENZY'},
-    {'IT PAYS',    'faster balls -- not raw damage'},
-    {'IT BLEEDS',  'idle time drains a fraction of what you hold'},
-    {'SO',         'a hot meter costs more attention than a cold one'},
-    {'DROPPING',   'a ball into the pit takes a heavy cut'},
-  }},
-
-  {title = 'POWERUPS (1/2)', rows = {
-    {'THEY DROP',  'on a timer and at the end of every wave'},
-    {'TIER 1',     'catch it with the paddle -- instant effect'},
-    {'TIER 2',     'DEFLECT it with the paddle to arm it, then catch'},
-    {'HEAL',       'restores hearts'},
-    {'WIDE',       'a bigger paddle -- and shots pass through you'},
-    {'BIG BALL',   'oversized, heavier-hitting balls'},
-  }},
-
-  {title = 'POWERUPS (2/2)', rows = {
-    {'MULTI BALL', 'more balls in play at once'},
-    {'PIERCE',     'balls punch through instead of bouncing off'},
-    {'FIRE TRAIL', 'balls leave burning ground behind them'},
-    {'FREEZE',     'the whole arena stops for a few seconds'},
-    {'WATER WAVE', 'a surge that shoves every swarm back up'},
-    {'FLOOR',      'a temporary floor -- no ball can fall out'},
-    {'LEVEL ORB',  'levels several random balls at once'},
-  }},
-
-  {title = 'ENEMIES (1/2)', rows = {
-    {'SEEKER',     'the basic block -- drifts and breaches'},
-    {'TANK',       'slow, very high HP'},
-    {'BOOSTER',    'speeds up its whole row'},
-    {'EXPLODER',   'chain-detonates its neighbours on death'},
-    {'HEADBUTTER', 'lunges down the screen in bursts'},
-    {'FORCER',     'shoves your balls away from it'},
-    {'RANDOMIZER', 'scrambles the direction of what it touches'},
-  }},
-
-  {title = 'ENEMIES (2/2)', rows = {
-    {'SHOOTER',    'plain aimed shots'},
-    {'SNIPER',     'a single fast, long-range shot'},
-    {'SPREADER',   'a fan of shots at once'},
-    {'BURSTER',    'a rapid string of them'},
-    {'ARC LOBBER', 'a shot that curves down onto you'},
-    {'SPIRALER',   'a rotating spray'},
-    {'CRITTERS',   'small enemies that walk down at the paddle'},
-  }},
-
-  {title = 'WAVES & BOSS', rows = {
-    {'WAVES',      'each one is longer, wider and denser'},
-    {'WAVE 10',    'THE PRISM CORE -- the boss'},
-    {'PHASES',     'three, each faster and with new attacks'},
-    {'ITS SHOTS',  'some are unbreakable -- those cannot be parried'},
-    {'ON DEATH',   'three paddle levels and five ball levels'},
-    {'WAVE 11+',   'the hardest tier, forever'},
-  }},
-
-  {title = 'LOADOUTS', rows = {
-    {'PADDLES',    'thirteen of them, each rewriting a core verb'},
-    {'STATS',      'size, speed, damage, XP rate all differ'},
-    {'SIGNATURE',  'each has one power, usually on E'},
-    {'AEGIS',      'raise a shield -- parried shots fly back at them'},
-    {'PINBALL',    'two flippers instead of a bar'},
-    {'PHANTOM',    'drop an anchor, blink back to it'},
-    {'UNLOCK',     'them in the shop after a run'},
+  {title = 'MENUS', rows = {
+    {{'LEFT', 'RIGHT'}, 'pick a draft card, or a paddle in the shop'},
+    {{'ENTER'},         'take the highlighted one'},
+    {{'MOUSE'},         'or click any card, button or row directly'},
+    {{'ESC'},           'settings -- and it pauses, music included'},
+    {{'R'},             'restart, from the game-over screen'},
+    {{'DPAD', 'PAD:A'}, 'gamepad: the d-pad moves, A launches'},
   }},
 }
 
 
 -- Buttons are geometry FIRST: hit-testing and drawing both read this, so a
 -- button can never be drawn somewhere it cannot be clicked.
-function BallPit:tutorial_buttons()
+function BallPit:controls_buttons()
   local y = gh*0.885
   return {
     {id = 'prev',  label = '<  PREV', x = gw*0.23, y = y, w = 92, h = 22},
@@ -2263,8 +2577,8 @@ function BallPit:tutorial_buttons()
 end
 
 
-function BallPit:tutorial_button_under_mouse()
-  for _, b in ipairs(self:tutorial_buttons()) do
+function BallPit:controls_button_under_mouse()
+  for _, b in ipairs(self:controls_buttons()) do
     if mouse.x >= b.x - b.w/2 and mouse.x <= b.x + b.w/2
     and mouse.y >= b.y - b.h/2 and mouse.y <= b.y + b.h/2 then return b end
   end
@@ -2272,12 +2586,12 @@ function BallPit:tutorial_button_under_mouse()
 end
 
 
-function BallPit:tutorial_go(delta)
-  local n = #TUTORIAL_PAGES
-  local p = math.clamp((self.tutorial_page or 1) + delta, 1, n)
-  if p ~= self.tutorial_page then
-    self.tutorial_page = p
-    self.tutorial_t    = 0     -- restart the row stagger: a turn SETS a page
+function BallPit:controls_go(delta)
+  local n = #CONTROLS_PAGES
+  local p = math.clamp((self.controls_page or 1) + delta, 1, n)
+  if p ~= self.controls_page then
+    self.controls_page = p
+    self.controls_t    = 0     -- restart the row stagger: a turn SETS a page
     ui_switch1:play{volume = 0.3}
   end
 end
@@ -2286,87 +2600,87 @@ end
 -- Enter / exit timing. The panel does not appear and disappear -- it is racked
 -- in and pulled out, which is what stops it reading as a dialog box dropped on
 -- top of the machine.
-local TUT_IN  = 0.26
-local TUT_OUT = 0.20
+local CTRL_IN  = 0.26
+local CTRL_OUT = 0.20
 
 
 -- 0 -> 1 racking in, 1 while it is up, 1 -> 0 pulling out. Note it reaches
 -- EXACTLY 1 at rest, so the drawn buttons and the hit test agree while the
 -- page is actually interactive (input is ignored during both transitions).
-function BallPit:tutorial_anim_k()
-  local a = self.tutorial_anim or 0
-  if self.tutorial_phase == 'in' then
-    local p = math.clamp(a/TUT_IN, 0, 1)
+function BallPit:controls_anim_k()
+  local a = self.controls_anim or 0
+  if self.controls_phase == 'in' then
+    local p = math.clamp(a/CTRL_IN, 0, 1)
     return 1 - (1 - p)*(1 - p)*(1 - p)
-  elseif self.tutorial_phase == 'out' then
-    local p = math.clamp(a/TUT_OUT, 0, 1)
+  elseif self.controls_phase == 'out' then
+    local p = math.clamp(a/CTRL_OUT, 0, 1)
     return 1 - p*p
   end
   return 1
 end
 
 
-function BallPit:close_tutorial()
-  if self.tutorial_phase == 'out' then return end
-  self.tutorial_phase = 'out'
-  self.tutorial_anim  = 0
+function BallPit:close_controls()
+  if self.controls_phase == 'out' then return end
+  self.controls_phase = 'out'
+  self.controls_anim  = 0
   ui_switch1:play{volume = 0.3}
 end
 
 
-function BallPit:update_tutorial(dt)
-  self.tutorial_t    = (self.tutorial_t or 0) + dt
-  self.tutorial_anim = (self.tutorial_anim or 0) + dt
+function BallPit:update_controls(dt)
+  self.controls_t    = (self.controls_t or 0) + dt
+  self.controls_anim = (self.controls_anim or 0) + dt
 
   -- Input is deliberately dead through both transitions: the panel is moving,
   -- so what is under the cursor is not what will be under it a frame later.
-  if self.tutorial_phase == 'in' then
-    if self.tutorial_anim >= TUT_IN then
-      self.tutorial_phase, self.tutorial_anim = 'idle', 0
+  if self.controls_phase == 'in' then
+    if self.controls_anim >= CTRL_IN then
+      self.controls_phase, self.controls_anim = 'idle', 0
     end
     return
-  elseif self.tutorial_phase == 'out' then
-    if self.tutorial_anim >= TUT_OUT then
-      self.tutorial_open  = false
-      self.tutorial_phase = 'idle'
+  elseif self.controls_phase == 'out' then
+    if self.controls_anim >= CTRL_OUT then
+      self.controls_open  = false
+      self.controls_phase = 'idle'
     end
     return
   end
 
-  local hovered = self:tutorial_button_under_mouse()
-  self.tutorial_hover = hovered and hovered.id or nil
+  local hovered = self:controls_button_under_mouse()
+  self.controls_hover = hovered and hovered.id or nil
   if hovered and input.click.pressed then
-    if     hovered.id == 'prev'  then self:tutorial_go(-1)
-    elseif hovered.id == 'next'  then self:tutorial_go(1)
-    else   self:close_tutorial() end
+    if     hovered.id == 'prev'  then self:controls_go(-1)
+    elseif hovered.id == 'next'  then self:controls_go(1)
+    else   self:close_controls() end
     return
   end
 
-  if input.move_left.pressed  or input.aim_left.pressed  then self:tutorial_go(-1) end
-  if input.move_right.pressed or input.aim_right.pressed then self:tutorial_go(1)  end
+  if input.move_left.pressed  or input.aim_left.pressed  then self:controls_go(-1) end
+  if input.move_right.pressed or input.aim_right.pressed then self:controls_go(1)  end
   -- SPACE / ENTER page forward, and close out of the last page, so the whole
   -- thing can be read on one key without ever reaching for the mouse.
   if input.launch.pressed or input.confirm.pressed then
-    if (self.tutorial_page or 1) >= #TUTORIAL_PAGES then
-      self:close_tutorial()
+    if (self.controls_page or 1) >= #CONTROLS_PAGES then
+      self:close_controls()
     else
-      self:tutorial_go(1)
+      self:controls_go(1)
     end
   end
 end
 
 
-function BallPit:draw_tutorial()
-  local page = TUTORIAL_PAGES[self.tutorial_page or 1]
+function BallPit:draw_controls()
+  local page = CONTROLS_PAGES[self.controls_page or 1]
   if not page then return end
-  local t = self.tutorial_t or 0
+  local t = self.controls_t or 0
 
-  -- Racked in / pulled out (see tutorial_anim_k). The ground is faded but NOT
+  -- Racked in / pulled out (see controls_anim_k). The ground is faded but NOT
   -- scaled -- scaling a full-screen fill would open a gap at the edges and show
   -- the arena through it. Everything printed on the panel is scaled about the
   -- centre instead, and the alpha multiplier carries the fade through every
   -- layer below without threading it into each colour by hand.
-  local k = self:tutorial_anim_k()
+  local k = self:controls_anim_k()
   if k <= 0.005 then return end
   graphics.rectangle(gw/2, gh/2, gw, gh, nil, nil,
                      Color(GLASS_DEEP.r, GLASS_DEEP.g, GLASS_DEEP.b, k))
@@ -2383,31 +2697,45 @@ function BallPit:draw_tutorial()
   -- Header: page title over a rule, with the page count opposite.
   graphics.print_centered(page.title, fat_font, gw/2, gh*0.105, 0, 1.25, 1.25, 0, 0, INK_GOLD)
   graphics.line(gw*0.14, gh*0.145, gw*0.86, gh*0.145, INK_BRONZE, 1)
-  graphics.print_centered(string.format('%d / %d', self.tutorial_page or 1, #TUTORIAL_PAGES),
+  graphics.print_centered(string.format('%d / %d', self.controls_page or 1, #CONTROLS_PAGES),
                           pixul_font, gw/2, gh*0.165, 0, 1, 1, 0, 0, INK_BRONZE)
 
-  -- Rows: label column in gold, explanation in pale. Two columns, never a
-  -- paragraph -- the whole point is that it can be scanned.
-  local y = gh*0.225
+  -- Rows: a run of key glyphs, then the one line that says what they do.
+  --
+  -- The glyph run is RIGHT-aligned against the text column rather than left
+  -- aligned off the margin, so however wide a key is -- 'E' or 'SPACE' -- every
+  -- explanation still starts on the same pixel and the page reads as two
+  -- columns. Rows are also spread to fill the panel rather than stacked at a
+  -- fixed pitch, so a 6-row page and a 7-row page both look composed instead of
+  -- top-heavy.
+  local col  = gw*0.30           -- where the explanations start
+  local top, bot = gh*0.245, gh*0.80
+  local rows_n = #page.rows
+  local step = (rows_n > 1) and math.min(52, (bot - top)/(rows_n - 1)) or 0
+  local y    = top + ((bot - top) - step*(rows_n - 1))/2
   for i, row in ipairs(page.rows) do
     -- Rows fade up in sequence, so a page turn reads as a page being SET.
-    local k = math.clamp((t - (i - 1)*0.035)/0.18, 0, 1)
+    local k = math.clamp((t - (i - 1)*0.045)/0.20, 0, 1)
     if k > 0 then
-      graphics.print(row[1], pixul_font, gw*0.10, y, 0, 1, 1, 0, 0,
-                     Color(INK_GOLD.r, INK_GOLD.g, INK_GOLD.b, k))
-      graphics.print(row[2], pixul_font, gw*0.36, y, 0, 1, 1, 0, 0,
+      local gx = col - 14 - glyph_run_w(row[1])
+      for _, token in ipairs(row[1]) do
+        gx = gx + glyph_draw(gx, y, token, k) + GLYPH_GAP
+      end
+      -- graphics.print anchors the ink TOP-left and the ink is 9px tall, so -4.5
+      -- is what actually sits the line on the same centre line as the caps.
+      graphics.print(row[2], pixul_font, col, y - 4.5, 0, 1, 1, 0, 0,
                      Color(INK_PALE.r, INK_PALE.g, INK_PALE.b, k*0.92))
     end
-    y = y + gh*0.052
+    y = y + step
   end
 
   -- Buttons. Disabled ends are drawn dimmed rather than hidden, so the shape
   -- of the row never moves as you page through.
-  local n = #TUTORIAL_PAGES
-  for _, b in ipairs(self:tutorial_buttons()) do
-    local dead = (b.id == 'prev' and (self.tutorial_page or 1) <= 1)
-              or (b.id == 'next' and (self.tutorial_page or 1) >= n)
-    local hot  = (self.tutorial_hover == b.id) and not dead
+  local n = #CONTROLS_PAGES
+  for _, b in ipairs(self:controls_buttons()) do
+    local dead = (b.id == 'prev' and (self.controls_page or 1) <= 1)
+              or (b.id == 'next' and (self.controls_page or 1) >= n)
+    local hot  = (self.controls_hover == b.id) and not dead
     local edge = dead and INK_BRONZE or (hot and INK_GOLD or INK_GOLD_DIM)
     local face = dead and Color(INK_BRONZE.r, INK_BRONZE.g, INK_BRONZE.b, 0.55)
                        or (hot and INK_GOLD or INK_PALE)
@@ -2459,9 +2787,11 @@ function BallPit:draw()
   if self.upgrade_pending then self:draw_upgrade() end
   if self.game_over then self:draw_game_over() end
   if self.title_open then
-    if self.tutorial_open then self:draw_tutorial() else self:draw_title() end
+    if self.controls_open then self:draw_controls() else self:draw_title() end
   end
   if self.settings_open then self:draw_settings() end
+  -- Over every other overlay (it explains them), under the shutters only.
+  self:draw_tut()
   -- Last of all: the transition shutters close over whatever is on screen,
   -- including live play (that is what a restart parts them onto).
   self:draw_page_gate()
@@ -3497,6 +3827,9 @@ end
 -- meter, over a level-up SFX pitched up per rank. Still deliberately
 -- HUD-local -- no screen flash, no giant floating rank letter.
 function BallPit:on_combo_rank_up(new_idx)
+  -- A rank is where the meter stops being decoration and starts paying real
+  -- tempo, so that is the rank worth stopping to explain.
+  if new_idx >= 4 then self:tut_trigger('combo_a') end
   local c = self.combo
   if c then
     c.flash    = 1
@@ -4033,6 +4366,7 @@ function BallPit:offer_upgrades()
     return
   end
   self.upgrade_pending = true
+  self:tut_trigger('levelup')
   self.upgrade_selected = 1
   local pool = {}
   for _, c in ipairs(hero_pool) do table.insert(pool, c) end
@@ -4573,6 +4907,8 @@ end
 function BallPit:finish_game_over()
   self.dying     = false
   self.game_over = true
+  -- The game-over page IS the shop (paddles.lua overrides draw_game_over).
+  self:tut_trigger('shop')
   -- Land on the run-report screen; the shop is one button deeper (paddles.lua).
   self.go_screen   = 'over'
   self.go_selected = 1

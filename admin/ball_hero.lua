@@ -2680,6 +2680,9 @@ function BallHero:update_return(dt)
   local d        = math.sqrt(dx*dx + dy*dy)
 
   if d < 1.5 then
+    -- Arrived home after a miss. This is the moment the recall-and-charge loop
+    -- becomes visible, so it is the moment to explain it.
+    if arena.tut_trigger then arena:tut_trigger('ball_return', self, {r = 20}) end
     self.returning = false
     -- If space is being held, auto-fire on arrival at the arena's current aim
     -- angle (skipping the stuck/wait state). Otherwise glue to the paddle and

@@ -1,5 +1,9 @@
 require 'engine'
 require 'shared'
+-- Pure data: every word the in-game tutorial cards say. Kept in its own file so
+-- the copy can be edited without going near ballpit.lua (which owns when the
+-- cards fire and how they are drawn).
+require 'tutorial_text'
 require 'balance'   -- damage master files (balance/<paddle>.lua); defines BAL()
 require 'ballpit'
 require 'paddle'

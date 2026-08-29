@@ -504,6 +504,17 @@ end
 
 
 function Brick:update(dt)
+  -- First block of each VARIANT teaches itself. Gated on the block having
+  -- actually entered the arena: swarms glide in from ABOVE y1, and a spotlight
+  -- on something off the top of the screen points at nothing.
+  if not self.taught_done then
+    local arena = main.current
+    if arena and arena.tut_trigger and arena.y1 and self.y > arena.y1 + 4 then
+      self.taught_done = true
+      arena:tut_trigger('brick_' .. tostring(self.variant_name), self,
+                        {w = (self.w or 18) + 10, h = (self.h or 10) + 10})
+    end
+  end
   self:update_game_object(dt)
 
   if self.slow_timer > 0 then
@@ -1006,6 +1017,15 @@ function Brick:apply_infest(potency, color)
   self.infest_color   = color or self.infest_color or Color(0.4, 0.6, 0.12, 1)
   if (self.infest_spread_t or 0) <= 0 then self.infest_spread_t = BAL('dots.infest_spread_cd', INFEST_SPREAD_CD) end
   self.infested       = true
+  -- The rot is the one status that acts on its own after you land it, so it
+  -- gets taught the first time a block catches it. Fires for the Hive loadout
+  -- and for a drafted infestor alike -- the copy describes the ROT, not who
+  -- started it.
+  local arena = main.current
+  if arena and arena.tut_trigger then
+    arena:tut_trigger('hive_infest', self,
+                      {w = (self.w or 18) + 10, h = (self.h or 10) + 10})
+  end
 end
 
 
