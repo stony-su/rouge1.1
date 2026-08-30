@@ -46,6 +46,7 @@ function init()
   -- explicit action that listens to both backtick and F1.
   input:bind('toggle_terminal', {'`', 'f1'})
   input:bind('toggle_dmg_tally', {'f2'})   -- admin damage-source overlay
+  input:bind('admin_pause', {'lctrl', 'rctrl'})  -- hard freeze-frame, no on-screen marker
 
   local s = {tags = {sfx}}
 

@@ -893,6 +893,9 @@ function BallPit:reset_run()
   self.god      = self.god or false
   self.terminal = self.terminal or Terminal(self)
   self.terminal.arena = self  -- re-point at the fresh arena state after reset
+  -- The ctrl freeze-frame does NOT survive a reset: a fresh run starting
+  -- invisibly paused (there is deliberately no marker) would read as a hang.
+  self.admin_paused = false
 
   -- Powerup state. `buffs` is a table keyed by powerup kind holding the
   -- {expires_at, restore} pair for every active timed effect. `fire_trail_until`
@@ -1492,6 +1495,17 @@ function BallPit:update(dt)
     self.ui:update(dt)
     return
   end
+
+  -- Ctrl = hard freeze-frame. Toggles a COMPLETE pause -- no world, no timers,
+  -- no UI animation -- with deliberately NO on-screen marker, so a capture of
+  -- the frozen frame is indistinguishable from live play. Checked after the
+  -- terminal block: while the operator is typing, ctrl is theirs, and while
+  -- frozen, ` / F1 still opens the terminal over the freeze. Music keeps
+  -- running (every pause in the game leaves the soundtrack alive).
+  if input.admin_pause.pressed and not self.title_open then
+    self.admin_paused = not self.admin_paused
+  end
+  if self.admin_paused then return end
 
   -- Title: the arena is BUILT but wholly frozen behind the backglass -- self.t
   -- is not ticked either, so no wave timer, powerup pity or spawn can fire into
@@ -2901,11 +2915,11 @@ function BallPit:draw()
   self:draw_buff_strip()
   if self.show_dmg_tally then self:draw_dmg_tally() end
 
-  if (admin_speed or 1) ~= 1 or self.god then
-    local hint = ''
-    if (admin_speed or 1) ~= 1 then hint = hint .. string.format('%.2fx ', admin_speed) end
-    if self.god then hint = hint .. 'GOD ' end
-    graphics.print(hint, pixul_font, gw - 92, 16, 0, 1, 1, 0, 0, red[0])
+  -- Speed-cheat hint only. Godmode deliberately paints NOTHING here (its
+  -- state readout lives in the terminal's title strip), so captures and
+  -- playtests with god on look exactly like the public build.
+  if (admin_speed or 1) ~= 1 then
+    graphics.print(string.format('%.2fx ', admin_speed), pixul_font, gw - 92, 16, 0, 1, 1, 0, 0, red[0])
   end
 
   if self.upgrade_pending then self:draw_upgrade() end
