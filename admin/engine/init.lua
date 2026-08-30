@@ -79,7 +79,11 @@ function engine_run(config)
     ww, wh = 960, 540
   end
 
-  love.window.setIcon(love.image.newImageData('assets/images/icon.png'))
+  -- Icon comes from conf.lua (t.window.icon = 'assets/icon.png'); this legacy
+  -- SNKRX path only applies if an assets/images/icon.png actually exists.
+  if love.filesystem.getInfo('assets/images/icon.png') then
+    love.window.setIcon(love.image.newImageData('assets/images/icon.png'))
+  end
   love.graphics.setBackgroundColor(0, 0, 0, 1)
   love.graphics.setColor(1, 1, 1, 1)
   love.joystick.loadGamepadMappings("engine/gamecontrollerdb.txt")

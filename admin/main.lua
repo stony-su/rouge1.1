@@ -89,8 +89,8 @@ function init()
   -- Music: auto-discover whatever's in assets/music/. Drop any .ogg / .mp3 /
   -- .wav file in there and it'll be picked up next launch. Empty folder =
   -- the game runs silent on the music channel (sfx still plays). The
-  -- original Kubbi - Ember soundtrack was moved to assets/music_archive/
-  -- and is preserved but not auto-loaded.
+  -- original Kubbi - Ember soundtrack was removed from the working tree
+  -- (still recoverable from git history if ever wanted again).
   --
   -- Long tracks stream from disk ('stream' mode) instead of decoding into
   -- RAM up-front, so big files don't bloat the process.
