@@ -2098,8 +2098,11 @@ end
 -- frame you were hit. The drawn ring is the honest edge of the effect at every
 -- moment, so there is no hidden radius to learn.
 --
--- Reflected shots are spared -- they're the player's now -- and so are
--- unbreakable boss bullets, which no other defensive interaction stops either.
+-- Reflected shots are spared -- they are the players now. Nothing else is:
+-- ARMOURED BOSS BULLETS GO TOO. The blank exists so one hit stays one hit, and
+-- the boss fight is the densest fire in the game -- the one place that mercy is
+-- worth most. Sparing them meant taking a hit during the boss cleared nothing at
+-- all. (The Aegis parry still cannot turn them; that is a different promise.)
 BlankWave = Object:extend()
 BlankWave:implement(GameObject)
 function BlankWave:init(args)
@@ -2144,7 +2147,7 @@ function BlankWave:sweep()
   if not (arena and arena.main) then return end
   for _, o in ipairs(arena.main.objects) do
     if o.is and o:is(EnemyProjectile) and not self.hit[o.id]
-    and not o.dead and not o.expiring and not o.reflected and not o.unbreakable then
+    and not o.dead and not o.expiring and not o.reflected then
       local d = math.distance(self.x, self.y, o.x, o.y)
       if d <= self.rs then
         self.hit[o.id] = true
@@ -2156,7 +2159,10 @@ function BlankWave:sweep()
                              or random:float(0, 2*math.pi)
         o:set_velocity(math.cos(a)*self.push, math.sin(a)*self.push)
         o:begin_despawn(0.24)
-        spawn_burst(arena.effects, o.x, o.y, o.color, 4, 80, 160)
+        -- Armoured boss shots break louder: the blank is the one thing that gets
+        -- through that shell, so the shell coming off has to read.
+        spawn_burst(arena.effects, o.x, o.y, o.color, o.unbreakable and 9 or 4,
+                    80, o.unbreakable and 190 or 160)
       end
     end
   end

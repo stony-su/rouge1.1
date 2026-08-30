@@ -40,10 +40,10 @@ local DODGE_BAND_DOWN = 2
 -- draw_core), seated on the bar and blended outward with a halo rather than cut
 -- out of it with an outline.
 --
--- Read by: Paddle:core_half (the enemy-fire test in enemies.lua) and the draw
--- below. Everything else -- ball bounce angle, powerup catch, arena clamp --
--- deliberately keeps reading the FULL width, since those are all things the
--- physical bar really does do across its whole span.
+-- Read by: Paddle:core_half (the enemy-fire test in enemies.lua), Paddle:clamp_half
+-- (the arena walls -- the wings pass straight THROUGH them, same rule) and the draw
+-- below. Ball bounce angle and powerup catch still read the FULL width, since those
+-- are things the physical bar really does do across its whole span.
 local PADDLE_WIDTH_MULT = 3     -- was 2; the wings were lengthened another 50%
 local PADDLE_CORE_FRAC  = 0.68  -- of the loadout's BASE width, NOT of the widened
                                 -- span -- so lengthening the wings never enlarges
@@ -387,7 +387,10 @@ function Paddle:update(dt)
     target_y = self.y + dy*self.speed*dt
   end
 
-  local clamped_x = math.clamp(target_x, arena.x1 + self.w/2, arena.x2 - self.w/2)
+  -- Held in by the CORE, not the bar: the ghosted wings pass through the walls
+  -- exactly like they pass through enemy fire (see Paddle:clamp_half).
+  local ch = self:clamp_half()
+  local clamped_x = math.clamp(target_x, arena.x1 + ch, arena.x2 - ch)
   local clamped_y = math.clamp(target_y, self.y_anchor - DODGE_BAND_UP,
                                          self.y_anchor + DODGE_BAND_DOWN)
   -- Kill slide momentum against the walls so an ice paddle doesn't stay
@@ -550,6 +553,30 @@ function Paddle:core_half()
   -- multiplier -- rather than against the widened span. The wings are reach; the
   -- core is exposure, and the two must be free to move independently.
   return (self.w/PADDLE_WIDTH_MULT)*PADDLE_CORE_FRAC/2
+end
+
+
+-- How far from the paddle's CENTRE the arena walls actually hold it in.
+--
+-- This is the core, not the bar. The wings are transparent to enemy fire, so
+-- they are transparent to the walls too -- one rule in both places, which is the
+-- only way the ghosting stays honest: what looks solid is what collides. A wide
+-- paddle can now slide its wings out past a wall and put its core right up
+-- against it, so the corners are reachable instead of being dead space the reach
+-- upgrade quietly took away.
+--
+-- (Nothing fights this: paddle/wall Box2D contacts are already disabled in
+-- BallPit:reset_run, and balls can't reach the part of a wing that is outside
+-- the arena, so the overhang is exactly as inert as it looks.)
+--
+-- The Pinball rig measures to the OUTER EDGE of the outboard pivot lamp, since
+-- its core is two bolts out at the bat ends rather than one centred emblem.
+function Paddle:clamp_half()
+  if self.flippers then
+    local pivx = self:flipper_pose(1, 0)
+    return math.abs(pivx - self.x) + self:flipper_core_r()
+  end
+  return self:core_half()
 end
 
 

@@ -113,6 +113,17 @@ end
 
 
 function Powerup:update(dt)
+  -- First orb of each KIND teaches itself. Per kind, not per tier: there is no
+  -- order these arrive in, so every card has to stand on its own (which is why
+  -- each tier-two card restates the deflect-then-catch rule). A kind with no
+  -- TUT_STEPS entry simply never fires.
+  if not self.taught_done then
+    self.taught_done = true
+    local arena = main.current
+    if arena and arena.tut_trigger then
+      arena:tut_trigger('pw_' .. tostring(self.kind), self, {r = 18})
+    end
+  end
   self:update_game_object(dt)
   -- Ticked before the early-out below so the drop still swells to size on a
   -- frame where the arena or paddle isn't up yet.

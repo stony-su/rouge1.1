@@ -1,5 +1,9 @@
 require 'engine'
 require 'shared'
+-- Pure data: every word the in-game tutorial cards say. Kept in its own file so
+-- the copy can be edited without going near ballpit.lua (which owns when the
+-- cards fire and how they are drawn).
+require 'tutorial_text'
 require 'balance'   -- damage master files (balance/<paddle>.lua); defines BAL()
 require 'ballpit'
 require 'paddle'
@@ -94,7 +98,11 @@ function init()
   --
   -- Long tracks stream from disk ('stream' mode) instead of decoding into
   -- RAM up-front, so big files don't bloat the process.
-  local m = {tags = {music}, loop = true}
+  -- loop = false: looping is the music director's job now (ballpit.lua
+  -- music_init / tick_music). It plays a track THROUGH and crossfades into a
+  -- different one, so a source that loops itself would never end and never
+  -- hand over.
+  local m = {tags = {music}, loop = false}
   songs = {}
   if love.filesystem.getInfo('assets/music') then
     for _, name in ipairs(love.filesystem.getDirectoryItems('assets/music')) do

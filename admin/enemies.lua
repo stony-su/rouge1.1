@@ -359,7 +359,19 @@ local function trigger_blank()
 end
 
 
+-- First shot of the players life: teach it. Done at the top of the first update
+-- rather than in init, so the arena is fully built and the shot has a position
+-- worth pointing a spotlight at.
+function EnemyProjectile:taught()
+  local arena = main.current
+  if arena and arena.tut_trigger and not self.reflected then
+    arena:tut_trigger('enemy_shot', self, {r = 16})
+  end
+end
+
+
 function EnemyProjectile:update(dt)
+  if not self.taught_done then self.taught_done = true; self:taught() end
   self:update_game_object(dt)
   local arena = main.current
   if (self.spawn_t or 0) < (self.spawn_dur or 0) then
@@ -1134,6 +1146,92 @@ local BOSS_PHASE_COLORS = {
 }
 
 
+-- The core's CUT, per phase: a TRIANGLE, then a SQUARE, then a HEXAGON. Same
+-- ladder the HP readout's phase glyph walks (BOSS_PHASE_SIDES in ballpit.lua),
+-- so the shape on the board and the shape in the HUD are never two different
+-- claims about what phase the fight is in.
+local BOSS_INNER_SIDES = {3, 4, 6}
+
+-- The RECUT: how long the old cut takes to become the new one, how many angles
+-- the blend is sampled at, and the extra spin the recut throws off.
+--
+-- 24 is a multiple of 3, 4 AND 6, so every phase's vertices land exactly on a
+-- sample and no corner gets rounded off in the blend.
+local BOSS_MORPH_DUR   = 0.55
+local BOSS_MORPH_STEPS = 24
+local BOSS_MORPH_SPIN  = 9      -- rad/s of extra inner spin at the moment of the cut
+
+
+-- Boundary radius of a regular n-gon (circumradius R, one vertex at `rot`) at
+-- world angle `a` -- the apothem divided by the cosine of the angle off the
+-- nearest edge normal.
+--
+-- This is what makes a real MORPH possible instead of a cross-fade: two polygons
+-- with different side counts can be sampled at the SAME angles and their radii
+-- interpolated, so the triangle visibly inflates into the square rather than one
+-- shape fading out underneath another.
+local function ngon_r(n, R, rot, a)
+  local sector = 2*math.pi/n
+  local half   = math.pi/n
+  local psi    = (a - rot) % sector - half
+  return R*math.cos(half)/math.cos(psi)
+end
+
+
+-- Vertices of the inner cut at (cx, cy). `k` is the recut blend: 0 = still the
+-- old cut, 1 = fully the new one. A finished cut returns the polygon's OWN
+-- vertices (3, 4 or 6 points, crisp corners); mid-blend it returns
+-- BOSS_MORPH_STEPS sampled points, which is the morph. The second return says
+-- which of the two you got, because they fill differently.
+local function inner_shape(cx, cy, R, rot, from, to, k)
+  local v = {}
+  if k >= 1 or from == to then
+    for i = 0, to - 1 do
+      local a = rot + i*(2*math.pi/to)
+      v[#v + 1] = cx + math.cos(a)*R
+      v[#v + 1] = cy + math.sin(a)*R
+    end
+    return v, false
+  end
+  for i = 0, BOSS_MORPH_STEPS - 1 do
+    local a = rot + i*(2*math.pi/BOSS_MORPH_STEPS)
+    local r = math.lerp(k, ngon_r(from, R, rot, a), ngon_r(to, R, rot, a))
+    v[#v + 1] = cx + math.cos(a)*r
+    v[#v + 1] = cy + math.sin(a)*r
+  end
+  return v, true
+end
+
+
+-- Fill a cut. A finished one is a single convex polygon. A shape caught
+-- MID-BLEND can be momentarily non-convex and graphics.polygon fills CONVEX
+-- ONLY, so that case is painted as a fan of triangles from the centre, each of
+-- which is convex by construction. The fan is only used while morphing, so the
+-- shape at rest stays one clean polygon.
+local function fill_shape(verts, cx, cy, col, fan)
+  if not fan then
+    graphics.polygon(verts, col)
+    return
+  end
+  local n = #verts/2
+  for i = 0, n - 1 do
+    local j = (i + 1) % n
+    graphics.polygon({cx, cy, verts[i*2 + 1], verts[i*2 + 2],
+                      verts[j*2 + 1], verts[j*2 + 2]}, col)
+  end
+end
+
+
+-- Outline the same, as a closed loop. polyline draws any shape, convex or not.
+local function line_shape(verts, col, lw)
+  local loop = {}
+  for i = 1, #verts do loop[i] = verts[i] end
+  loop[#loop + 1] = verts[1]
+  loop[#loop + 1] = verts[2]
+  graphics.polyline(col, lw or 1, loop)
+end
+
+
 -- Motion-trail tuning. The boss samples its own position every TRAIL_SAMPLE
 -- seconds (see Boss:update), keeping TRAIL_LEN_MAX of them. The ribbon is drawn
 -- from every sample it walks; the body aftershadows from every
@@ -1164,10 +1262,11 @@ function Boss:init(args)
   -- HP scales with wave the same way bricks do (see Brick:init line 81) so
   -- the fight stays meaningful if the player triggers it on a later loop.
   local wave = (main.current and main.current.wave) or 10
-  -- Base pool cut 25% (3200 -> 2400 -> 1800): the fight was running long once
-  -- the bumpers started feeding balls back at it, and a boss that outlasts the
-  -- player's attention is a worse boss than one that dies a little early.
-  self.max_hp     = 1800 * (1 + 0.2*wave)
+  -- Base pool cut again, -33% (3200 -> 2400 -> 1800 -> 1206): the fight was
+  -- running long once the bumpers started feeding balls back at it, and a boss
+  -- that outlasts the player's attention is a worse boss than one that dies a
+  -- little early.
+  self.max_hp     = 1206 * (1 + 0.2*wave)
   self.hp         = self.max_hp
   self.player_dmg = 3
   self.xp_value   = 60
@@ -1176,6 +1275,13 @@ function Boss:init(args)
   self.color      = BOSS_PHASE_COLORS[1]()
   self.outer_rot  = 0
   self.inner_rot  = 0
+  -- Phase-cut morph state (see BOSS_INNER_SIDES / inner_shape). `sides` is what
+  -- the core is cut to now; through a transition the draw blends from
+  -- `morph_from` to it over morph_t, and morph_spin is the kick the recut throws.
+  self.sides      = BOSS_INNER_SIDES[1]
+  self.morph_from = self.sides
+  self.morph_t    = 0
+  self.morph_spin = 0
   self.spawn_t    = 0
   self.intro_done = false
 
@@ -1238,6 +1344,13 @@ function Boss:enter_phase(phase)
   if phase <= self.phase then return end
   self.phase = phase
   self.color = BOSS_PHASE_COLORS[phase]()
+  -- Recut the core: the inner shape gains a side and reforms (triangle -> square
+  -- -> hexagon), so the silhouette carries the phase as plainly as the colour
+  -- does. The blend, the spin-up and the flash all run off morph_t in the draw.
+  self.morph_from = self.sides
+  self.sides      = BOSS_INNER_SIDES[math.min(phase, #BOSS_INNER_SIDES)]
+  self.morph_t    = BOSS_MORPH_DUR
+  self.morph_spin = BOSS_MORPH_SPIN
   spawn_burst(main.current.effects, self.x, self.y, self.color, 18, 80, 220)
   Flash{group = main.current.effects, x = gw/2, y = gh/2,
         color = Color(self.color.r, self.color.g, self.color.b, 0.35), duration = 0.18}
@@ -1252,6 +1365,17 @@ function Boss:enter_phase(phase)
     self.t:cancel('boss_atk')
     self.t:every({2.0, 2.9}, function() self:choose_attack() end, 0, nil, 'boss_atk')
   end
+end
+
+
+-- The recut blend, 0..1: 0 the instant the phase turns, 1 once the core has
+-- finished reforming. Eased so the new cut snaps in and settles rather than
+-- sliding across at a constant rate. Read by the draw, by the trail echoes and
+-- by the trail sampler, so all three agree on how far through the cut is.
+function Boss:morph_k()
+  if (self.morph_t or 0) <= 0 then return 1 end
+  local p = 1 - self.morph_t/BOSS_MORPH_DUR
+  return 1 - (1 - p)*(1 - p)*(1 - p)
 end
 
 
@@ -1619,6 +1743,15 @@ function Boss:update(dt)
   self.outer_rot = self.outer_rot + dt * 0.9 * speed_factor
   self.inner_rot = self.inner_rot - dt * 1.4 * speed_factor
 
+  -- The recut throws the inner shape into a spin that decays back to its normal
+  -- counter-rotation, so a phase change is FELT in the motion as well as seen in
+  -- the silhouette.
+  if self.morph_t > 0 then
+    self.morph_t    = math.max(0, self.morph_t - dt)
+    self.inner_rot  = self.inner_rot - self.morph_spin*dt
+    self.morph_spin = self.morph_spin*(0.02^dt)
+  end
+
   -- Slow status reduces movement + attack rate uniformly.
   if self.slow_timer > 0 then
     self.slow_timer = self.slow_timer - dt
@@ -1702,7 +1835,8 @@ function Boss:update(dt)
   if self.trail_t >= TRAIL_SAMPLE then
     self.trail_t = 0
     table.insert(self.path_trail, 1,
-                 {x = self.x, y = self.y, o = self.outer_rot, i = self.inner_rot})
+                 {x = self.x, y = self.y, o = self.outer_rot, i = self.inner_rot,
+                  n = self.sides, nf = self.morph_from, k = self:morph_k()})
     if #self.path_trail > TRAIL_LEN_MAX then table.remove(self.path_trail) end
   end
 end
@@ -1847,13 +1981,9 @@ function Boss:draw_trail()
         vo[#vo+1] = p.y + math.sin(a)*self.r_outer*gs
       end
       graphics.polygon(vo, Color(col.r, col.g, col.b, ga), 1)
-      local vi = {}
-      for j = 0, 5 do
-        local a = p.i + j*(2*math.pi/6)
-        vi[#vi+1] = p.x + math.cos(a)*self.r_inner*gs
-        vi[#vi+1] = p.y + math.sin(a)*self.r_inner*gs
-      end
-      graphics.polygon(vi, Color(col.r, col.g, col.b, ga*0.7), 1)
+      local vi = inner_shape(p.x, p.y, self.r_inner*gs, p.i,
+                             p.nf or self.sides, p.n or self.sides, p.k or 1)
+      line_shape(vi, Color(col.r, col.g, col.b, ga*0.7), 1)
     end
   end
 end
@@ -1877,32 +2007,45 @@ function Boss:draw()
   graphics.polygon(verts_out, dark)
   graphics.polygon(verts_out, col, 2)
 
-  -- Inner counter-rotating hexagon.
-  local verts_in = {}
-  for i = 0, 5 do
-    local a = self.inner_rot + i*(2*math.pi/6)
-    table.insert(verts_in, self.x + math.cos(a)*self.r_inner*s)
-    table.insert(verts_in, self.y + math.sin(a)*self.r_inner*s)
+  -- Inner counter-rotating cut: a TRIANGLE in phase 1, a SQUARE in 2, a HEXAGON
+  -- in 3 -- the same ladder the HP readout's phase glyph walks. A phase change
+  -- RECUTS it (see enter_phase / inner_shape) rather than swapping one shape for
+  -- another: the old polygon inflates into the new one.
+  local mk       = self:morph_k()
+  local f        = 1 - mk
+  -- The recut punches the shape out and lets it settle back.
+  local ms       = s*(1 + 0.42*f*f)
+  local ri       = self.r_inner*ms
+  local verts_in, fan = inner_shape(self.x, self.y, ri, self.inner_rot,
+                                    self.morph_from, self.sides, mk)
+  fill_shape(verts_in, self.x, self.y, col, fan)
+  line_shape(verts_in, fg[5], 1)
+
+  if f > 0.001 then
+    -- Reforming. Three things, all decaying together: the edge runs white-hot,
+    -- facet rays shoot out along each of the NEW cut's vertices so the shape
+    -- reads as being cut rather than as growing, and a ghost of the finished
+    -- polygon expands past the ring and fades -- the core announcing what it has
+    -- become.
+    line_shape(verts_in, Color(1, 1, 1, f), 2)
+    for i = 0, self.sides - 1 do
+      local a = self.inner_rot + i*(2*math.pi/self.sides)
+      graphics.line(self.x + math.cos(a)*ri*0.25, self.y + math.sin(a)*ri*0.25,
+                    self.x + math.cos(a)*(ri + self.r_outer*0.9*f),
+                    self.y + math.sin(a)*(ri + self.r_outer*0.9*f),
+                    Color(1, 1, 1, 0.55*f), 1)
+    end
+    local gv = inner_shape(self.x, self.y, self.r_inner*(1 + 2.1*mk),
+                           self.inner_rot*0.5, self.sides, self.sides, 1)
+    line_shape(gv, Color(col.r, col.g, col.b, 0.6*f*f), 2)
   end
-  graphics.polygon(verts_in, col)
-  graphics.polygon(verts_in, fg[5], 1)
 
   -- Bright pulsing core.
   local pulse = 1 + math.sin(love.timer.getTime()*6)*0.25
   graphics.circle(self.x, self.y, 3*pulse*s, fg[5])
 
-  -- HP bar across the top of the play area.
-  local arena = main.current
-  if arena then
-    local pct   = math.clamp(self.hp/self.max_hp, 0, 1)
-    local bar_w = (arena.x2 - arena.x1) - 16
-    local bar_x = (arena.x1 + arena.x2)/2
-    local bar_y = arena.y1 + 4
-    graphics.rectangle(bar_x, bar_y, bar_w, 4, 1, 1, bg[-2])
-    graphics.rectangle(bar_x - bar_w/2 + bar_w*pct/2, bar_y, bar_w*pct, 4, 1, 1, col)
-    graphics.print_centered('THE PRISM CORE', pixul_font,
-                            bar_x, bar_y + 8, 0, 1, 1, 0, 0, fg[0])
-  end
+  -- (The HP readout lives in the HUD strip now -- BallPit:draw_boss_bar paints
+  -- the core as a prismatic crystal that shatters. Nothing to draw here.)
 
   -- Slow / curse visual overlays, mirror Brick:draw idioms.
   if self.slow_factor < 1 then

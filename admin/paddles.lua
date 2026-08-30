@@ -224,6 +224,10 @@ function PADDLES.ensure_state()
   -- Run records, inscribed on the title stele (see draw_stele in ballpit.lua).
   -- Repaired field by field like everything else here, so a save written
   -- before records existed picks them up on the next boot rather than erroring.
+  -- Which guided-tutorial cards the player has already been shown (see
+  -- BallPit:tut_trigger). Persisted so a mechanic is explained ONCE, ever --
+  -- deleting the save is what replays them.
+  if type(state.tut_seen) ~= 'table' then state.tut_seen = {} end
   if type(state.records) ~= 'table' then state.records = {} end
   local rec = state.records
   if type(rec.runs)       ~= 'number' then rec.runs       = 0 end
