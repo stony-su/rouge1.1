@@ -273,6 +273,8 @@ function BallPit:init(name)
   }
   self.settings_open = false
   self.settings_selected = 1
+  -- The RESET SAVE control's two-click arm state (see update_settings).
+  self.reset_save_armed = false
   for i, opt in ipairs(self.scale_options) do
     if math.abs(opt.scale - sx) < 0.01 then self.settings_selected = i; break end
   end
@@ -374,6 +376,30 @@ function BallPit:update_settings(dt)
     ui_switch1:play{volume = 0.3}
   end
   if input.confirm.pressed then self:activate_settings_selection() end
+
+  -- RESET SAVE (bottom of the overlay). Destructive with no undo, so it takes
+  -- two clicks: the first arms (the label turns red and says so), the second
+  -- wipes progression -- wallet, unlocks, records and the tutorial seen-flags
+  -- (PADDLES.reset_save). Clicking anywhere else, or toggling the overlay,
+  -- disarms.
+  local rw, rh, ry = 220, 18, gh - 36
+  local over_reset = mouse.x >= gw/2 - rw/2 and mouse.x <= gw/2 + rw/2
+                 and mouse.y >= ry - rh/2  and mouse.y <= ry + rh/2
+  if input.click.pressed then
+    if over_reset then
+      if self.reset_save_armed then
+        PADDLES.reset_save()
+        self.reset_save_armed = false
+        confirm1:play{volume = 0.5}
+      else
+        self.reset_save_armed = true
+        ui_switch1:play{volume = 0.3}
+      end
+    elseif self.reset_save_armed then
+      self.reset_save_armed = false
+      ui_switch1:play{volume = 0.25}
+    end
+  end
 end
 
 
@@ -401,6 +427,17 @@ function BallPit:draw_settings()
   -- half of the settings overlay. Hovering a ball pops a name/level/ability
   -- tooltip so the player can audit what they've collected mid-run.
   self:draw_settings_heroes()
+
+  -- RESET SAVE control (see update_settings for the two-click arm/confirm).
+  local rw, rh, ry = 220, 18, gh - 36
+  if self.reset_save_armed then
+    graphics.rectangle(gw/2, ry, rw, rh, 3, 3, bg[-1])
+    graphics.rectangle(gw/2, ry, rw, rh, 3, 3, red[0], 1)
+    graphics.print_centered('CLICK AGAIN TO WIPE SAVE', pixul_font, gw/2, ry - 1, 0, 1, 1, 0, 0, red[0])
+  else
+    graphics.rectangle(gw/2, ry, rw, rh, 3, 3, fg[0], 1)
+    graphics.print_centered('RESET SAVE DATA', pixul_font, gw/2, ry - 1, 0, 1, 1, 0, 0, fg[0])
+  end
 end
 
 
@@ -1463,6 +1500,7 @@ function BallPit:update(dt)
   if self.title_open then
     if input.escape.pressed then
       self.settings_open = not self.settings_open
+      self.reset_save_armed = false
       ui_switch1:play{volume = 0.3}
     end
     if self.settings_open then self:update_settings(dt) return end
@@ -1487,6 +1525,7 @@ function BallPit:update(dt)
   -- terminal early-return so ESC is ignored while the operator is typing.
   if input.escape.pressed then
     self.settings_open = not self.settings_open
+    self.reset_save_armed = false
     ui_switch1:play{volume = 0.3}
   end
   if self.settings_open then
@@ -2285,7 +2324,13 @@ end
 -- new one queues behind it rather than stomping it.
 function BallPit:tut_trigger(id, obj, opts)
   if not tut_step(id) then return end
+  -- The seen-set lives in the SAVE (state.tut_seen). Created here on demand
+  -- rather than trusting ensure_state to have run first: if it is ever nil
+  -- (a save written by older code, a wiped save), nothing gets marked and
+  -- every trigger re-fires its card every run -- the exact failure the
+  -- once-EVER rule exists to prevent.
   local seen = state and state.tut_seen
+  if not seen and state then seen = {}; state.tut_seen = seen end
   if seen and seen[id] then return end
   local T = self.tut
   if not T then return end

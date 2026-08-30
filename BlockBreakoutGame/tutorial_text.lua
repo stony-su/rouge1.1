@@ -39,6 +39,7 @@
 --
 --   paddle        the title screen handing over to a live run
 --   enemy_shot    the first enemy projectile
+--   hurt          the first time the player actually loses HP
 --   ball_return   a ball first arriving home after a miss
 --   combo_a       first promotion to combo rank A
 --   levelup       the first draft
@@ -57,126 +58,122 @@
 TUTORIAL_TEXT = {
   paddle = {
     title = 'YOUR PADDLE',
-    body  = {'This bar is you. A and D slide it, W and S lift',
-             'it inside the dodge band above the red line.',
+    body  = {'WSAD to move the paddle',
+             'cannot move past the dotted red line',
              'Only the BRIGHT CORE can be hit by enemy fire --',
-             'the faded wings are reach, not exposure.'},
+             'but the paddle can bounce balls.'},
   },
 
   enemy_shot = {
     title = 'ENEMY FIRE',
-    body  = {'Blocks shoot back. A shot that lands on your',
-             'core costs you health -- but it also sets off a',
-             'blank that sweeps every other shot off the',
-             'screen and stops the ranks firing for a beat.'},
+    body  = {'Blocks shoot back. AVOID THEM!',
+             'Hitting the core depletes your health.'},
+  },
+
+  hurt = {
+    title = 'CORE HIT',
+    body  = {'Your core took damage and you lost health.',
+             'At zero the run ends. Catch HEAL orbs',
+             'and avoid enemy fire to survive.'},
   },
 
   ball_return = {
     title = 'RECALL AND CHARGE',
-    body  = {'A ball you miss is not lost. It is pulled back',
-             'and sticks to the paddle, charging while it',
-             'waits -- a full two seconds doubles its speed',
-             'and adds half again its damage. SPACE launches.'},
+    body  = {'A ball you miss is not lost.',
+             'It returns - charging while it',
+             "waits -- increasing it's speed and damage",
+             'press SPACE to launch.'},
   },
 
   combo_a = {
     title = 'COMBO: A RANK',
     body  = {'Chaining block hits without missing builds the',
-             'meter. It pays TEMPO, not damage: every ball',
-             'moves faster the higher you hold it. It bleeds',
-             'while you idle, and a ball in the pit costs you.'},
+             'meter. The higher the rank, the faster the balls move.',
+             'a missed ball reduces the meter'},
   },
 
   levelup = {
     title = 'LEVEL UP',
     body  = {'Clearing a wave earns a level, and a level opens',
-             'this draft. Arrows pick a card, ENTER takes it.',
-             'A new hero joins your ball pit, or one you have',
-             'already drafted gets stronger.'},
+             'this draft. Arrows pick a card, ENTER takes it.'},
   },
 
   shop = {
     title = 'THE SHOP',
     body  = {'Every block you break banks a coin that outlives',
-             'the run. Spend them here to unlock paddles --',
-             'each one rewrites a core verb of the game.',
-             'Press R when you want the next run.'},
+             'the run. Spend them here to unlock paddles --'},
   },
 
   -- ---- Powerups, one card per KIND -----------------------------------------
   -- Every card stands on its own, because there is no order these arrive in:
-  -- a player can meet the floor before they ever see a heal. So each tier-two
-  -- card states the deflect-then-catch rule itself rather than assuming an
-  -- earlier card taught it.
+  -- a player can meet the floor before they ever see a heal. So every card
+  -- opens by teaching HOW this orb is claimed -- tier 1: caught on first
+  -- paddle touch; tier 2: knocked UP with the paddle to arm it, then caught
+  -- on the way back down -- before saying what it grants.
   pw_heal = {
     title = 'HEAL',
-    body  = {'Catch it with the paddle and it hands a heart',
-             'straight back. Tier one: no arming, just get',
-             'under it.'},
+    body  = {'Catch it with the paddle to claim it:',
+             'it restores one heart.'},
   },
 
   pw_wide_paddle = {
     title = 'WIDE PADDLE',
-    body  = {'Catch it for a much longer bar -- and while it',
-             'lasts you are PHASED: enemy shots pass straight',
-             'through you instead of landing.'},
+    body  = {'Catch it with the paddle to claim it:',
+             'your bar grows much longer for a while.'},
   },
 
   pw_big_ball = {
     title = 'BIG BALL',
-    body  = {'Catch it and every ball swells. Bigger, heavier,',
-             'and it hits harder for it.'},
+    body  = {'Catch it with the paddle to claim it:',
+             'every ball swells.'},
   },
 
   pw_fire_trail = {
     title = 'FIRE TRAIL',
-    body  = {'Catch it and your balls lay burning ground behind',
-             'them. Blocks that sit in it cook without you',
-             'having to hit them again.'},
+    body  = {'Catch it with the paddle to claim it:',
+             'your balls leave a burning trail.'},
   },
 
   pw_freeze_wave = {
     title = 'FREEZE',
-    body  = {'Catch it and the whole arena stops for a few',
-             'seconds. Blocks, shots, everything but you.'},
+    body  = {'Catch it with the paddle to claim it:',
+             'the whole arena freezes for a few seconds.'},
   },
 
   pw_water_wave = {
     title = 'WATER WAVE',
-    body  = {'A tier two: DEFLECT it off the paddle to arm it,',
-             'then catch it on the way back down. A surge',
-             'rolls up the arena and shoves every swarm back',
-             'where it came from.'},
+    body  = {'Knock it UP with the paddle to arm it,',
+             'then catch it as it falls to claim it:',
+             'a surge rolls up and shoves enemies back.'},
   },
 
   pw_multi_ball = {
     title = 'MULTI BALL',
-    body  = {'A tier two: DEFLECT it to arm it, then catch it.',
-             'More balls in play at once -- more of everything,',
-             'and more to lose down the pit.'},
+    body  = {'Knock it UP with the paddle to arm it,',
+             'then catch it as it falls to claim it:',
+             'your balls multiply.'},
   },
 
   pw_pierce = {
     title = 'PIERCE',
-    body  = {'A tier two: DEFLECT it to arm it, then catch it.',
-             'Your balls punch THROUGH blocks instead of',
-             'bouncing off them.'},
+    body  = {'Knock it UP with the paddle to arm it,',
+             'then catch it as it falls to claim it:',
+             'balls fly straight through blocks.'},
   },
 
   pw_floor = {
     title = 'THE FLOOR',
-    body  = {'A tier two: DEFLECT it to arm it, then catch it.',
-             'A wall seals the bottom of the arena, and while',
-             'it holds no ball can fall out. It does not',
-             'survive the wave.'},
+    body  = {'Knock it UP with the paddle to arm it,',
+             'then catch it as it falls to claim it:',
+             'balls bounce off the bottom for a while.'},
   },
 
   pw_level_random = {
     title = 'LEVEL ORB',
-    body  = {'This one opens no draft. Deflect it to arm it,',
-             'catch it, and several of your BALLS level up on',
-             'the spot. It drops on its own timer, not with',
-             'the other powerups.'},
+    body  = {'The number is bounces still needed: knock',
+             'it up with the paddle that many times,',
+             'then catch it -- random balls level up',
+             'once per bounce it took.'},
   },
 
   -- ---- Blocks, one card per VARIANT ----------------------------------------
@@ -184,103 +181,147 @@ TUTORIAL_TEXT = {
   -- is explained while it is on screen to be looked at.
   brick_seeker = {
     title = 'SEEKER',
-    body  = {'The basic block. It drifts down and breaches --',
-             'no tricks, just pressure. Everything else you',
-             'will meet is this with something added.'},
+    body  = {'A block. DESTROY IT'},
   },
 
   brick_speed_booster = {
     title = 'BOOSTER',
-    body  = {'It speeds up the whole formation it sits in.',
-             'Kill it first and the swarm slows back down.'},
+    body  = {'Speeds up the enemy swarm'},
   },
 
   brick_exploder = {
     title = 'EXPLODER',
-    body  = {'Kill it and it detonates, taking its neighbours',
-             'with it -- which can chain. Excellent, unless',
-             'the chain is what reaches your line.'},
+    body  = {'Kill it and it detonates'},
   },
 
   brick_headbutter = {
     title = 'HEADBUTTER',
-    body  = {'This one does not drift. It LUNGES, in bursts,',
-             'straight down the screen at you.'},
+    body  = {'Lunges, in bursts'},
   },
 
   brick_tank = {
     title = 'TANK',
-    body  = {'Slow, and very high HP. It will not die to one',
-             'pass -- grind it down or work around it.'},
+    body  = {'Slow, and very high HP.'},
   },
 
   brick_shooter = {
     title = 'SHOOTER',
-    body  = {'The first block that shoots back. Plain aimed',
-             'shots at wherever your paddle is standing.'},
+    body  = {'Shoots back.'},
   },
 
   brick_forcer = {
     title = 'FORCER',
-    body  = {'It shoves your balls AWAY from it, so shots that',
-             'looked good curve off before they land.'},
+    body  = {'Curves balls away from it'},
   },
 
   brick_randomizer = {
     title = 'RANDOMIZER',
-    body  = {'It scrambles the direction of whatever touches',
-             'it. Your ball comes off it pointing anywhere.'},
+    body  = {'It scrambles the direction of balls that touch it.'},
   },
 
   brick_sniper = {
     title = 'SNIPER',
-    body  = {'One shot, fast and long-ranged, straight at you.',
-             'You get a telegraph first -- move on it.'},
+    body  = {'Shoots fast and long-ranged projectiles'},
   },
 
   brick_spreader = {
     title = 'SPREADER',
-    body  = {'It fires a whole fan at once. You cannot dodge',
-             'all of it, so pick your gap early.'},
+    body  = {'It fires a whole fan at once.'},
   },
 
   brick_spiraler = {
     title = 'SPIRALER',
-    body  = {'A rotating spray that keeps turning. Read which',
-             'way it is winding and move against it.'},
+    body  = {'Sprays projectiles'},
   },
 
   brick_burster = {
     title = 'BURSTER',
-    body  = {'A rapid string of shots down one line. Not aimed',
-             'especially well -- just relentless.'},
+    body  = {'A rapidly fires a string of shots'},
   },
 
   brick_arc_lobber = {
     title = 'ARC LOBBER',
-    body  = {'Its shot CURVES down onto you, so where it is',
-             'pointing is not where it is going to land.'},
+    body  = {'Shoots homing projectiles'},
   },
 
   -- ---- Loadouts ------------------------------------------------------------
   -- Keyed 'sig_' .. paddle id and fired on the first run with that paddle
-  -- equipped, so each one teaches itself once. Only paddles with an entry here
-  -- say anything; the rest are silent by design.
+  -- equipped, so each one teaches itself once. Every paddle with a signature
+  -- has a card; Standard is silent -- the base 'paddle' card IS its tutorial.
+  sig_pinball = {
+    title = 'PINBALL LOBBER',
+    body  = {'Gravity rules this table: balls fall, and',
+             'the flippers lob them back up.',
+             'LEFT / RIGHT arrows flip.',
+             'Mind the drain between the bats.'},
+  },
+
   sig_aegis = {
     title = 'AEGIS',
-    body  = {'This paddle answers back. E or click raises the',
-             'shield: time it into incoming fire and you PARRY',
-             '-- balls and bullets fly back at them. Parries',
-             'bank bulwark; a full meter turns the next raise',
-             'gold.'},
+    body  = {'Pressing E or left mouse button raises the',
+             'shield: reflecting enemy bullets'},
+  },
+
+  sig_mitosis = {
+    title = 'MITOSIS',
+    body  = {'Every kill splits a ball in two.',
+             'One daughter decays -- bounce it off the',
+             'paddle to keep it alive.'},
+  },
+
+  sig_hive = {
+    title = 'HIVE',
+    body  = {'Balls deal NO contact damage here.',
+             'Maggots infest blocks with a rot that',
+             'spreads to their neighbours.'},
+  },
+
+  sig_vampire = {
+    title = 'VAMPIRE',
+    body  = {'Health drains constantly.',
+             'Killing blocks restores it.',
+             'Stop killing and you die.'},
+  },
+
+  sig_boomerang = {
+    title = 'BOOMERANG',
+    body  = {'Balls curl back toward the paddle after',
+             'any wall hit -- no ball is ever lost.'},
+  },
+
+  sig_twincast = {
+    title = 'TWIN CAST',
+    body  = {'The twins burn a tether that cuts',
+             'whatever it crosses. At full charge they',
+             'FUSE and detonate -- the wider apart they',
+             'were, the bigger the nova.'},
+  },
+
+  sig_tesla = {
+    title = 'TESLA',
+    body  = {'Every paddle bounce arcs lightning',
+             'between ALL live balls.',
+             'More balls, more damage.'},
+  },
+
+  sig_terrorist = {
+    title = 'TERRORIST',
+    body  = {'Press E to detonate balls near blocks --',
+             'the blast is your real damage.',
+             'Spent balls are gone; a level-up',
+             'arms a fresh one.'},
+  },
+
+  sig_cannon = {
+    title = 'CANNON',
+    body  = {'Strike a ball with a moving paddle to',
+             'launch a HOP: it flies over blocks and',
+             'crashes down in a damaging splash.',
+             'Charge forward into the ball for height.'},
   },
 
   hive_infest = {
     title = 'INFESTED',
-    body  = {'That block is rotting. Infestation does not kill',
-             'on contact -- it eats a share of its health every',
-             'second, and CREEPS to a neighbour block on its',
-             'own. Start it in the middle of a pack and let it',
-             'spread.'},
+    body  = {'That block is rotting. It deals DoT and spreads to nearby blocks'},
   },
 }

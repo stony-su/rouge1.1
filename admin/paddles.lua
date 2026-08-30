@@ -242,6 +242,22 @@ function PADDLES.ensure_state()
 end
 
 
+-- Wipe the persistent progression -- wallet, unlocks, records and the guided
+-- tutorial's seen-flags -- and save immediately. Window scale survives: it is
+-- a device setting, not progress. Used by the RESET SAVE control in the
+-- settings overlay (ballpit.lua); the admin terminal's `tut` command resets
+-- just the tutorial part.
+function PADDLES.reset_save()
+  PADDLES.ensure_state()
+  state.wallet          = 0
+  state.paddles_owned   = {standard = true}
+  state.selected_paddle = 'standard'
+  state.records         = {runs = 0, best_wave = 0, best_score = 0, best_rank = 0}
+  state.tut_seen        = {}
+  if system and system.save_state then system.save_state() end
+end
+
+
 -- ----- HP routing (hearts vs the Vampire bar) -----
 --
 -- All player damage/heal flows through these two so the Vampire's 0-100 bar
@@ -263,6 +279,11 @@ function BallPit:damage_player(hearts)
   end
   if self.run_mods and self.run_mods.hp_mode == 'bar' then amount = amount*20 end
   self.player_hp = self.player_hp - amount
+  -- First time damage actually lands, ever: teach the hit/heal rules (see
+  -- tutorial_text.lua 'hurt'). Safe from any caller, including contact
+  -- callbacks -- tut_trigger only sets fields.
+  local p = self.paddle
+  self:tut_trigger('hurt', p, {w = p and (p.w + 10) or 60, h = 26})
 end
 
 

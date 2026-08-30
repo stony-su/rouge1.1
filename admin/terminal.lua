@@ -191,6 +191,7 @@ function Terminal:register_commands()
     t:log("  powerup <kind>          apply a powerup effect directly")
     t:log("  dropp <kind>            spawn a powerup orb above paddle")
     t:log("  paddles [reset]         unlock all paddles (reset = re-lock)")
+    t:log("  tut                     reset tutorial cards (all replay)")
     t:log("  cls                     clear log")
   end
 
@@ -447,6 +448,18 @@ function Terminal:register_commands()
     end
     system.save_state()
     t:log("unlocked " .. n .. " new paddle(s) — all " .. #PADDLES.order .. " owned (saved)")
+  end
+
+  -- Wipe the guided tutorial's seen-flags (state.tut_seen) so every card
+  -- fires again, saved to disk immediately. For reviewing card copy
+  -- (tutorial_text.lua) without deleting the whole save. Takes effect
+  -- mid-run: the next triggering moment re-shows its card; the run-start
+  -- cards (paddle / sig_*) replay on the next run.
+  C.tut = function(t, args)
+    PADDLES.ensure_state()
+    state.tut_seen = {}
+    system.save_state()
+    t:log("tutorial reset — every card will show again")
   end
 
   C.cls = function(t, args) t.lines = {} end
